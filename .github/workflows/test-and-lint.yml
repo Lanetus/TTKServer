@@ -25,3 +25,4 @@ jobs:
           commit_message: "chore: apply automated linting"
           branch: ${{ github.head_ref }}
           push_options: --force
+
