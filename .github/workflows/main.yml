@@ -14,6 +14,8 @@ jobs:
   bump_version:
     name: Bump version
     runs-on: ubuntu-latest
+    # This condition prevents the workflow from running on its own commits
+    if: "!contains(github.event.head_commit.message, 'chore(release):')"
     permissions:
       contents: write
     outputs:
@@ -22,11 +24,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Determine bump level
+        id: bump_level
+        run: |
+          commit_message="${{ github.event.head_commit.message }}"
+          if [[ "$commit_message" == major:* ]]; then
+            echo "level=major" >> $GITHUB_OUTPUT
+          elif [[ "$commit_message" == feat:* ]]; then
+            echo "level=minor" >> $GITHUB_OUTPUT
+          elif [[ "$commit_message" == fix:* ]]; then
+            echo "level=patch" >> $GITHUB_OUTPUT
+          else
+            echo "level=patch" >> $GITHUB_OUTPUT
+          fi
+
       - name: Install cargo-edit
         run: cargo install cargo-edit
 
       - name: Bump version
-        run: cargo set-version --bump patch
+        run: cargo set-version --bump ${{ steps.bump_level.outputs.level }}
 
       - name: Get new version
         id: version
@@ -48,7 +64,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          # Checkout the newly created tag
           ref: "v${{ needs.bump_version.outputs.new_tag }}"
 
       - name: Configure AWS credentials
