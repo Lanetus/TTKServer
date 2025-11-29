@@ -11,47 +11,63 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  bump_version:
+    name: Bump version
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      new_tag: ${{ steps.version.outputs.tag }}
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
 
-    - name: Install cargo-edit
-      run: cargo install cargo-edit
+      - name: Install cargo-edit
+        run: cargo install cargo-edit
 
-    - name: Bump version
-      run: cargo set-version --bump patch
+      - name: Bump version
+        run: cargo set-version --bump patch
 
-    - name: Get new version
-      id: version
-      run: echo "::set-output name=tag::$(cargo pkgid | sed 's/.*#//')"
+      - name: Get new version
+        id: version
+        run: echo "tag=$(cargo pkgid | sed 's/.*#//')" >> $GITHUB_OUTPUT
 
-    - name: Commit version bump and create tag
-      uses: stefanzweifel/git-auto-commit-action@v4
-      with:
-        commit_message: "chore(release): version ${{ steps.version.outputs.tag }}"
-        tagging_message: "v${{ steps.version.outputs.tag }}"
+      - name: Commit version bump and create tag
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "chore(release): version ${{ steps.version.outputs.tag }}"
+          tagging_message: "v${{ steps.version.outputs.tag }}"
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: eu-west-1
+  build_and_push:
+    name: Build and Push
+    needs: bump_version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          # Checkout the newly created tag
+          ref: "v${{ needs.bump_version.outputs.new_tag }}"
 
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-1
 
-    - name: Build, tag, and push image to Amazon ECR
-      id: build-image
-      uses: docker/build-push-action@v4
-      with:
-        context: .
-        push: true
-        tags: |
-          ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
-          ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:v${{ steps.version.outputs.tag }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:v${{ needs.bump_version.outputs.new_tag }}
