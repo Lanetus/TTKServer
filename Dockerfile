@@ -12,7 +12,7 @@ COPY ../Cargo.toml Cargo.lock ./
 COPY ../src ./src
 
 # Build the server binary in release mode
-RUN cargo build --release --bin server
+RUN cargo build --release
 
 ############################
 # Runtime image
@@ -22,10 +22,10 @@ FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
 # Copy the compiled server binary
-COPY --from=builder /app/target/release/server /app/server
+COPY --from=builder /app/target/release/TTKServer /app/TTKServer
 
 # The server listens on 8443
 EXPOSE 8443
 
 # Entrypoint runs the TLS server
-ENTRYPOINT ["/app/server"]
+ENTRYPOINT ["/app/TTKServer"]

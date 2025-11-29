@@ -1,4 +1,4 @@
-use aws_nitro_enclaves_nsm_api::api::{Request, Response};
+use aws_nitro_enclaves_nsm_api::api::{AttestationDoc, Request, Response};
 use aws_nitro_enclaves_nsm_api::driver::{nsm_init, nsm_process_request};
 use hyper::service::service_fn; // Removed make_service_fn
 use hyper::{Body, Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
@@ -6,7 +6,7 @@ use rcgen::generate_simple_self_signed;
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use base64::{engine::general_purpose, Engine as _};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tokio_rustls::TlsAcceptor;
 use tokio_vsock::VsockListener;
 
@@ -56,7 +56,7 @@ async fn handle_request(
 ) -> Result<HyperResponse<Body>, hyper::Error> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/attestation") => {
-            let b64_doc = general_purpose::STANDARD.encode(&*attestation_doc);
+            let b64_doc = STANDARD.encode(&*attestation_doc);
             Ok(HyperResponse::new(Body::from(b64_doc)))
         }
         (&Method::GET, "/hello") => {
