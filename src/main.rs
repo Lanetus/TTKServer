@@ -1,12 +1,12 @@
 use aws_nitro_enclaves_nsm_api::api::{AttestationDoc, Request, Response};
 use aws_nitro_enclaves_nsm_api::driver::{nsm_init, nsm_process_request};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hyper::service::service_fn; // Removed make_service_fn
 use hyper::{Body, Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
 use rcgen::generate_simple_self_signed;
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tokio_rustls::TlsAcceptor;
 use tokio_vsock::VsockListener;
 
@@ -59,9 +59,9 @@ async fn handle_request(
             let b64_doc = STANDARD.encode(&*attestation_doc);
             Ok(HyperResponse::new(Body::from(b64_doc)))
         }
-        (&Method::GET, "/hello") => {
-            Ok(HyperResponse::new(Body::from("Hello from inside the VSOCK Enclave!")))
-        }
+        (&Method::GET, "/hello") => Ok(HyperResponse::new(Body::from(
+            "Hello from inside the VSOCK Enclave!",
+        ))),
         _ => {
             let mut not_found = HyperResponse::default();
             *not_found.status_mut() = StatusCode::NOT_FOUND;
@@ -99,7 +99,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Fix from previous step: Destructure the tuple (stream, addr)
         match listener.accept().await {
             Ok((stream, _addr)) => {
-
                 let acceptor = acceptor.clone();
                 let doc = attestation_doc.clone();
 
@@ -108,9 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok(tls_stream) => {
                             // FIX: Use service_fn directly.
                             // We don't need make_service_fn because we already have the connection.
-                            let service = service_fn(move |req| {
-                                handle_request(req, doc.clone())
-                            });
+                            let service = service_fn(move |req| handle_request(req, doc.clone()));
 
                             // serve_connection takes the IO stream and the service directly
                             if let Err(e) = hyper::server::conn::Http::new()

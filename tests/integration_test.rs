@@ -12,11 +12,11 @@
 // 2. In `main.rs`, you would use `use ttk_server::*`.
 // 3. In this test file, you would use `use ttk_server::*`.
 
-use rustls::{Certificate, PrivateKey};
-use rcgen::generate_simple_self_signed;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hyper::{Body, Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
+use rcgen::generate_simple_self_signed;
+use rustls::{Certificate, PrivateKey};
 use std::sync::Arc;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 // --- Duplicated function definitions for demonstration ---
 // In a real project, these would be in `src/lib.rs`.
@@ -43,9 +43,9 @@ pub async fn handle_request(
             let b64_doc = STANDARD.encode(&*attestation_doc);
             Ok(HyperResponse::new(Body::from(b64_doc)))
         }
-        (&Method::GET, "/hello") => {
-            Ok(HyperResponse::new(Body::from("Hello from inside the VSOCK Enclave!")))
-        }
+        (&Method::GET, "/hello") => Ok(HyperResponse::new(Body::from(
+            "Hello from inside the VSOCK Enclave!",
+        ))),
         _ => {
             let mut not_found = HyperResponse::default();
             *not_found.status_mut() = StatusCode::NOT_FOUND;
@@ -53,7 +53,6 @@ pub async fn handle_request(
         }
     }
 }
-
 
 // --- Tests ---
 
@@ -95,7 +94,10 @@ async fn test_handle_request_hello() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let body_bytes = hyper::body::to_bytes(response.into_body()).await.unwrap();
-    assert_eq!(body_bytes, "Hello from inside the VSOCK Enclave!".as_bytes());
+    assert_eq!(
+        body_bytes,
+        "Hello from inside the VSOCK Enclave!".as_bytes()
+    );
 }
 
 #[tokio::test]
