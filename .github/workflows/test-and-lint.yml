@@ -1,0 +1,25 @@
+name: Test and Lint
+
+on:
+  push:
+    branches-ignore:
+      - 'main'
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Run linter
+        run: cargo fmt --all
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "chore: apply automated linting"
+          branch: ${{ github.head_ref }}
