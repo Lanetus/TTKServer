@@ -1,9 +1,7 @@
 name: Test and Lint
 
 on:
-  push:
-    branches-ignore:
-      - 'main'
+  pull_request:
 
 jobs:
   test-and-lint:
