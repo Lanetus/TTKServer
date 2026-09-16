@@ -24,6 +24,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
       - name: Determine bump level
         id: bump_level
         run: |
