@@ -4,8 +4,23 @@ on:
   pull_request:
 
 jobs:
-  test-and-lint:
-    name: Test and Lint
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test
+
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -13,8 +28,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Run tests
-        run: cargo test
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
       - name: Run linter
         run: cargo fmt --all
