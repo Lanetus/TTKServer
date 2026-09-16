@@ -107,7 +107,7 @@ async fn handle_request(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    error!("Initializing Nitro Enclave VSOCK Server...");
+    info!("Initializing Nitro Enclave VSOCK Server...");
 
     // 1. Generate TLS Identity
     let (certs, key, cert_der_bytes) = generate_identity();
