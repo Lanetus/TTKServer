@@ -29,10 +29,6 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
-// Standard constant for "Listen on any CID"
-const CID_ANY: u32 = libc::VMADDR_CID_ANY;
-const PORT: u32 = 5005;
-
 /// Evidence for this instance, in the formats served over HTTP.
 struct Evidence {
     /// Raw NSM Attestation Document (COSE_Sign1).
@@ -123,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Router::new().route("/", get(|| async { "Hello from Enclave over HTTP/3!" }));
 
     // 2. Generate/load RA-TLS certificate and key
-    let (certs, private_key, ra_cert) = generate_identity();
+    let (certs, private_key, _) = generate_identity();
 
     // 3. Configure Rustls with RA-TLS cert
     let mut server_crypto = rustls::ServerConfig::builder()
@@ -164,12 +160,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // 4C. Accept individual HTTP/3 Requests
-            while let Ok(Some((req, mut stream))) = h3_conn.accept().await {
+            while let Ok(Some((req, _))) = h3_conn.accept().await {
                 let mut app = app.clone();
                 tokio::spawn(async move {
                     let req = req.map(|_| axum::body::Body::empty());
                     // Turn H3 Request into Axum response via Tower Service interface
-                    let response = app.call(req).await.unwrap();
+                    let _ = app.call(req).await.unwrap();
                     // Send response back over H3 QUIC stream...
                 });
             }
