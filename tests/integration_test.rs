@@ -15,21 +15,19 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hyper::{Body, Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
 use rcgen::generate_simple_self_signed;
-use rustls::{Certificate, PrivateKey};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
 
 // --- Duplicated function definitions for demonstration ---
 // In a real project, these would be in `src/lib.rs`.
 
-pub fn generate_identity() -> (Vec<Certificate>, PrivateKey, Vec<u8>) {
+pub fn generate_identity() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>, Vec<u8>) {
     let subject_alt_names = vec!["localhost".to_string(), "enclave.local".to_string()];
-    let cert = generate_simple_self_signed(subject_alt_names).unwrap();
+    let certified_key = generate_simple_self_signed(subject_alt_names).unwrap();
 
-    let cert_der = cert.serialize_der().unwrap();
-    let priv_key_der = cert.serialize_private_key_der();
-
-    let rustls_cert = Certificate(cert_der.clone());
-    let rustls_key = PrivateKey(priv_key_der);
+    let cert_der = certified_key.cert.der().to_vec();
+    let rustls_cert = certified_key.cert.der().clone();
+    let rustls_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified_key.key_pair.serialize_der()));
 
     (vec![rustls_cert], rustls_key, cert_der)
 }
@@ -60,7 +58,7 @@ pub async fn handle_request(
 fn test_generate_identity() {
     let (certs, key, cert_der) = generate_identity();
     assert_eq!(certs.len(), 1);
-    assert!(!key.0.is_empty());
+    assert!(!key.secret_der().is_empty());
     assert!(!cert_der.is_empty());
 }
 

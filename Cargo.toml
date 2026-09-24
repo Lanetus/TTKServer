@@ -1,14 +1,12 @@
 [package]
 name = "TTKServer"
 version = "0.6.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "0.14", features = ["full"] }
-rustls = "0.21"
-tokio-rustls = "0.24"
-rcgen = "0.11"
+rustls = { version = "0.23", features = ["ring"] }
 aws-nitro-enclaves-nsm-api = "0.4"
 sha2 = "0.10"
 base64 = "0.21"
@@ -18,3 +16,11 @@ env_logger = "0.11"
 # Added for VSOCK support
 tokio-vsock = "0.3"
 libc = "0.2"
+rustls-pki-types = "1"
+tokio-rustls = "0.26"
+rcgen = "0.13"
+quinn = "0.11"
+axum = "0.8.9"
+
+h3 = "0.0.6"        # The core HTTP/3 state machine
+h3-quinn = "0.0.9"  # The adapter bridging Quinn's QUIC API to h3's Transport trait

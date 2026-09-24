@@ -21,11 +21,13 @@ use hyper::service::service_fn; // Removed make_service_fn
 use hyper::{Body, Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
 use log::{error, info};
 use rcgen::generate_simple_self_signed;
-use rustls::{Certificate, PrivateKey, ServerConfig};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio_rustls::TlsAcceptor;
-use tokio_vsock::VsockListener;
+// use tokio_rustls::TlsAcceptor;
+// use tokio_vsock::VsockListener;
+use axum::{routing::get, Router};
+use quinn::{Endpoint, ServerConfig};
 
 // Standard constant for "Listen on any CID"
 const CID_ANY: u32 = libc::VMADDR_CID_ANY;
@@ -40,15 +42,13 @@ struct Evidence {
 }
 
 /// Generates a self-signed certificate and private key.
-fn generate_identity() -> (Vec<Certificate>, PrivateKey, Vec<u8>) {
+fn generate_identity() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>, Vec<u8>) {
     let subject_alt_names = vec!["localhost".to_string(), "enclave.local".to_string()];
-    let cert = generate_simple_self_signed(subject_alt_names).unwrap();
+    let certified_key = generate_simple_self_signed(subject_alt_names).unwrap();
 
-    let cert_der = cert.serialize_der().unwrap();
-    let private_key_der = cert.serialize_private_key_der();
-
-    let rustls_cert = Certificate(cert_der.clone());
-    let rustls_key = PrivateKey(private_key_der);
+    let cert_der = certified_key.cert.der().to_vec();
+    let rustls_cert = certified_key.cert.der().clone();
+    let rustls_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified_key.key_pair.serialize_der()));
 
     (vec![rustls_cert], rustls_key, cert_der)
 }
@@ -109,63 +109,121 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     info!("Initializing Nitro Enclave VSOCK Server...");
 
-    // 1. Generate TLS Identity
-    let (certs, key, cert_der_bytes) = generate_identity();
-    info!("Generated ephemeral TLS certificate.");
+    // Install the default cryptographic provider for rustls 0.23
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // 2. Get Attestation Document
-    let nitro_doc = get_attestation_doc(&cert_der_bytes);
-    info!("Retrieved Attestation Document.");
+    // 1. Build your Axum router
+    let _app: Router = Router::new().route("/", get(|| async { "Hello from Enclave over HTTP/3!" }));
 
-    // 2b. Wrap it as an RFC 9711 EAT claims-set
-    let eat_doc = eat::wrap_as_eat(&nitro_doc)?;
-    info!("Wrapped Attestation Document as an EAT claims-set.");
+    // 2. Generate/load RA-TLS certificate and key
+    let (certs, private_key, ra_cert) = generate_identity();
 
-    let evidence = Arc::new(Evidence {
-        nitro: nitro_doc,
-        eat: eat_doc,
-    });
-
-    // 3. Configure TLS
-    let config = ServerConfig::builder()
-        .with_safe_defaults()
+    // 3. Configure Rustls with RA-TLS cert
+    let mut server_crypto = rustls::ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(certs, key)?;
-    let acceptor = TlsAcceptor::from(Arc::new(config));
+        .with_single_cert(certs, private_key)?;
 
-    // 4. Bind to VSOCK
-    let mut listener = VsockListener::bind(CID_ANY, PORT).expect("Failed to bind VSOCK listener");
-    info!("Listening on VSOCK CID: Any, Port: {}", PORT);
+    // Enable ALPN for HTTP/3 ("h3")
+    server_crypto.alpn_protocols = vec![b"h3".to_vec()];
 
-    // 5. Server Loop
-    loop {
-        // Fix from the previous step: Destructure the tuple (stream, addr)
-        match listener.accept().await {
-            Ok((stream, _addr)) => {
-                let acceptor = acceptor.clone();
-                let evidence = evidence.clone();
+    // 4. Wrap Rustls config into Quinn (QUIC)
+    let quic_config = ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)?
+    ));
 
+    let endpoint = Endpoint::server(quic_config, "0.0.0.0:4433".parse()?)?;
+
+    // 5. Glue Quinn + h3 crate + Axum tower service
+    // Accept incoming QUIC connections, drive h3 streams, and pass requests to `app`
+
+    while let Some(incoming) = endpoint.accept().await {
+        let app = _app.clone();
+
+        tokio::spawn(async move {
+            // Establish QUIC Handshake + TLS 1.3
+            let conn = match incoming.await {
+                Ok(conn) => conn,
+                Err(err) => return eprintln!("Handshake failed: {}", err),
+            };
+
+            // 4B. Drive HTTP/3 over the QUIC connection
+            let mut h3_conn = match h3::server::Connection::new(h3_quinn::Connection::new(conn)).await {
+                Ok(h3) => h3,
+                Err(e) => return eprintln!("H3 setup failed: {}", e),
+            };
+
+            // 4C. Accept individual HTTP/3 Requests
+            while let Ok(Some((req, mut stream))) = h3_conn.accept().await {
+                let mut app = app.clone();
                 tokio::spawn(async move {
-                    match acceptor.accept(stream).await {
-                        Ok(tls_stream) => {
-                            // FIX: Use service_fn directly.
-                            // We don't need make_service_fn because we already have the connection.
-                            let service =
-                                service_fn(move |req| handle_request(req, evidence.clone()));
-
-                            // serve_connection takes the IO stream and the service directly
-                            if let Err(e) = hyper::server::conn::Http::new()
-                                .serve_connection(tls_stream, service)
-                                .await
-                            {
-                                error!("Error serving connection: {}", e);
-                            }
-                        }
-                        Err(e) => error!("TLS Handshake failed: {}", e),
-                    }
+                    // Turn H3 Request into Axum response via Tower Service interface
+                    let response = app.call(req).await.unwrap();
+                    // Send response back over H3 QUIC stream...
                 });
             }
-            Err(e) => error!("VSOCK accept error: {}", e),
-        }
+        });
     }
+
+
+    Ok(())
+
+    // // 1. Generate TLS Identity
+    // let (certs, key, cert_der_bytes) = generate_identity();
+    // info!("Generated ephemeral TLS certificate.");
+    //
+    // // 2. Get Attestation Document
+    // let nitro_doc = get_attestation_doc(&cert_der_bytes);
+    // info!("Retrieved Attestation Document.");
+    //
+    // // 2b. Wrap it as an RFC 9711 EAT claims-set
+    // let eat_doc = eat::wrap_as_eat(&nitro_doc)?;
+    // info!("Wrapped Attestation Document as an EAT claims-set.");
+    //
+    // let evidence = Arc::new(Evidence {
+    //     nitro: nitro_doc,
+    //     eat: eat_doc,
+    // });
+    //
+    // // 3. Configure TLS
+    // let config = ServerConfig::builder()
+    //     .with_safe_defaults()
+    //     .with_no_client_auth()
+    //     .with_single_cert(certs, key)?;
+    // let acceptor = TlsAcceptor::from(Arc::new(config));
+    //
+    // // 4. Bind to VSOCK
+    // let mut listener = VsockListener::bind(CID_ANY, PORT).expect("Failed to bind VSOCK listener");
+    // info!("Listening on VSOCK CID: Any, Port: {}", PORT);
+    //
+    // // 5. Server Loop
+    // loop {
+    //     // Fix from the previous step: Destructure the tuple (stream, addr)
+    //     match listener.accept().await {
+    //         Ok((stream, _addr)) => {
+    //             let acceptor = acceptor.clone();
+    //             let evidence = evidence.clone();
+    //
+    //             tokio::spawn(async move {
+    //                 match acceptor.accept(stream).await {
+    //                     Ok(tls_stream) => {
+    //                         // FIX: Use service_fn directly.
+    //                         // We don't need make_service_fn because we already have the connection.
+    //                         let service =
+    //                             service_fn(move |req| handle_request(req, evidence.clone()));
+    //
+    //                         // serve_connection takes the IO stream and the service directly
+    //                         if let Err(e) = hyper::server::conn::Http::new()
+    //                             .serve_connection(tls_stream, service)
+    //                             .await
+    //                         {
+    //                             error!("Error serving connection: {}", e);
+    //                         }
+    //                     }
+    //                     Err(e) => error!("TLS Handshake failed: {}", e),
+    //                 }
+    //             });
+    //         }
+    //         Err(e) => error!("VSOCK accept error: {}", e),
+    //     }
+    // }
 }
