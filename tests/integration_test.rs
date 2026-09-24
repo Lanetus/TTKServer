@@ -12,7 +12,7 @@
 // 2. In `main.rs`, you would use `use ttk_server::*`.
 // 3. In this test file, you would use `use ttk_server::*`.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hyper::{Body, Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
 use rcgen::generate_simple_self_signed;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -21,13 +21,19 @@ use std::sync::Arc;
 // --- Duplicated function definitions for demonstration ---
 // In a real project, these would be in `src/lib.rs`.
 
-pub fn generate_identity() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>, Vec<u8>) {
+pub fn generate_identity() -> (
+    Vec<CertificateDer<'static>>,
+    PrivateKeyDer<'static>,
+    Vec<u8>,
+) {
     let subject_alt_names = vec!["localhost".to_string(), "enclave.local".to_string()];
     let certified_key = generate_simple_self_signed(subject_alt_names).unwrap();
 
     let cert_der = certified_key.cert.der().to_vec();
     let rustls_cert = certified_key.cert.der().clone();
-    let rustls_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified_key.key_pair.serialize_der()));
+    let rustls_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+        certified_key.key_pair.serialize_der(),
+    ));
 
     (vec![rustls_cert], rustls_key, cert_der)
 }
