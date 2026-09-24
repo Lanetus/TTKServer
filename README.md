@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/gh/Lanetus/TTKServer/graph/badge.svg?token=G4380O9RMS)](https://codecov.io/gh/Lanetus/TTKServer)
+
 # TTKServer
 
 This is a Rust-based server application.
