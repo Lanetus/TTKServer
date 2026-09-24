@@ -73,16 +73,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Audit Dependencies
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
 
+      - uses: taiki-e/install-action@cargo-audit
 
-  cargo-deny:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - name: Run audit
+        run: cargo audit
 
       - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
@@ -92,13 +89,3 @@ jobs:
           arguments: --all-features
 
 
-  security-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # Installs cargo-audit pre-compiled binary instantly
-      - uses: taiki-e/install-action@cargo-audit
-
-      - name: Run audit
-        run: cargo audit
