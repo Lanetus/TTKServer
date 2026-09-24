@@ -16,18 +16,18 @@ mod eat;
 
 use aws_nitro_enclaves_nsm_api::api::{Request, Response};
 use aws_nitro_enclaves_nsm_api::driver::{nsm_init, nsm_process_request};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use hyper::service::service_fn; // Removed make_service_fn
+// use tokio_rustls::TlsAcceptor;
+// use tokio_vsock::VsockListener;
+use axum::{routing::get, Router};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use hyper::service::Service;
 use hyper::{Body, Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
-use log::{error, info};
+use log::info;
+use quinn::{Endpoint, ServerConfig};
 use rcgen::generate_simple_self_signed;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-// use tokio_rustls::TlsAcceptor;
-// use tokio_vsock::VsockListener;
-use axum::{routing::get, Router};
-use quinn::{Endpoint, ServerConfig};
 
 // Standard constant for "Listen on any CID"
 const CID_ANY: u32 = libc::VMADDR_CID_ANY;
@@ -42,13 +42,19 @@ struct Evidence {
 }
 
 /// Generates a self-signed certificate and private key.
-fn generate_identity() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>, Vec<u8>) {
+fn generate_identity() -> (
+    Vec<CertificateDer<'static>>,
+    PrivateKeyDer<'static>,
+    Vec<u8>,
+) {
     let subject_alt_names = vec!["localhost".to_string(), "enclave.local".to_string()];
     let certified_key = generate_simple_self_signed(subject_alt_names).unwrap();
 
     let cert_der = certified_key.cert.der().to_vec();
     let rustls_cert = certified_key.cert.der().clone();
-    let rustls_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified_key.key_pair.serialize_der()));
+    let rustls_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+        certified_key.key_pair.serialize_der(),
+    ));
 
     (vec![rustls_cert], rustls_key, cert_der)
 }
@@ -113,7 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     // 1. Build your Axum router
-    let _app: Router = Router::new().route("/", get(|| async { "Hello from Enclave over HTTP/3!" }));
+    let _app: Router =
+        Router::new().route("/", get(|| async { "Hello from Enclave over HTTP/3!" }));
 
     // 2. Generate/load RA-TLS certificate and key
     let (certs, private_key, ra_cert) = generate_identity();
@@ -128,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Wrap Rustls config into Quinn (QUIC)
     let quic_config = ServerConfig::with_crypto(Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)?
+        quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)?,
     ));
 
     let endpoint = Endpoint::server(quic_config, "0.0.0.0:4433".parse()?)?;
@@ -147,7 +154,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // 4B. Drive HTTP/3 over the QUIC connection
-            let mut h3_conn = match h3::server::Connection::new(h3_quinn::Connection::new(conn)).await {
+            let mut h3_conn = match h3::server::Connection::<_, axum::body::Bytes>::new(
+                h3_quinn::Connection::new(conn),
+            )
+            .await
+            {
                 Ok(h3) => h3,
                 Err(e) => return eprintln!("H3 setup failed: {}", e),
             };
@@ -156,6 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             while let Ok(Some((req, mut stream))) = h3_conn.accept().await {
                 let mut app = app.clone();
                 tokio::spawn(async move {
+                    let req = req.map(|_| axum::body::Body::empty());
                     // Turn H3 Request into Axum response via Tower Service interface
                     let response = app.call(req).await.unwrap();
                     // Send response back over H3 QUIC stream...
@@ -163,7 +175,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
-
 
     Ok(())
 
