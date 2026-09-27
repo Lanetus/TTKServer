@@ -24,7 +24,6 @@ use std::fmt;
 use std::io::Cursor;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 /// Errors that can occur when interacting with the AWS Nitro Security Module.
 #[derive(Debug)]
 pub enum NitroError {
@@ -532,4 +531,3 @@ fn read_module_id_and_timestamp(payload: &[u8]) -> Result<(String, u64), NitroEr
         })?,
     ))
 }
-

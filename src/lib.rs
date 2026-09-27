@@ -9,9 +9,7 @@ pub mod nitro;
 
 // Re-export common types and functions for convenience
 pub use eat::{EatClaimKey, EatClaimsSet};
-pub use nitro::{
-    generate_attestation_for_cert_or_mock, wrap_as_eat,
-};
+pub use nitro::{generate_attestation_for_cert_or_mock, wrap_as_eat};
 
 use rcgen::generate_simple_self_signed;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};

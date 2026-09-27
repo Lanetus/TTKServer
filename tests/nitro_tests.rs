@@ -41,8 +41,8 @@ fn test_create_and_parse_mock_attestation_doc() {
     assert!(!payload.is_empty());
 
     // Parse into AttestationDoc
-    let parsed_doc = parse_attestation_document(&raw_cose)
-        .expect("Parsing attestation document should succeed");
+    let parsed_doc =
+        parse_attestation_document(&raw_cose).expect("Parsing attestation document should succeed");
 
     assert_eq!(parsed_doc.module_id, "aws-nitro-enclaves-mock");
     assert_eq!(parsed_doc.digest, Digest::SHA384);

@@ -20,9 +20,7 @@ use log::info;
 use quinn::{Endpoint, ServerConfig};
 use std::sync::Arc;
 use ttk_server::generate_identity;
-use ttk_server::{
-    generate_attestation_for_cert_or_mock, wrap_as_eat
-};
+use ttk_server::{generate_attestation_for_cert_or_mock, wrap_as_eat};
 
 /// Evidence for this instance, in the formats served over HTTP.
 #[derive(Clone, Debug)]
