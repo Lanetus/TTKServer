@@ -1,0 +1,9 @@
+{
+    // Set default formatter for Rust files
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true
+    },
+    // Use Clippy instead of default "cargo check" on save
+    "rust-analyzer.check.command": "clippy"
+}
