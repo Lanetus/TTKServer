@@ -42,7 +42,10 @@ impl EnclaveCertVerifier {
 
     /// Retrieve the server certificate DER bytes captured during the TLS handshake.
     pub fn received_certificate(&self) -> Option<CertificateDer<'static>> {
-        self.received_cert.lock().ok().and_then(|guard| guard.clone())
+        self.received_cert
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 }
 
@@ -150,7 +153,10 @@ impl TtkClient {
         let mut endpoint = Endpoint::client(bind_addr)?;
         endpoint.set_default_client_config(quic_client_config);
 
-        info!("Initiating QUIC connection to {} ({})", server_addr, server_name);
+        info!(
+            "Initiating QUIC connection to {} ({})",
+            server_addr, server_name
+        );
         let connecting = endpoint.connect(server_addr, server_name)?;
         let connection = connecting.await?;
         info!("QUIC connection established with {}", server_addr);
@@ -158,7 +164,10 @@ impl TtkClient {
         let peer_cert = cert_verifier.received_certificate();
         if let Some(ref cert) = peer_cert {
             let hash = Sha256::digest(cert.as_ref());
-            info!("Server Certificate SHA-256 fingerprint: {}", hex_encode(&hash));
+            info!(
+                "Server Certificate SHA-256 fingerprint: {}",
+                hex_encode(&hash)
+            );
         }
 
         // Establish HTTP/3 on top of the QUIC connection
@@ -166,9 +175,8 @@ impl TtkClient {
         let (mut driver, send_request) = h3::client::new(h3_quic_conn).await?;
 
         // Drive the HTTP/3 connection state machine in the background
-        let driver_handle = tokio::spawn(async move {
-            std::future::poll_fn(|cx| driver.poll_close(cx)).await
-        });
+        let driver_handle =
+            tokio::spawn(async move { std::future::poll_fn(|cx| driver.poll_close(cx)).await });
 
         Ok(Self {
             endpoint,
@@ -266,7 +274,9 @@ impl TtkClient {
 
         if let Some(data) = payload {
             if !data.is_empty() {
-                stream.send_data(axum::body::Bytes::copy_from_slice(data)).await?;
+                stream
+                    .send_data(axum::body::Bytes::copy_from_slice(data))
+                    .await?;
             }
         }
         stream.finish().await?;
@@ -303,15 +313,17 @@ impl TtkClient {
 }
 
 /// Helper function to format bytes as a hex string.
-fn hex_encode(bytes: &[u8]) -> String {
+pub fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// Parse command-line target or default to `127.0.0.1:4433`.
 fn parse_args() -> (SocketAddr, String, String) {
     let args: Vec<String> = std::env::args().collect();
-    let mut server_addr_str = std::env::var("TTK_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:4433".to_string());
-    let mut server_name = std::env::var("TTK_SERVER_NAME").unwrap_or_else(|_| "localhost".to_string());
+    let mut server_addr_str =
+        std::env::var("TTK_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:4433".to_string());
+    let mut server_name =
+        std::env::var("TTK_SERVER_NAME").unwrap_or_else(|_| "localhost".to_string());
     let mut path = "/".to_string();
 
     let mut i = 1;
@@ -435,33 +447,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Connection closed successfully.");
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_hex_encode() {
-        let bytes = [0x00, 0x12, 0xab, 0xff];
-        assert_eq!(hex_encode(&bytes), "0012abff");
-    }
-
-    #[test]
-    fn test_client_response_text() {
-        let resp = ClientResponse {
-            status: StatusCode::OK,
-            headers: HeaderMap::new(),
-            body: b"Hello World".to_vec(),
-        };
-        assert_eq!(resp.text().unwrap(), "Hello World");
-    }
-
-    #[test]
-    fn test_enclave_cert_verifier() {
-        let verifier = EnclaveCertVerifier::new();
-        assert!(verifier.received_certificate().is_none());
-        assert!(!verifier.supported_verify_schemes().is_empty());
-    }
 }
 
