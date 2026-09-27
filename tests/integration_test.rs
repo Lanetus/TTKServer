@@ -116,3 +116,32 @@ async fn test_handle_request_not_found() {
     let response = handle_request(req, attestation_doc).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[test]
+fn test_ttk_server_nitro_and_eat_integration() {
+    use sha2::{Digest as ShaDigest, Sha256};
+    use ttk_server::nitro::wrap_as_eat;
+    use ttk_server::generate_identity;
+    use ttk_server::nitro::{generate_attestation_for_cert_or_mock, parse_attestation_document};
+
+    // 1. Generate RA-TLS identity
+    let (_certs, _key, cert_der) = generate_identity();
+
+    // 2. Generate attestation document bound to certificate
+    let nitro_doc = generate_attestation_for_cert_or_mock(&cert_der)
+        .expect("Should generate nitro attestation document");
+
+    // 3. Parse and verify attestation document
+    let parsed = parse_attestation_document(&nitro_doc)
+        .expect("Should parse generated attestation document");
+
+    let expected_cert_hash = Sha256::digest(&cert_der);
+    assert_eq!(
+        parsed.user_data.as_deref().map(|v| v.as_slice()),
+        Some(expected_cert_hash.as_slice())
+    );
+
+    // 4. Wrap as RFC 9711 EAT token
+    let eat_token = wrap_as_eat(&nitro_doc).expect("Should wrap nitro document as EAT token");
+    assert!(!eat_token.is_empty());
+}

@@ -4,6 +4,10 @@ version = "0.6.0"
 edition = "2021"
 default-run = "TTKServer"
 
+[lib]
+name = "ttk_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "TTKServer"
 path = "src/main.rs"
