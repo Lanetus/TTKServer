@@ -115,8 +115,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     // 1. Build your Axum router
-    let _app: Router =
-        Router::new().route("/", get(|| async { "Hello from Enclave over HTTP/3!" }));
+    let _app: Router = Router::new()
+        .route("/", get(|| async { "Hello from Enclave over HTTP/3!" }))
+        .route("/hello", get(|| async { "Hello from inside the Enclave!" }));
 
     // 2. Generate/load RA-TLS certificate and key
     let (certs, private_key, _) = generate_identity();
@@ -160,13 +161,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // 4C. Accept individual HTTP/3 Requests
-            while let Ok(Some((req, _))) = h3_conn.accept().await {
+            while let Ok(Some((req, mut stream))) = h3_conn.accept().await {
                 let mut app = app.clone();
                 tokio::spawn(async move {
                     let req = req.map(|_| axum::body::Body::empty());
                     // Turn H3 Request into Axum response via Tower Service interface
-                    let _ = app.call(req).await.unwrap();
-                    // Send response back over H3 QUIC stream...
+                    match app.call(req).await {
+                        Ok(response) => {
+                            let (parts, body) = response.into_parts();
+                            let h3_response = axum::http::Response::from_parts(parts, ());
+                            if let Err(e) = stream.send_response(h3_response).await {
+                                eprintln!("Failed to send response headers: {e}");
+                                return;
+                            }
+                            match axum::body::to_bytes(body, usize::MAX).await {
+                                Ok(bytes) => {
+                                    if !bytes.is_empty() {
+                                        if let Err(e) = stream.send_data(bytes).await {
+                                            eprintln!("Failed to send response body: {e}");
+                                            return;
+                                        }
+                                    }
+                                }
+                                Err(e) => eprintln!("Failed to read response body: {e}"),
+                            }
+                            if let Err(e) = stream.finish().await {
+                                eprintln!("Failed to finish stream: {e}");
+                            }
+                        }
+                        Err(e) => eprintln!("App call error: {e}"),
+                    }
                 });
             }
         });
