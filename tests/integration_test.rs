@@ -120,8 +120,8 @@ async fn test_handle_request_not_found() {
 #[test]
 fn test_ttk_server_nitro_and_eat_integration() {
     use sha2::{Digest as ShaDigest, Sha256};
-    use ttk_server::nitro::wrap_as_eat;
     use ttk_server::generate_identity;
+    use ttk_server::nitro::wrap_as_eat;
     use ttk_server::nitro::{generate_attestation_for_cert_or_mock, parse_attestation_document};
 
     // 1. Generate RA-TLS identity
