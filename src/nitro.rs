@@ -14,6 +14,8 @@
 //!   hardware is not present.
 
 use crate::eat::EatClaimsSet;
+use crate::Attestation;
+pub use crate::AttestationParams;
 use aws_nitro_enclaves_nsm_api::api::{AttestationDoc, Digest, ErrorCode};
 use aws_nitro_enclaves_nsm_api::api::{Request, Response};
 use aws_nitro_enclaves_nsm_api::driver::{nsm_exit, nsm_init, nsm_process_request};
@@ -69,65 +71,6 @@ impl From<std::io::Error> for NitroError {
     }
 }
 
-/// Parameters for requesting an attestation document from the Nitro Security Module.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct AttestationParams {
-    /// Optional user data to include in the attestation document (e.g. SHA-256 hash of TLS cert).
-    pub user_data: Option<Vec<u8>>,
-    /// Optional cryptographic nonce to prevent replay attacks.
-    pub nonce: Option<Vec<u8>>,
-    /// Optional public key (DER-encoded) for cryptographic sealing or key exchange.
-    pub public_key: Option<Vec<u8>>,
-}
-
-impl AttestationParams {
-    /// Creates a new, empty set of attestation parameters.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets user data bytes.
-    pub fn with_user_data(mut self, data: impl Into<Vec<u8>>) -> Self {
-        self.user_data = Some(data.into());
-        self
-    }
-
-    /// Computes the SHA-256 hash of the input data (such as a DER-encoded certificate)
-    /// and sets it as the `user_data` field for Remote Attestation TLS (RA-TLS).
-    pub fn with_user_data_hash(mut self, data: &[u8]) -> Self {
-        let hash = Sha256::digest(data);
-        self.user_data = Some(hash.to_vec());
-        self
-    }
-
-    /// Sets the cryptographic nonce.
-    pub fn with_nonce(mut self, nonce: impl Into<Vec<u8>>) -> Self {
-        self.nonce = Some(nonce.into());
-        self
-    }
-
-    /// Sets the DER-encoded public key.
-    pub fn with_public_key(mut self, public_key: impl Into<Vec<u8>>) -> Self {
-        self.public_key = Some(public_key.into());
-        self
-    }
-
-    /// Returns a reference to the user data, if set.
-    pub fn user_data(&self) -> Option<&[u8]> {
-        self.user_data.as_deref()
-    }
-
-    /// Returns a reference to the nonce, if set.
-    pub fn nonce(&self) -> Option<&[u8]> {
-        self.nonce.as_deref()
-    }
-
-    /// Returns a reference to the public key, if set.
-    pub fn public_key(&self) -> Option<&[u8]> {
-        self.public_key.as_deref()
-    }
-}
-
 /// Information about the connected Nitro Security Module runtime and configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NsmDescription {
@@ -156,7 +99,7 @@ pub struct NsmSession {
     fd: i32,
 }
 
-impl NsmSession {
+impl Attestation for NsmSession {
     /// Opens a new session with the Nitro Security Module.
     ///
     /// Calls [`nsm_init`] to open `/dev/nsm`. Returns [`NitroError::DeviceOpenFailed`]
@@ -272,6 +215,10 @@ impl NsmSession {
             Response::Error(err) => Err(NitroError::NsmError(err)),
             other => Err(NitroError::UnexpectedResponse(format!("{other:?}"))),
         }
+    }
+
+    fn generate_document(attestation_params: AttestationParams) -> EatClaimsSet {
+        todo!()
     }
 }
 
