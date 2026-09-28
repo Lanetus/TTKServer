@@ -5,22 +5,25 @@
 
 pub mod client;
 pub mod eat;
-#[cfg(feature = "nitro")]
+#[cfg(feature = "mock")]
 mod mock;
+#[cfg(feature = "mock")]
+pub use mock::MockSession as AttestationProcess;
+
 #[cfg(feature = "nitro")]
 pub mod nitro;
+#[cfg(feature = "nitro")]
+pub use nitro::NsmSession as AttestationProcess;
 
 // Re-export common types and functions for convenience
 pub use eat::{EatClaimKey, EatClaimsSet};
-pub use nitro::{generate_attestation_for_cert_or_mock, wrap_as_eat};
 
 use rcgen::generate_simple_self_signed;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
-use std::error::Error;
 
 pub trait Attestation {
-    fn generate_document(attestation_params: AttestationParams) -> EatClaimsSet;
+    fn generate_document(attestation_params: &AttestationParams) -> EatClaimsSet;
 }
 
 /// Generates a self-signed ephemeral TLS certificate and private key for Remote Attestation TLS (RA-TLS).

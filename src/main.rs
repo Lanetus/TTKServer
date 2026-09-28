@@ -19,8 +19,7 @@ use hyper::service::Service;
 use log::info;
 use quinn::{Endpoint, ServerConfig};
 use std::sync::Arc;
-use ttk_server::generate_identity;
-use ttk_server::{generate_attestation_for_cert_or_mock, wrap_as_eat};
+use ttk_server::{generate_identity, Attestation, AttestationParams, AttestationProcess};
 
 /// Evidence for this instance, in the formats served over HTTP.
 #[derive(Clone, Debug)]
@@ -29,13 +28,6 @@ pub struct Evidence {
     pub nitro: Vec<u8>,
     /// The same document, wrapped as an RFC 9711 EAT claims-set.
     pub eat: Vec<u8>,
-}
-
-/// Requests an Attestation Document (RATS Evidence) from the Nitro Security Module,
-/// binding it to this instance's TLS certificate.
-pub fn get_attestation_doc(cert_der: &[u8]) -> Vec<u8> {
-    generate_attestation_for_cert_or_mock(cert_der)
-        .expect("Failed to obtain attestation document from NSM or mock")
 }
 
 #[tokio::main]
@@ -50,23 +42,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (certs, private_key, cert_der_bytes) = generate_identity();
     info!("Generated ephemeral TLS certificate.");
 
-    // 2. Obtain hardware-rooted NSM Attestation Document bound to TLS certificate hash
-    let nitro_doc = get_attestation_doc(&cert_der_bytes);
-    info!(
-        "Acquired NSM Attestation Document ({} bytes).",
-        nitro_doc.len()
-    );
+    let params = AttestationParams::new().with_user_data_hash(&cert_der_bytes);
 
     // 2b. Wrap as an RFC 9711 EAT claims-set
-    let eat_doc = wrap_as_eat(&nitro_doc)?;
+    let eat_doc = AttestationProcess::generate_document(&params);
+    let eat_byte = eat_doc.to_cbor_bytes()?;
     info!(
         "Wrapped Attestation Document as RFC 9711 EAT token ({} bytes).",
-        eat_doc.len()
+        eat_byte.len()
     );
 
     let evidence = Arc::new(Evidence {
-        nitro: nitro_doc,
-        eat: eat_doc,
+        nitro: eat_byte.clone(),
+        eat: eat_byte.clone(),
     });
 
     let nitro_b64 = STANDARD.encode(&evidence.nitro);
