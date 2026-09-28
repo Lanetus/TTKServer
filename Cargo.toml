@@ -39,4 +39,4 @@ tokio-vsock = "0.3"
 deafult = ["nitro"]
 
 nitro = ["dep:aws-nitro-enclaves-nsm-api"]
-mock = []
+mock = ["dep:aws-nitro-enclaves-nsm-api"]

@@ -100,6 +100,16 @@ pub struct NsmSession {
 }
 
 impl Attestation for NsmSession {
+    fn generate_document(attestation_params: &AttestationParams) -> EatClaimsSet {
+        let session = NsmSession::open().unwrap();
+        let nitro_doc = session
+            .create_attestation(attestation_params)
+            .expect("TODO: panic message");
+        wrap_as_eat(&nitro_doc)
+    }
+}
+
+impl NsmSession {
     /// Opens a new session with the Nitro Security Module.
     ///
     /// Calls [`nsm_init`] to open `/dev/nsm`. Returns [`NitroError::DeviceOpenFailed`]
@@ -215,10 +225,6 @@ impl Attestation for NsmSession {
             Response::Error(err) => Err(NitroError::NsmError(err)),
             other => Err(NitroError::UnexpectedResponse(format!("{other:?}"))),
         }
-    }
-
-    fn generate_document(attestation_params: AttestationParams) -> EatClaimsSet {
-        todo!()
     }
 }
 
@@ -412,9 +418,9 @@ const NITRO_SUBMOD_NAME: &str = "aws_nitro";
 /// | `submods`    | the raw `nitro_doc` bytes        |
 ///
 /// Trust still comes from the nested Nitro token, not from the outer claims-set.
-pub fn wrap_as_eat(nitro_doc: &[u8]) -> Result<Vec<u8>, NitroError> {
-    let payload = extract_cose_payload(nitro_doc)?;
-    let (module_id, timestamp_ms) = read_module_id_and_timestamp(&payload)?;
+pub fn wrap_as_eat(nitro_doc: &[u8]) -> EatClaimsSet {
+    let payload = extract_cose_payload(nitro_doc).unwrap();
+    let (module_id, timestamp_ms) = read_module_id_and_timestamp(&payload).unwrap();
 
     let mut ueid = vec![UEID_TYPE_RAND];
     ueid.extend_from_slice(&Sha256::digest(module_id.as_bytes()));
@@ -424,17 +430,13 @@ pub fn wrap_as_eat(nitro_doc: &[u8]) -> Result<Vec<u8>, NitroError> {
         Value::Bytes(nitro_doc.to_vec()),
     )]);
 
-    let claims = EatClaimsSet {
+    EatClaimsSet {
         iat: Some((timestamp_ms / 1000) as i64),
         ueid: Some(ueid),
         eat_profile: Some(EAT_PROFILE.to_string()),
         submods: Some(submods),
         ..EatClaimsSet::default()
-    };
-
-    claims
-        .to_cbor_bytes()
-        .map_err(|e| NitroError::DocumentDecodingFailed(e.to_string()))
+    }
 }
 
 /// Reads `module_id` and `timestamp` out of the CBOR-encoded Nitro AttestationDoc
