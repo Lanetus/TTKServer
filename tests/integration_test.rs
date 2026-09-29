@@ -153,7 +153,7 @@ fn test_ttk_server_nitro_and_eat_integration() {
     assert!(!eat_token.is_empty());
 
     // 5. Test round-trip deserialization from bytes to EatClaimsSet
-    let deserialized = ttk_server::eat::EatClaimsSet::from_cbor_bytes(&eat_token)
+    let deserialized = ttk_server::attestation::eat::EatClaimsSet::from_cbor_bytes(&eat_token)
         .expect("Should deserialize EatClaimsSet from CBOR bytes");
     assert_eq!(deserialized.iat, eat_claims.iat);
     assert_eq!(deserialized.ueid, eat_claims.ueid);

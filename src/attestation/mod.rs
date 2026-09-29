@@ -10,6 +10,8 @@
 use crate::{AttestationParams, EatClaimsSet};
 use std::fmt;
 
+pub mod eat;
+
 #[cfg(any(feature = "nitro", feature = "mock"))]
 pub mod nitro_doc;
 

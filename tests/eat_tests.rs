@@ -1,7 +1,7 @@
 //! Tests for RFC 9711 EAT claims-set encoding and decoding (`ttk_server::eat`).
 
 use ciborium::Value;
-use ttk_server::eat::{EatClaimKey, EatClaimsSet};
+use ttk_server::attestation::eat::{EatClaimKey, EatClaimsSet};
 
 /// A claims-set with every claim populated.
 fn full_claims() -> EatClaimsSet {
