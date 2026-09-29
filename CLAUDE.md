@@ -10,7 +10,7 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
 - `src/lib.rs` — crate root of `ttk_server`: only declares `attestation`, `service`, `verifier` and re-exports (`client`, `server`, `eat`, `EatClaimsSet`, `EatClaimKey`, `generate_identity`, `AttestationParams`) at the top level.
 - `src/service/mod.rs` — declares `client`/`server`; holds the `AttestationParams` builder (user_data / nonce / public_key) and `generate_identity()`.
 - `src/main.rs` — bin `TTKServer`: thin entry point calling `ttk_server::server::run()`.
-- `src/service/server.rs` — attestation at startup, RA-TLS cert, QUIC/h3 accept loop on `0.0.0.0:4433`; reads request bodies up to `MAX_REQUEST_BODY` (else 413). Relay policy: `Server::with_relay_verifier` (default strict; `run()` allows mock with `TTK_ALLOW_MOCK_ATTESTATION=1`).
+- `src/service/server.rs` — attestation at startup, RA-TLS cert, QUIC/h3 accept loop on `TTK_LISTEN_ADDR` (default `0.0.0.0:4433`); reads request bodies up to `MAX_REQUEST_BODY` (else 413). Relay policy: `Server::with_relay_verifier` (default strict; `run()` allows mock with `TTK_ALLOW_MOCK_ATTESTATION=1`).
 - `src/service/router.rs` — all HTTP routes (`build_router`): `GET /`, `GET /evidence.eat` (base64 EAT), `POST /faf` (`FafRequest` JSON: forwards `message`+`key` to `relay_server`'s `/faf` over verified RA-TLS; no `relay_server` = last hop, 200). Also `Evidence` (re-exported from `server`), `parse_relay_server`, relay timeouts.
 - `src/service/client.rs` — lib module `ttk_server::client`: `TtkClient`, `EnclaveCertVerifier` (accepts self-signed cert, records it), `extract_attestation_doc`, `hex_encode`.
 - `src/bin/client.rs` — **test-only** bin `client` (`test-client` feature, never in production): `main` plus CLI parsing (`parse_client_args`, `ClientTarget`, `CLIENT_USAGE`, private to the bin) over `ttk_server::client`. Its e2e tests live in `tests/client_bin_tests.rs`.
@@ -33,7 +33,7 @@ cargo build                                   # nitro (default)
 cargo build --no-default-features --features mock
 cargo test                                    # nitro tests fall back to mock docs off-enclave
 cargo test --no-default-features --features mock
-cargo run                                     # server on :4433 (RUST_LOG=info for logs)
+cargo run                                     # server on :4433 (TTK_LISTEN_ADDR overrides; RUST_LOG=info for logs)
 cargo bench --bench client                    # client library benchmarks
 cargo test --features test-client             # also builds + tests the test-only client binary
 cargo run --features test-client --bin client -- <args>   # see parse_args() in src/bin/client.rs
