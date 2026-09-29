@@ -1,20 +1,49 @@
+[graph]
+targets = []
+all-targets = true
+
+# Check for security advisories (via RustSec)
 [advisories]
 vulnerability = "deny"
-unmaintained = "all"
-
-[licenses]
-# Reject viral copyleft licenses like GPL
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause"]
-
-[bans]
-# Disallow duplicate versions of heavy crates
-multiple-versions = "deny"
-# Explicitly block specific known bad crates
-deny = [
-    { name = "openssl" } # Force team to use rustls
+unmaintained = "warn"
+notice = "warn"
+ignore = [
+    # "RUSTSEC-0000-0000", # Example: Ignore specific advisory ID if needed
 ]
 
+# Check license compliance across dependencies
+[licenses]
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+# Restrict duplicate dependencies or forbid specific crates
+[bans]
+multiple-versions = "warn" # Flag duplicate crate versions in dependency tree
+wildcards = "deny"         # Forbid wildcard dependencies (e.g. "*")
+highlight = "all"
+deny = [
+    # { name = "openssl" }, # Example: Forbid specific crates
+]
+skip = [
+    # { name = "either", version = "1.5.0" }, # Allow specific older duplicate versions
+]
+
+# Ensure dependencies come only from trusted registries
 [sources]
-# Reject crates installed directly from unverified git branches
 unknown-registry = "deny"
 unknown-git = "deny"
+allow-registry = [
+    "https://github.com/rust-lang/crates.io-index",
+]
+allow-git = []
