@@ -107,18 +107,26 @@ type BoxError = Box<dyn std::error::Error>;
 /// Boxed error type that can cross task boundaries.
 type SendError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Address the QUIC endpoint binds to.
+/// Default address the QUIC endpoint binds to, unless [`LISTEN_ADDR_ENV`] overrides it.
 const LISTEN_ADDR: &str = "0.0.0.0:4433";
+
+/// Environment variable that overrides [`LISTEN_ADDR`] (a socket address such as
+/// `127.0.0.1:4444`).
+pub const LISTEN_ADDR_ENV: &str = "TTK_LISTEN_ADDR";
 
 /// Largest request body the server reads; larger requests get `413 Payload Too Large`.
 pub const MAX_REQUEST_BODY: usize = 1024 * 1024;
 
 /// Runs the server: attests, builds the RA-TLS identity, then serves HTTP/3 on
-/// `0.0.0.0:4433` until the endpoint closes.
+/// `TTK_LISTEN_ADDR` (default `0.0.0.0:4433`) until the endpoint closes.
 ///
 /// Relays must present genuine TEE attestation unless `TTK_ALLOW_MOCK_ATTESTATION=1`.
 pub async fn run() -> Result<(), BoxError> {
-    let mut server = Server::bind(LISTEN_ADDR.parse()?)?;
+    let listen_addr = std::env::var(LISTEN_ADDR_ENV).unwrap_or_else(|_| LISTEN_ADDR.to_string());
+    let listen_addr: SocketAddr = listen_addr
+        .parse()
+        .map_err(|e| format!("invalid {LISTEN_ADDR_ENV} {listen_addr:?}: {e}"))?;
+    let mut server = Server::bind(listen_addr)?;
     if std::env::var(ALLOW_MOCK_RELAY_ENV).is_ok_and(|v| v == "1") {
         warn!("Accepting MOCK attestation from relay servers ({ALLOW_MOCK_RELAY_ENV}=1)");
         server = server.with_relay_verifier(|| EnclaveCertVerifier::new().allow_mock());
