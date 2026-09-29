@@ -73,12 +73,9 @@ pub fn verify(
         return Err("attestation document timestamp is in the future".into());
     }
 
-    if policy.allow_mock {
-        log::warn!("Mock attestation allowed: skipping COSE signature and AWS chain checks");
-    } else {
-        verify_chain(&doc, trust)?;
-        cose.verify_signature(&doc.certificate)?;
-    }
+    let root = trusted_root(&doc, trust, policy)?;
+    verify_chain(&doc, root)?;
+    cose.verify_signature(&doc.certificate)?;
 
     // Debug-mode enclaves report all-zero PCRs.
     let debug = doc.pcrs.get(&0).is_some_and(|p| p.iter().all(|b| *b == 0));
@@ -97,22 +94,51 @@ pub fn verify(
     })
 }
 
-/// Verifies the document's signing certificate up to the pinned AWS Nitro root.
+/// `module_id` the server's mock provider puts in its documents.
+const MOCK_MODULE_ID: &str = "aws-nitro-enclaves-mock";
+
+/// Returns the pinned root that `doc`'s `cabundle` must start with: the AWS Nitro root, or the
+/// mock root when mock attestation is allowed.
+fn trusted_root<'a>(
+    doc: &AttestationDocument,
+    trust: &'a TrustStore,
+    policy: Policy,
+) -> Result<&'a [u8], String> {
+    let root = doc.cabundle.first();
+    let is_mock = doc.module_id == MOCK_MODULE_ID || root == Some(&trust.mock_nitro_root);
+    if is_mock && !policy.allow_mock {
+        return Err(
+            "the server presented MOCK attestation evidence, which is only accepted for local \
+             development: set TTK_ALLOW_MOCK_ATTESTATION=1 for the client binary, or use \
+             EnclaveCertVerifier::allow_mock()"
+                .into(),
+        );
+    }
+    let root = root.ok_or(if is_mock {
+        "the mock attestation document is unsigned (empty cabundle): rebuild and restart the \
+         server to get signed mock evidence"
+    } else {
+        "attestation cabundle is empty"
+    })?;
+
+    if *root == trust.aws_nitro_root {
+        return Ok(&trust.aws_nitro_root);
+    }
+    if *root == trust.mock_nitro_root {
+        log::warn!("Accepting MOCK attestation evidence signed by the TTKServer mock root CA");
+        return Ok(&trust.mock_nitro_root);
+    }
+    Err("attestation cabundle is not rooted at the AWS Nitro root CA".into())
+}
+
+/// Verifies the document's signing certificate up to the pinned `root`.
 ///
 /// The chain is validated at the document's timestamp: Nitro signing certificates are
 /// short-lived, while the server reuses one document for the lifetime of its TLS certificate.
-fn verify_chain(doc: &AttestationDocument, trust: &TrustStore) -> Result<(), String> {
-    let root = doc
-        .cabundle
-        .first()
-        .ok_or("attestation cabundle is empty")?;
-    if *root != trust.aws_nitro_root {
-        return Err("attestation cabundle is not rooted at the AWS Nitro root CA".into());
-    }
-
-    let root_der = CertificateDer::from(root.as_slice());
+fn verify_chain(doc: &AttestationDocument, root: &[u8]) -> Result<(), String> {
+    let root_der = CertificateDer::from(root);
     let anchor = webpki::anchor_from_trusted_cert(&root_der)
-        .map_err(|e| format!("invalid AWS Nitro root certificate: {e:?}"))?;
+        .map_err(|e| format!("invalid attestation root certificate: {e:?}"))?;
     let intermediates: Vec<CertificateDer<'_>> = doc.cabundle[1..]
         .iter()
         .map(|c| CertificateDer::from(c.as_slice()))
