@@ -38,8 +38,10 @@ jobs:
 
       - name: Determine bump level
         id: bump_level
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          commit_message="${{ github.event.head_commit.message }}"
+          commit_message="$COMMIT_MESSAGE"
           if [[ "$commit_message" == major:* ]]; then
             echo "level=major" >> $GITHUB_OUTPUT
           elif [[ "$commit_message" == feat:* ]]; then
