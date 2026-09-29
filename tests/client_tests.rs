@@ -45,3 +45,94 @@ fn test_extract_attestation_doc() {
     let extracted = extract_attestation_doc(cert.der()).unwrap();
     assert_eq!(extracted, expected_payload);
 }
+
+#[cfg(feature = "mock")]
+mod attestation_verification {
+    use rcgen::KeyPair;
+    use rustls::client::danger::ServerCertVerifier;
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+    use ttk_server::attestation::by_name;
+    use ttk_server::client::EnclaveCertVerifier;
+    use ttk_server::server::create_cert_with_attestation;
+    use ttk_server::AttestationParams;
+
+    /// Builds an RA-TLS certificate for `cert_key` carrying mock evidence bound to `bound_key`.
+    fn ra_tls_cert(cert_key: &KeyPair, bound_key: &KeyPair) -> CertificateDer<'static> {
+        let params = AttestationParams::new().with_user_data_hash(&bound_key.public_key_der());
+        let eat = by_name("mock")
+            .unwrap()
+            .generate_document(&params)
+            .unwrap()
+            .to_cbor_bytes()
+            .unwrap();
+        let pem = create_cert_with_attestation(cert_key, "enclave.internal", &eat, 1).unwrap();
+        CertificateDer::from_pem_slice(pem.as_bytes()).unwrap()
+    }
+
+    fn verify(
+        verifier: &EnclaveCertVerifier,
+        cert: &CertificateDer<'_>,
+    ) -> Result<(), rustls::Error> {
+        let name = ServerName::try_from("localhost").unwrap();
+        verifier
+            .verify_server_cert(cert, &[], &name, &[], UnixTime::now())
+            .map(|_| ())
+    }
+
+    #[test]
+    fn accepts_bound_mock_evidence_when_allowed() {
+        let key = KeyPair::generate().unwrap();
+        let cert = ra_tls_cert(&key, &key);
+        let verifier = EnclaveCertVerifier::new().allow_mock();
+
+        verify(&verifier, &cert).expect("mock evidence bound to the cert key should verify");
+        assert_eq!(verifier.received_certificate().as_ref(), Some(&cert));
+        let doc = verifier.verified_attestation().unwrap();
+        assert_eq!(doc.module_id, "aws-nitro-enclaves-mock");
+    }
+
+    #[test]
+    fn strict_verifier_rejects_mock_evidence() {
+        let key = KeyPair::generate().unwrap();
+        let cert = ra_tls_cert(&key, &key);
+        let verifier = EnclaveCertVerifier::new();
+
+        assert!(verify(&verifier, &cert).is_err());
+        assert!(verifier.received_certificate().is_none());
+    }
+
+    #[test]
+    fn rejects_evidence_bound_to_another_key() {
+        let key = KeyPair::generate().unwrap();
+        let other = KeyPair::generate().unwrap();
+        let cert = ra_tls_cert(&key, &other);
+
+        let err = verify(&EnclaveCertVerifier::new().allow_mock(), &cert).unwrap_err();
+        assert!(err.to_string().contains("user_data"), "{err}");
+    }
+
+    #[test]
+    fn rejects_unexpected_pcr() {
+        let key = KeyPair::generate().unwrap();
+        let cert = ra_tls_cert(&key, &key);
+        let verifier = EnclaveCertVerifier::new()
+            .allow_mock()
+            .with_expected_pcr(0, vec![0xff; 48]);
+
+        let err = verify(&verifier, &cert).unwrap_err();
+        assert!(err.to_string().contains("PCR0"), "{err}");
+    }
+
+    #[test]
+    fn rejects_certificate_without_attestation() {
+        let key = KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["localhost".into()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+
+        let err = verify(&EnclaveCertVerifier::new().allow_mock(), cert.der()).unwrap_err();
+        assert!(err.to_string().contains("attestation extension"), "{err}");
+    }
+}
