@@ -29,8 +29,8 @@ WORKDIR /app
 # Copy the compiled server binary
 COPY --from=builder /app/TTKServer /app/TTKServer
 
-# The server listens on 8443
-EXPOSE 8443
+# The server listens for QUIC / HTTP/3 on UDP 4433
+EXPOSE 4433/udp
 
 # Entrypoint runs the TLS server
 ENTRYPOINT ["/app/TTKServer"]
