@@ -6,12 +6,15 @@
 
 use std::net::SocketAddr;
 use std::process::Output;
+use ttk_server::client::EnclaveCertVerifier;
 use ttk_server::server::Server;
 
-/// Starts a server on a free local port and returns its address. It serves until the test's
-/// runtime shuts down.
+/// Starts a server that accepts mock-attested relays on a free local port and returns its
+/// address. It serves until the test's runtime shuts down.
 fn start_server() -> SocketAddr {
-    let server = Server::bind("127.0.0.1:0".parse().unwrap()).expect("server should start");
+    let server = Server::bind("127.0.0.1:0".parse().unwrap())
+        .expect("server should start")
+        .with_relay_verifier(|| EnclaveCertVerifier::new().allow_mock());
     let addr = server.local_addr().unwrap();
     tokio::spawn(server.serve());
     addr
@@ -41,18 +44,19 @@ async fn run_client_binary_with_env(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn client_binary_queries_root() {
+async fn client_binary_sends_a_faf_request_through_the_relay() {
     let addr = start_server().to_string();
-    let output = run_client_binary(&["--addr", &addr], true).await;
+    let relay = start_server().to_string();
+    let output = run_client_binary(&["--addr", &addr, "--relay", &relay], true).await;
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success(), "{stdout}");
-    assert!(stdout.contains("Response Status: 200"), "{stdout}");
     assert!(
-        stdout.contains("Hello from Enclave over HTTP/3!"),
+        stdout.contains(&format!("--> Sending POST /faf (relay: {relay})")),
         "{stdout}"
     );
-    assert!(stdout.contains("--> Sending GET /"), "{stdout}");
+    assert!(stdout.contains("Response Status: 200"), "{stdout}");
+    assert!(stdout.contains("relayed"), "{stdout}");
     assert!(
         stdout.contains("Connection closed successfully."),
         "{stdout}"
@@ -60,15 +64,17 @@ async fn client_binary_queries_root() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn client_binary_queries_a_given_path() {
+async fn client_binary_defaults_to_the_relay_on_port_4444() {
     let addr = start_server();
-    let url = format!("https://127.0.0.1:{}/evidence.eat", addr.port());
+    let url = format!("https://127.0.0.1:{}", addr.port());
     let output = run_client_binary(&[&url], true).await;
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success(), "{stdout}");
-    assert!(stdout.contains("--> Sending GET /evidence.eat"), "{stdout}");
-    assert!(stdout.contains("Response Status: 200"), "{stdout}");
+    assert!(
+        stdout.contains("--> Sending POST /faf (relay: 127.0.0.1:4444)"),
+        "{stdout}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -93,7 +99,7 @@ async fn client_binary_prints_usage() {
 async fn client_binary_logs_the_verified_certificate() {
     let addr = start_server().to_string();
     let output = run_client_binary_with_env(
-        &["--addr", &addr, "--path", "/evidence.eat"],
+        &["--addr", &addr, "--relay", &addr],
         true,
         &[("RUST_LOG", "info")],
     )
