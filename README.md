@@ -147,7 +147,8 @@ src/
   main.rs           `TTKServer` binary (calls `ttk_server::server::run()`)
   bin/client.rs     test-only `client` binary (`test-client` feature)
   attestation/      TEE providers (nitro, sev_snp, tdx, mock) and the EAT data model (eat.rs)
-  service/          HTTP/3 server.rs and client.rs, plus generate_identity() / AttestationParams
+  service/          server.rs (QUIC / HTTP/3), router.rs (routes incl. /faf), client.rs,
+                    plus generate_identity() / AttestationParams
   verifier/         Evidence verification for Nitro, SEV-SNP and TDX/SGX (DCAP)
 tests/              integration and end-to-end tests
 benches/client.rs   Criterion benchmarks for the client
