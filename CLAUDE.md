@@ -9,7 +9,8 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
 ## Layout
 - `src/lib.rs` — crate `ttk_server`: `Attestation` trait, `AttestationParams` builder (user_data / nonce / public_key), `generate_identity()`; picks `AttestationProcess` by feature flag.
 - `src/main.rs` — bin `TTKServer`: builds RA-TLS cert, axum `Router`, drives QUIC/h3 accept loop on `0.0.0.0:4433`. Routes: `/`, `/hello`, `/evidence` (+ `/attestation` alias), `/evidence.eat` (base64 bodies).
-- `src/client.rs` — bin `client` (also exported as `ttk_server::client`): `TtkClient`, `EnclaveCertVerifier` (accepts self-signed cert, records it), `extract_attestation_doc`, `hex_encode`, CLI arg parsing.
+- `src/client.rs` — lib module `ttk_server::client`: `TtkClient`, `EnclaveCertVerifier` (accepts self-signed cert, records it), `extract_attestation_doc`, `hex_encode`, `parse_client_args`/`CLIENT_USAGE`.
+- `benches/client.rs` — bin `client`: thin `main` + `parse_args()` over `ttk_server::client`.
 - `src/eat.rs` — RFC 9711 EAT claim keys (`EatClaimKey`) and `EatClaimsSet` (CBOR).
 - `src/nitro.rs` — real NSM session (`NsmSession`, `/dev/nsm`), COSE parsing, mock-doc fallback when no hardware, `wrap_as_eat`.
 - `src/mock.rs` — `MockSession` for the `mock` feature.
@@ -19,6 +20,7 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
 - `nitro` (default): `AttestationProcess = nitro::NsmSession`.
 - `mock`: `AttestationProcess = mock::MockSession`; use for local runs without an enclave: `--no-default-features --features mock`.
 - Enabling both makes `AttestationProcess` ambiguous — pick one.
+- `test-client`: builds the test-only `client` binary. Not in `default`; never enable for production/enclave builds.
 - `tokio-vsock` is only pulled in on Linux.
 
 ## Commands
@@ -28,7 +30,9 @@ cargo build --no-default-features --features mock
 cargo test                                    # nitro tests fall back to mock docs off-enclave
 cargo test --no-default-features --features mock
 cargo run                                     # server on :4433 (RUST_LOG=info for logs)
-cargo run --bin client -- <args>              # see parse_args() in src/client.rs
+cargo bench --bench client                    # client library benchmarks
+cargo test --features test-client             # also builds + tests the test-only client binary
+cargo run --features test-client --bin client -- <args>   # see parse_args() in src/bin/client.rs
 cargo fmt && cargo clippy --all-targets -- -D warnings
 cargo deny check                              # config in deny.toml
 ```
