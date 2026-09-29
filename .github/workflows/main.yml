@@ -5,9 +5,6 @@ on:
     branches: [ "main" ]
 
 env:
-  ECR_REGISTRY: 103680339861.dkr.ecr.eu-west-1.amazonaws.com
-  ECR_REPOSITORY: ra-server
-  IMAGE_TAG: latest
   CARGO_TERM_COLOR: always
 
 jobs:

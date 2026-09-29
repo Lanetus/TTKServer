@@ -110,8 +110,8 @@ type SendError = Box<dyn std::error::Error + Send + Sync>;
 /// Default address the QUIC endpoint binds to, unless [`LISTEN_ADDR_ENV`] overrides it.
 const LISTEN_ADDR: &str = "0.0.0.0:4433";
 
-/// Environment variable that overrides [`LISTEN_ADDR`] (a socket address such as
-/// `127.0.0.1:4444`).
+/// Environment variable that overrides the default listen address `0.0.0.0:4433`
+/// (a socket address such as `127.0.0.1:4444`).
 pub const LISTEN_ADDR_ENV: &str = "TTK_LISTEN_ADDR";
 
 /// Largest request body the server reads; larger requests get `413 Payload Too Large`.
