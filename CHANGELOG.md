@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The server can attest with Intel TDX (`tdx` feature): inside a TDX guest it obtains a DCAP quote through the Linux configfs-tsm interface (`/sys/kernel/config/tsm/report`, Linux 6.7+), binding the TLS key hash in `REPORTDATA`, and embeds it in the EAT under the `tdx` submodule. Detected automatically via `/dev/tdx_guest`, or forced with `TTK_ATTESTATION=tdx`.
 - The `client` verifies AMD SEV-SNP, Intel TDX and Intel SGX evidence in addition to AWS Nitro. The server's EAT carries exactly one of the `submods` `aws_nitro`, `sev_snp` (`{report, vcek}`), `tdx` or `sgx` (DCAP quote).
   - SEV-SNP: ARK → ASK → VCEK chain against pinned Milan, Genoa and Turin roots, VCEK `hwID` and TCB matched to the report, and the report's ECDSA P-384 signature.
   - TDX and SGX: DCAP quote v3/v4/v5 with the embedded PCK chain verified against the pinned Intel SGX Root CA, the Quoting Enclave report signature and attestation-key binding, and the quote signature.
