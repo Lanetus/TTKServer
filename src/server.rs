@@ -3,8 +3,8 @@
 //! - **Attester**: this process, running inside a Nitro Enclave. It holds a
 //!   hardware-rooted identity via the Nitro Security Module (NSM).
 //! - **Evidence**: the NSM Attestation Document produced by [`attestation::detect`],
-//!   with `user_data` bound to the SHA-256 hash of the ephemeral TLS certificate so a
-//!   Relying Party can tie the Evidence to the specific TLS session it negotiates.
+//!   with `user_data` bound to the SHA-256 hash of the ephemeral TLS key's
+//!   SubjectPublicKeyInfo so a Relying Party can tie the Evidence to the TLS session.
 //! - **Endorsements**: the AWS Nitro certificate chain embedded in the Attestation
 //!   Document, rooted at the AWS Nitro Enclaves root certificate.
 //! - **Verifier** / **Relying Party**: the external client fetching Evidence over
@@ -127,10 +127,10 @@ pub async fn run() -> Result<(), BoxError> {
     serve(app, tls_config).await
 }
 
-/// Requests evidence from the detected attestation provider, bound to the TLS key,
+/// Requests evidence from the detected attestation provider, bound to the TLS public key,
 /// and returns it as CBOR-encoded RFC 9711 EAT bytes.
 fn generate_evidence(key_pair: &KeyPair) -> Result<Vec<u8>, BoxError> {
-    let params = AttestationParams::new().with_user_data_hash(key_pair.serialized_der());
+    let params = AttestationParams::new().with_user_data_hash(&key_pair.public_key_der());
 
     let provider = attestation::detect()?;
     info!("Using attestation provider: {}", provider.name());
