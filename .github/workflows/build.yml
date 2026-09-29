@@ -118,11 +118,11 @@ jobs:
               mkdir -p /var/log/nitro_enclaves &&
               nitro-cli build-enclave \
                 --docker-uri ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} \
-                --output-file /out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.platform }}.eif > /out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.platform }}.json
+                --output-file /out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.eif > /out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.json
             '
-          cat out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.platform }}.json
+          cat out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.json
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.platform }}
+          name: TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}
           path: out/
