@@ -4,6 +4,13 @@ version = "0.17.4"
 edition = "2021"
 default-run = "TTKServer"
 license = "MIT"
+description = "RA-TLS HTTP/3 (QUIC) server and client for TEEs (AWS Nitro, AMD SEV-SNP, Intel TDX) with RFC 9711 EAT evidence"
+repository = "https://github.com/Lanetus/TTKServer"
+readme = "README.md"
+keywords = ["attestation", "ra-tls", "nitro-enclaves", "http3", "quic"]
+categories = ["cryptography", "network-programming"]
+# Files shipped to crates.io; everything else (CI, Docker, docs, editor/agent config) stays local.
+include = ["src/**", "tests/**", "benches/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "CHANGELOG.md"]
 
 [lib]
 name = "ttk_server"
