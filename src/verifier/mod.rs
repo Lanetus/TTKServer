@@ -19,7 +19,7 @@ pub mod dcap;
 pub mod nitro;
 pub mod sev_snp;
 
-use crate::eat::EatClaimsSet;
+use crate::attestation::eat::EatClaimsSet;
 use ciborium::Value;
 use rustls_pki_types::{SignatureVerificationAlgorithm, UnixTime};
 use std::collections::BTreeMap;

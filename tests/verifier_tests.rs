@@ -20,8 +20,8 @@ use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
+use ttk_server::attestation::eat::EatClaimsSet;
 use ttk_server::client::EnclaveCertVerifier;
-use ttk_server::eat::EatClaimsSet;
 use ttk_server::server::create_cert_with_attestation;
 use ttk_server::verifier::sev_snp::{AmdProduct, AmdRoots};
 use ttk_server::verifier::{

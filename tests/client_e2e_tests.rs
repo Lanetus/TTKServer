@@ -5,8 +5,8 @@
 
 use base64::Engine as _;
 use std::net::SocketAddr;
+use ttk_server::attestation::eat::EatClaimsSet;
 use ttk_server::client::{EnclaveCertVerifier, TtkClient};
-use ttk_server::eat::EatClaimsSet;
 use ttk_server::server::Server;
 use ttk_server::verifier::TeeKind;
 

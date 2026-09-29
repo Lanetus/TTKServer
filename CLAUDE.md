@@ -7,11 +7,13 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
 - Only inspect `src/` and `tests/` unless explicitly instructed otherwise.
 
 ## Layout
-- `src/lib.rs` — crate `ttk_server`: `Attestation` trait, `AttestationParams` builder (user_data / nonce / public_key), `generate_identity()`; picks `AttestationProcess` by feature flag.
-- `src/main.rs` — bin `TTKServer`: builds RA-TLS cert, axum `Router`, drives QUIC/h3 accept loop on `0.0.0.0:4433`. Routes: `/`, `/hello`, `/evidence` (+ `/attestation` alias), `/evidence.eat` (base64 bodies).
-- `src/client.rs` — lib module `ttk_server::client`: `TtkClient`, `EnclaveCertVerifier` (accepts self-signed cert, records it), `extract_attestation_doc`, `hex_encode`, `parse_client_args`/`CLIENT_USAGE`.
+- `src/lib.rs` — crate root of `ttk_server`: only declares `attestation`, `service`, `verifier` and re-exports (`client`, `server`, `eat`, `EatClaimsSet`, `EatClaimKey`, `generate_identity`, `AttestationParams`) at the top level.
+- `src/service/mod.rs` — declares `client`/`server`; holds the `AttestationParams` builder (user_data / nonce / public_key) and `generate_identity()`.
+- `src/main.rs` — bin `TTKServer`: thin entry point calling `ttk_server::server::run()`.
+- `src/service/server.rs` — builds RA-TLS cert, axum `Router`, drives QUIC/h3 accept loop on `0.0.0.0:4433`. Routes: `/`, `/hello`, `/evidence` (+ `/attestation` alias), `/evidence.eat` (base64 bodies).
+- `src/service/client.rs` — lib module `ttk_server::client`: `TtkClient`, `EnclaveCertVerifier` (accepts self-signed cert, records it), `extract_attestation_doc`, `hex_encode`, `parse_client_args`/`CLIENT_USAGE`.
 - `benches/client.rs` — bin `client`: thin `main` + `parse_args()` over `ttk_server::client`.
-- `src/eat.rs` — RFC 9711 EAT claim keys (`EatClaimKey`) and `EatClaimsSet` (CBOR).
+- `src/attestation/eat.rs` (`ttk_server::attestation::eat`, also re-exported as `ttk_server::eat`) — RFC 9711 EAT claim keys (`EatClaimKey`) and `EatClaimsSet` (CBOR).
 - `src/nitro.rs` — real NSM session (`NsmSession`, `/dev/nsm`), COSE parsing, mock-doc fallback when no hardware, `wrap_as_eat`.
 - `src/mock.rs` — `MockSession` for the `mock` feature.
 - `tests/` — `nitro_tests.rs`, `client_tests.rs`, `integration_test.rs` (note: the latter duplicates helper fns locally rather than importing from the lib).
