@@ -1,4 +1,8 @@
+[![Documentation](https://docs.rs/TTKServer/badge.svg)](https://docs.rs/TTKServer/)
+[![Crates.io](https://img.shields.io/crates/v/TTKServer.svg)](https://crates.io/crates/TTKServer)
 [![codecov](https://codecov.io/gh/Lanetus/TTKServer/graph/badge.svg?token=G4380O9RMS)](https://codecov.io/gh/Lanetus/TTKServer)
+[![CI](https://github.com/Lanetus/TTKServer/actions/workflows/CI.yml/badge.svg)](https://github.com/Lanetus/TTKServer/actions/workflows/CI.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
 
 # TTKServer
 
@@ -69,9 +73,34 @@ RUST_LOG=info cargo run --release
 | Route            | Response                                                             |
 |------------------|----------------------------------------------------------------------|
 | `GET /`          | Greeting text                                                        |
-| `GET /hello`     | Greeting text                                                        |
-| `GET /evidence`  | Base64-encoded EAT carrying the Evidence (alias: `GET /attestation`) |
-| `GET /evidence.eat` | Same as `/evidence`                                               |
+| `GET /evidence.eat` | Base64-encoded EAT carrying the Evidence                          |
+| `POST /faf`      | Forwards a message and key to an attested relay (see below)          |
+
+### `POST /faf`: relaying a message and key
+
+The request body is JSON (`Content-Type: application/json`):
+
+```json
+{ "relay_server": "relay.example:4433", "message": "…", "key": "…" }
+```
+
+`relay_server` is `host[:port]` or `https://host[:port]`; the port defaults to `4433`. The relay runs this same server. The server:
+
+1. connects to the relay over QUIC / HTTP/3 and **verifies the relay's RA-TLS attestation**, so the key is only sent to an attested TEE;
+2. posts `{ "message", "key" }` to the relay's own `POST /faf`, without `relay_server`, which tells the relay it is the last hop;
+3. answers `200 OK` once the relay has answered `200 OK`.
+
+A request without `relay_server` is accepted directly with `200 OK` (this server is the last hop). Other responses:
+
+| Status | When                                                                         |
+|--------|------------------------------------------------------------------------------|
+| `400`  | `relay_server` can't be parsed (e.g. an `http://` URL)                       |
+| `413`  | The request body is over 1 MiB                                               |
+| `415` / `422` | The body isn't JSON, or a field is missing                            |
+| `502`  | The relay can't be reached, fails attestation, or answers anything but `200` |
+| `504`  | The relay doesn't answer within 10 seconds                                   |
+
+By default relays must present genuine TEE evidence. For local development with mock attestation, start the server with `TTK_ALLOW_MOCK_ATTESTATION=1`.
 
 ### Environment variables
 
@@ -82,7 +111,7 @@ RUST_LOG=info cargo run --release
 | `TTK_SEV_SNP_VCEK`           | server   | Path to a VCEK certificate (DER or PEM) when the SEV-SNP host doesn't supply one          |
 | `TTK_SERVER_ADDR`            | client   | Default server address (default `127.0.0.1:4433`)                                         |
 | `TTK_SERVER_NAME`            | client   | Default SNI server name (default `localhost`)                                             |
-| `TTK_ALLOW_MOCK_ATTESTATION` | client   | Set to `1` to accept mock Evidence (development only)                                     |
+| `TTK_ALLOW_MOCK_ATTESTATION` | both     | Set to `1` to accept mock Evidence from the server (client) or from `/faf` relays (server). Development only |
 
 ### Test client
 
@@ -92,7 +121,7 @@ The `client` binary is for testing only and is built only with the `test-client`
 # Terminal 1: server (falls back to mock attestation off-TEE)
 cargo run
 # Terminal 2: client, accepting mock Evidence
-TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --features test-client --bin client -- --path /evidence
+TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --features test-client --bin client -- --path /evidence.eat
 ```
 
 Run `cargo run --features test-client --bin client -- --help` for all options.
@@ -107,7 +136,7 @@ use ttk_server::client::{EnclaveCertVerifier, TtkClient};
 let verifier = EnclaveCertVerifier::new()
     .with_expected_pcr(0, expected_pcr0); // reference values for your enclave image
 let mut client = TtkClient::connect_with_verifier(addr, "localhost", verifier).await?;
-let resp = client.get("/hello").await?;
+let resp = client.get("/evidence.eat").await?;
 ```
 
 ## Project layout
@@ -150,7 +179,7 @@ This server implements the **Attester** role from [RFC 9334](https://www.rfc-edi
 | RATS concept       | Concrete artifact in this server                                                               |
 |---------------------|--------------------------------------------------------------------------------------------------|
 | Attester            | This process, running inside the TEE (e.g. a Nitro Enclave)                                     |
-| Evidence            | The NSM Attestation Document, with `user_data` bound to the SHA-256 of the server's ephemeral TLS key, carried in an EAT in the TLS certificate and served over `GET /evidence` |
+| Evidence            | The NSM Attestation Document, with `user_data` bound to the SHA-256 of the server's ephemeral TLS key, carried in an EAT in the TLS certificate and served over `GET /evidence.eat` |
 | Endorsements        | The AWS Nitro certificate chain embedded in the Attestation Document, rooted at the AWS Nitro Enclaves root CA |
 | Reference Values    | Expected PCR measurements for this enclave image, held out-of-band by whoever verifies the Evidence |
 | Verifier / Relying Party | A client (such as `ttk_server::client`) that checks the Evidence against Endorsements and Reference Values and, if it trusts the result, proceeds with the TLS session bound to that Evidence |
@@ -159,7 +188,7 @@ The server only produces and serves Evidence. Appraisal against Reference Values
 
 ### EAT export (RFC 9711)
 
-`GET /evidence` and `GET /evidence.eat` serve the Evidence as a base64-encoded [RFC 9711](https://www.rfc-editor.org/rfc/rfc9711) Entity Attestation Token claims-set (CBOR). The same bytes are embedded in the TLS certificate.
+`GET /evidence.eat` serves the Evidence as a base64-encoded [RFC 9711](https://www.rfc-editor.org/rfc/rfc9711) Entity Attestation Token claims-set (CBOR). The same bytes are embedded in the TLS certificate.
 
 The TEE Evidence is already signed by a hardware-rooted key, and this server holds no other key a Relying Party would trust more. So rather than minting a new signature, the claims-set nests the original signed Evidence verbatim under the `submods` claim (key `266`), the nested-token form defined in RFC 9711. Trust comes from that nested Evidence, not from the outer claims-set, which is unsigned.
 

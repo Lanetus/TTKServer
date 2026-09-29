@@ -20,6 +20,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::crypto::WebPkiSupportedAlgorithms;
 use rustls::Error as RustlsError;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -437,6 +438,28 @@ impl TtkClient {
         path: &str,
         body: &[u8],
     ) -> Result<ClientResponse, Box<dyn std::error::Error + Send + Sync>> {
+        self.post_with_content_type(path, "application/octet-stream", body)
+            .await
+    }
+
+    /// Send an HTTP/3 POST request with `value` serialized as a JSON body to the specified path.
+    pub async fn post_json<T: Serialize + ?Sized>(
+        &mut self,
+        path: &str,
+        value: &T,
+    ) -> Result<ClientResponse, Box<dyn std::error::Error + Send + Sync>> {
+        let body = serde_json::to_vec(value)?;
+        self.post_with_content_type(path, "application/json", &body)
+            .await
+    }
+
+    /// Send an HTTP/3 POST request with the given body and `Content-Type`.
+    async fn post_with_content_type(
+        &mut self,
+        path: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<ClientResponse, Box<dyn std::error::Error + Send + Sync>> {
         let uri: Uri = if path.starts_with('/') {
             format!("https://{}{}", self.server_name, path).parse()?
         } else {
@@ -448,7 +471,7 @@ impl TtkClient {
             .uri(uri)
             .header("Host", &self.server_name)
             .header("User-Agent", "TTKClient/0.6.0")
-            .header("Content-Type", "application/octet-stream")
+            .header("Content-Type", content_type)
             .header("Content-Length", body.len().to_string())
             .body(())?;
 
@@ -521,8 +544,8 @@ Options:
 
 Examples:
   client
-  client https://127.0.0.1:4433/hello
-  client --addr 127.0.0.1:4433 --server-name enclave.local --path /evidence
+  client https://127.0.0.1:4433/evidence.eat
+  client --addr 127.0.0.1:4433 --server-name enclave.local --path /evidence.eat
 ";
 
 /// What a `client` invocation should connect to and request.

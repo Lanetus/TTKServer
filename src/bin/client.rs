@@ -78,22 +78,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    // If default path "/" was queried, also test "/hello" endpoint
-    if path == "/" {
-        println!("\n--> Sending GET /hello");
-        match client.get("/hello").await {
-            Ok(resp) => {
-                println!("<-- Response Status: {}", resp.status);
-                if let Ok(body_str) = resp.text() {
-                    println!("<-- Body:\n{}", body_str);
-                }
-            }
-            Err(e) => {
-                eprintln!("Error sending request to /hello: {}", e);
-            }
-        }
-    }
-
     println!("\nClosing connection...");
     client.close().await?;
     println!("Connection closed successfully.");
