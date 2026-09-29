@@ -509,33 +509,52 @@ pub fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Parse command-line target or default to `127.0.0.1:4433`.
-#[allow(dead_code)] // used by the `client` binary, which also compiles this file
-fn parse_args() -> (SocketAddr, String, String) {
-    let args: Vec<String> = std::env::args().collect();
-    let mut server_addr_str =
-        std::env::var("TTK_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:4433".to_string());
-    let mut server_name =
-        std::env::var("TTK_SERVER_NAME").unwrap_or_else(|_| "localhost".to_string());
+/// Usage text of the `client` binary.
+pub const CLIENT_USAGE: &str = "\
+Usage: client [OPTIONS] [URL]
+
+Options:
+  -s, --server-name <NAME>  SNI server name (default: localhost)
+  -p, --path <PATH>         Request path (default: /)
+  -a, --addr <ADDR>         Server socket address (default: 127.0.0.1:4433)
+  -h, --help                Print help information
+
+Examples:
+  client
+  client https://127.0.0.1:4433/hello
+  client --addr 127.0.0.1:4433 --server-name enclave.local --path /evidence
+";
+
+/// What a `client` invocation should connect to and request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientTarget {
+    /// Server socket address.
+    pub server_addr: SocketAddr,
+    /// SNI server name.
+    pub server_name: String,
+    /// Request path, including any query string.
+    pub path: String,
+}
+
+/// Parses `client` arguments (without the program name).
+///
+/// `default_addr` and `default_name` come from `TTK_SERVER_ADDR` and `TTK_SERVER_NAME` in the
+/// binary; they fall back to `127.0.0.1:4433` and `localhost`. An unparsable address falls back
+/// to `127.0.0.1:4433`. Returns `None` if help was requested.
+pub fn parse_client_args(
+    args: &[String],
+    default_addr: Option<String>,
+    default_name: Option<String>,
+) -> Option<ClientTarget> {
+    let mut server_addr_str = default_addr.unwrap_or_else(|| "127.0.0.1:4433".to_string());
+    let mut server_name = default_name.unwrap_or_else(|| "localhost".to_string());
     let mut path = "/".to_string();
 
-    let mut i = 1;
+    let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
         if arg == "--help" || arg == "-h" {
-            println!("Usage: client [OPTIONS] [URL]");
-            println!();
-            println!("Options:");
-            println!("  -s, --server-name <NAME>  SNI server name (default: localhost)");
-            println!("  -p, --path <PATH>         Request path (default: /)");
-            println!("  -a, --addr <ADDR>         Server socket address (default: 127.0.0.1:4433)");
-            println!("  -h, --help                Print help information");
-            println!();
-            println!("Examples:");
-            println!("  client");
-            println!("  client https://127.0.0.1:4433/hello");
-            println!("  client --addr 127.0.0.1:4433 --server-name enclave.local --path /evidence");
-            std::process::exit(0);
+            return None;
         } else if (arg == "--server-name" || arg == "-s") && i + 1 < args.len() {
             i += 1;
             server_name = args[i].clone();
@@ -573,7 +592,26 @@ fn parse_args() -> (SocketAddr, String, String) {
         .parse()
         .unwrap_or_else(|_| "127.0.0.1:4433".parse().unwrap());
 
-    (server_addr, server_name, path)
+    Some(ClientTarget {
+        server_addr,
+        server_name,
+        path,
+    })
+}
+
+/// Parses the process arguments and environment, printing usage and exiting on `--help`.
+#[allow(dead_code)] // used by the `client` binary, which also compiles this file
+fn parse_args() -> ClientTarget {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    parse_client_args(
+        &args,
+        std::env::var("TTK_SERVER_ADDR").ok(),
+        std::env::var("TTK_SERVER_NAME").ok(),
+    )
+    .unwrap_or_else(|| {
+        print!("{CLIENT_USAGE}");
+        std::process::exit(0);
+    })
 }
 
 /// Entry point for the `client` binary.
@@ -582,7 +620,11 @@ fn parse_args() -> (SocketAddr, String, String) {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     env_logger::init();
 
-    let (server_addr, server_name, path) = parse_args();
+    let ClientTarget {
+        server_addr,
+        server_name,
+        path,
+    } = parse_args();
 
     println!("=================================================");
     println!("TTKServer HTTP/3 Client (RFC 9114)");

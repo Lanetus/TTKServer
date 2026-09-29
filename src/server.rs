@@ -20,6 +20,7 @@ use log::info;
 use quinn::{Endpoint, ServerConfig};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 use tower_service::Service;
@@ -107,24 +108,61 @@ type BoxError = Box<dyn std::error::Error>;
 /// Address the QUIC endpoint binds to.
 const LISTEN_ADDR: &str = "0.0.0.0:4433";
 
-/// Runs the server: attests, builds the RA-TLS identity, then serves HTTP/3 until the endpoint closes.
+/// Runs the server: attests, builds the RA-TLS identity, then serves HTTP/3 on
+/// `0.0.0.0:4433` until the endpoint closes.
 pub async fn run() -> Result<(), BoxError> {
-    info!("Initializing Nitro Enclave HTTP/3 Server...");
+    let server = Server::bind(LISTEN_ADDR.parse()?)?;
+    info!("Server listening on {} (QUIC/HTTP/3)", server.local_addr()?);
+    server.serve().await;
+    Ok(())
+}
 
-    // Install the default cryptographic provider for rustls 0.23
-    let _ = rustls::crypto::ring::default_provider().install_default();
+/// An attested HTTP/3 server bound to a QUIC endpoint.
+pub struct Server {
+    endpoint: Endpoint,
+    app: Router,
+}
 
-    let key_pair = KeyPair::generate()?;
-    info!("Generated ephemeral TLS certificate.");
+/// Setup and serving.
+impl Server {
+    /// Attests, builds the RA-TLS identity and binds the QUIC endpoint to `addr`.
+    ///
+    /// Must be called within a Tokio runtime. Binding port 0 picks a free port; see
+    /// [`local_addr`](Self::local_addr).
+    pub fn bind(addr: SocketAddr) -> Result<Self, BoxError> {
+        info!("Initializing Nitro Enclave HTTP/3 Server...");
 
-    let eat_bytes = generate_evidence(&key_pair)?;
-    let tls_config = build_tls_config(&key_pair, &eat_bytes)?;
-    let app = build_router(Arc::new(Evidence {
-        nitro: eat_bytes.clone(),
-        eat: eat_bytes,
-    }));
+        // Install the default cryptographic provider for rustls 0.23
+        let _ = rustls::crypto::ring::default_provider().install_default();
 
-    serve(app, tls_config).await
+        let key_pair = KeyPair::generate()?;
+        info!("Generated ephemeral TLS certificate.");
+
+        let eat_bytes = generate_evidence(&key_pair)?;
+        let tls_config = build_tls_config(&key_pair, &eat_bytes)?;
+        let app = build_router(Arc::new(Evidence {
+            nitro: eat_bytes.clone(),
+            eat: eat_bytes,
+        }));
+
+        let quic_config = ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?,
+        ));
+        let endpoint = Endpoint::server(quic_config, addr)?;
+        Ok(Self { endpoint, app })
+    }
+
+    /// Returns the address the endpoint is bound to.
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.endpoint.local_addr()
+    }
+
+    /// Accepts QUIC connections and serves HTTP/3 until the endpoint closes.
+    pub async fn serve(self) {
+        while let Some(incoming) = self.endpoint.accept().await {
+            tokio::spawn(handle_connection(incoming, self.app.clone()));
+        }
+    }
 }
 
 /// Requests evidence from the detected attestation provider, bound to the TLS public key,
@@ -175,21 +213,6 @@ fn build_router(evidence: Arc<Evidence>) -> Router {
         .route("/evidence", text(nitro_b64.clone()))
         .route("/attestation", text(nitro_b64))
         .route("/evidence.eat", text(eat_b64))
-}
-
-/// Accepts QUIC connections and serves `app` over HTTP/3.
-async fn serve(app: Router, tls_config: rustls::ServerConfig) -> Result<(), BoxError> {
-    let quic_config = ServerConfig::with_crypto(Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?,
-    ));
-
-    let endpoint = Endpoint::server(quic_config, LISTEN_ADDR.parse()?)?;
-    info!("Server listening on {LISTEN_ADDR} (QUIC/HTTP/3)");
-
-    while let Some(incoming) = endpoint.accept().await {
-        tokio::spawn(handle_connection(incoming, app.clone()));
-    }
-    Ok(())
 }
 
 /// Drives a single QUIC connection, dispatching each HTTP/3 request to `app`.
