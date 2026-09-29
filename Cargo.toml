@@ -13,9 +13,11 @@ path = "src/lib.rs"
 name = "TTKServer"
 path = "src/main.rs"
 
+# Test-only command-line client; needs the `test-client` feature, so release builds skip it.
 [[bin]]
 name = "client"
-path = "src/client.rs"
+path = "src/bin/client.rs"
+required-features = ["test-client"]
 
 [dependencies]
 aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
@@ -51,3 +53,13 @@ nitro = ["dep:aws-nitro-enclaves-nsm-api"]
 mock = ["dep:aws-nitro-enclaves-nsm-api"]
 sev-snp = []
 tdx = []
+# Builds the test-only `client` binary (src/bin/client.rs). Never enable in production.
+test-client = []
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "client"
+harness = false
+required-features = ["mock"]
