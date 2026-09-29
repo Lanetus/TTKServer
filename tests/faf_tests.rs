@@ -5,7 +5,8 @@
 
 use std::net::SocketAddr;
 use ttk_server::client::{EnclaveCertVerifier, TtkClient};
-use ttk_server::server::{parse_relay_server, FafRequest, Server, DEFAULT_RELAY_PORT};
+use ttk_server::router::{parse_relay_server, FafRequest, DEFAULT_RELAY_PORT};
+use ttk_server::server::Server;
 
 /// Starts a server that accepts mock-attested relays, and returns its address.
 fn start_server() -> SocketAddr {

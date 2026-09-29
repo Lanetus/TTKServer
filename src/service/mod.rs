@@ -2,9 +2,11 @@
 //! identity and attestation request parameters they share.
 //!
 //! - [`server`]: the RATS (RFC 9334) Attester endpoint, serving Evidence from inside the TEE.
+//! - [`router`]: the server's HTTP routes, including the `POST /faf` relay.
 //! - [`client`]: the Relying Party side, verifying the RA-TLS certificate's embedded Evidence.
 
 pub mod client;
+pub mod router;
 pub mod server;
 
 use rcgen::generate_simple_self_signed;
