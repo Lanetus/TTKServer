@@ -38,7 +38,7 @@ fn bench_offline(c: &mut Criterion) {
         "--server-name",
         "enclave.local",
         "--path",
-        "/evidence",
+        "/evidence.eat",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -81,8 +81,8 @@ fn bench_online(c: &mut Criterion) {
     });
 
     let mut client = rt.block_on(connect(addr));
-    group.bench_function("get_hello", |b| {
-        b.iter(|| rt.block_on(client.get(black_box("/hello"))).unwrap())
+    group.bench_function("get_root", |b| {
+        b.iter(|| rt.block_on(client.get(black_box("/"))).unwrap())
     });
     group.finish();
     rt.block_on(client.close()).unwrap();

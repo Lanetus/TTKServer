@@ -39,12 +39,14 @@ async fn client_verifies_the_mock_server_and_exchanges_requests() {
     assert_eq!(root.status, 200);
     assert_eq!(root.text().unwrap(), "Hello from Enclave over HTTP/3!");
 
-    // Paths without a leading slash are accepted too.
-    let hello = client.get("hello").await.unwrap();
-    assert_eq!(hello.text().unwrap(), "Hello from inside the Enclave!");
+    // Only `/` and `/evidence.eat` are served over GET.
+    for removed in ["/hello", "/evidence", "/attestation"] {
+        assert_eq!(client.get(removed).await.unwrap().status, 404, "{removed}");
+    }
 
-    // The evidence served over HTTP is the EAT embedded in the TLS certificate.
-    let evidence = client.get("/evidence.eat").await.unwrap();
+    // The evidence served over HTTP is the EAT embedded in the TLS certificate. Paths without a
+    // leading slash are accepted too.
+    let evidence = client.get("evidence.eat").await.unwrap();
     let eat = base64::engine::general_purpose::STANDARD
         .decode(evidence.text().unwrap())
         .unwrap();
@@ -54,11 +56,13 @@ async fn client_verifies_the_mock_server_and_exchanges_requests() {
     let missing = client.get("/does-not-exist").await.unwrap();
     assert_eq!(missing.status, 404);
 
-    // Routes are GET-only, so a POST is answered with 405.
+    // `/` and `/evidence.eat` are GET-only, so a POST is answered with 405.
     let post = client.post("/", b"payload").await.unwrap();
     assert_eq!(post.status, 405);
-    let empty_post = client.post("hello", b"").await.unwrap();
+    let empty_post = client.post("evidence.eat", b"").await.unwrap();
     assert_eq!(empty_post.status, 405);
+    // `/faf` is POST-only.
+    assert_eq!(client.get("/faf").await.unwrap().status, 405);
 
     client.close().await.unwrap();
 }

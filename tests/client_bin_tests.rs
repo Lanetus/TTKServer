@@ -41,7 +41,7 @@ async fn run_client_binary_with_env(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn client_binary_queries_root_and_hello() {
+async fn client_binary_queries_root() {
     let addr = start_server().to_string();
     let output = run_client_binary(&["--addr", &addr], true).await;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -52,7 +52,7 @@ async fn client_binary_queries_root_and_hello() {
         stdout.contains("Hello from Enclave over HTTP/3!"),
         "{stdout}"
     );
-    assert!(stdout.contains("--> Sending GET /hello"), "{stdout}");
+    assert!(stdout.contains("--> Sending GET /"), "{stdout}");
     assert!(
         stdout.contains("Connection closed successfully."),
         "{stdout}"
@@ -62,13 +62,13 @@ async fn client_binary_queries_root_and_hello() {
 #[tokio::test(flavor = "multi_thread")]
 async fn client_binary_queries_a_given_path() {
     let addr = start_server();
-    let url = format!("https://127.0.0.1:{}/evidence", addr.port());
+    let url = format!("https://127.0.0.1:{}/evidence.eat", addr.port());
     let output = run_client_binary(&[&url], true).await;
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success(), "{stdout}");
-    assert!(stdout.contains("--> Sending GET /evidence"), "{stdout}");
-    assert!(!stdout.contains("--> Sending GET /hello"), "{stdout}");
+    assert!(stdout.contains("--> Sending GET /evidence.eat"), "{stdout}");
+    assert!(stdout.contains("Response Status: 200"), "{stdout}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -93,7 +93,7 @@ async fn client_binary_prints_usage() {
 async fn client_binary_logs_the_verified_certificate() {
     let addr = start_server().to_string();
     let output = run_client_binary_with_env(
-        &["--addr", &addr, "--path", "/hello"],
+        &["--addr", &addr, "--path", "/evidence.eat"],
         true,
         &[("RUST_LOG", "info")],
     )

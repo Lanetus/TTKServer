@@ -44,6 +44,7 @@ rustls = { version = "0.23", features = ["ring"] }
 rustls-pki-types = "1"
 rustls-webpki = "0.103"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 time = "0.3.36"
 tokio = { version = "1", features = ["full"] }
