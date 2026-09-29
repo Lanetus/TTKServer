@@ -2,7 +2,7 @@
 //!
 //! - **Attester**: this process, running inside a Nitro Enclave. It holds a
 //!   hardware-rooted identity via the Nitro Security Module (NSM).
-//! - **Evidence**: the NSM Attestation Document returned by [`get_attestation_doc`],
+//! - **Evidence**: the NSM Attestation Document produced by [`attestation::detect`],
 //!   with `user_data` bound to the SHA-256 hash of the ephemeral TLS certificate so a
 //!   Relying Party can tie the Evidence to the specific TLS session it negotiates.
 //! - **Endorsements**: the AWS Nitro certificate chain embedded in the Attestation
@@ -24,6 +24,7 @@ use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 use tower_service::Service;
 
+/// OID of the X.509 extension carrying the attestation document (placeholder, not a registered PEN).
 const ATTESTATION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 99999, 1];
 
 /// Evidence for this instance, in the formats served over HTTP.
@@ -35,6 +36,8 @@ pub struct Evidence {
     pub eat: Vec<u8>,
 }
 
+/// Creates a self-signed certificate for `key_pair` with `attestation_doc` embedded as a
+/// non-critical X.509 extension, and returns it PEM-encoded.
 pub fn create_cert_with_attestation(
     key_pair: &KeyPair,
     common_name: &str,
@@ -98,8 +101,10 @@ fn wrap_in_asn1_octet_string(data: &[u8]) -> Vec<u8> {
     encoded
 }
 
+/// Boxed error type used by the server functions.
 type BoxError = Box<dyn std::error::Error>;
 
+/// Address the QUIC endpoint binds to.
 const LISTEN_ADDR: &str = "0.0.0.0:4433";
 
 /// Runs the server: attests, builds the RA-TLS identity, then serves HTTP/3 until the endpoint closes.

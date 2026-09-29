@@ -53,7 +53,9 @@ pub enum AttestationError {
     Io(std::io::Error),
 }
 
+/// Human-readable messages for each [`AttestationError`] variant.
 impl fmt::Display for AttestationError {
+    /// Formats the error as a single-line message.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DeviceOpenFailed(msg) => write!(f, "Failed to open TEE device: {msg}"),
@@ -70,9 +72,12 @@ impl fmt::Display for AttestationError {
     }
 }
 
+/// Allows [`AttestationError`] to be used as a standard error type.
 impl std::error::Error for AttestationError {}
 
+/// Wraps I/O errors as [`AttestationError::Io`].
 impl From<std::io::Error> for AttestationError {
+    /// Converts an I/O error into [`AttestationError::Io`].
     fn from(err: std::io::Error) -> Self {
         Self::Io(err)
     }
@@ -120,12 +125,14 @@ pub fn detect() -> Result<Box<dyn AttestationProvider>, AttestationError> {
     fallback()
 }
 
+/// Last-resort provider when no hardware was detected: the mock provider.
 #[cfg(feature = "mock")]
 fn fallback() -> Result<Box<dyn AttestationProvider>, AttestationError> {
     log::warn!("No TEE hardware detected; using MOCK attestation. Evidence is NOT trustworthy.");
     by_name("mock")
 }
 
+/// Without the `mock` feature there is no fallback, so detection fails with `NoProvider`.
 #[cfg(not(feature = "mock"))]
 fn fallback() -> Result<Box<dyn AttestationProvider>, AttestationError> {
     Err(AttestationError::NoProvider)

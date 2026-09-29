@@ -42,7 +42,9 @@ pub struct EnclaveCertVerifier {
     received_cert: Arc<Mutex<Option<CertificateDer<'static>>>>,
 }
 
+/// Construction and inspection of the verifier.
 impl EnclaveCertVerifier {
+    /// Creates a verifier that has not yet captured any server certificate.
     pub fn new() -> Self {
         Self {
             received_cert: Arc::new(Mutex::new(None)),
@@ -58,14 +60,18 @@ impl EnclaveCertVerifier {
     }
 }
 
+/// OID of the X.509 extension carrying the attestation document (placeholder, not a registered PEN).
 const ATTESTATION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 99999, 1];
 
+/// Default is equivalent to [`EnclaveCertVerifier::new`].
 impl Default for EnclaveCertVerifier {
+    /// Creates a new verifier.
     fn default() -> Self {
         Self::new()
     }
 }
 
+/// Decoded payload of an AWS Nitro attestation document.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttestationDocument {
     pub module_id: String,
@@ -82,6 +88,9 @@ pub struct AttestationDocument {
     pub nonce: Option<Vec<u8>>,
 }
 
+/// Parses a raw COSE_Sign1 attestation document into an [`AttestationDocument`].
+///
+/// The COSE signature is not verified here.
 fn parse_attestation_doc(raw_bytes: &[u8]) -> Result<AttestationDocument, Box<dyn Error>> {
     // 1. Unpack the COSE_Sign1 wrapper from raw CBOR bytes
     let cose_sign1 = CoseSign1::from_bytes(raw_bytes)?;
@@ -95,7 +104,9 @@ fn parse_attestation_doc(raw_bytes: &[u8]) -> Result<AttestationDocument, Box<dy
     Ok(doc)
 }
 
+/// RA-TLS verification: captures the server certificate instead of validating a CA chain.
 impl ServerCertVerifier for EnclaveCertVerifier {
+    /// Records the server certificate for later attestation checks; CA validation is skipped by design.
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
@@ -128,6 +139,7 @@ impl ServerCertVerifier for EnclaveCertVerifier {
         Ok(ServerCertVerified::assertion())
     }
 
+    /// Accepts TLS 1.2 handshake signatures; trust comes from the attestation document.
     fn verify_tls12_signature(
         &self,
         _message: &[u8],
@@ -137,6 +149,7 @@ impl ServerCertVerifier for EnclaveCertVerifier {
         Ok(HandshakeSignatureValid::assertion())
     }
 
+    /// Accepts TLS 1.3 handshake signatures; trust comes from the attestation document.
     fn verify_tls13_signature(
         &self,
         _message: &[u8],
@@ -146,6 +159,7 @@ impl ServerCertVerifier for EnclaveCertVerifier {
         Ok(HandshakeSignatureValid::assertion())
     }
 
+    /// Lists the signature schemes the verifier accepts.
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         rustls::crypto::ring::default_provider()
             .signature_verification_algorithms
@@ -192,6 +206,7 @@ pub struct ClientResponse {
     pub body: Vec<u8>,
 }
 
+/// Accessors for the response body.
 impl ClientResponse {
     /// Return the response body interpreted as a UTF-8 string.
     pub fn text(&self) -> Result<String, std::string::FromUtf8Error> {
@@ -209,6 +224,7 @@ pub struct TtkClient {
     peer_cert: Option<CertificateDer<'static>>,
 }
 
+/// Connecting to the server and issuing requests.
 impl TtkClient {
     /// Connect to the TTKServer at the specified `server_addr` with the given SNI `server_name`.
     pub async fn connect(
@@ -472,6 +488,7 @@ fn parse_args() -> (SocketAddr, String, String) {
     (server_addr, server_name, path)
 }
 
+/// Entry point for the `client` binary.
 #[allow(dead_code)] // entry point for the `client` binary; unused when built as a lib module
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
