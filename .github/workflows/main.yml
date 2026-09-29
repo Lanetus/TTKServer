@@ -115,14 +115,16 @@ jobs:
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:v${{ needs.bump_version.outputs.new_tag }}
   
 
-  coverage:
+  test:
+    name: Test and Coverage
     runs-on: ubuntu-latest
-    needs: bump_version
+    permissions:
+      contents: read
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Rust cache
+      - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Install Rust toolchain
@@ -130,11 +132,14 @@ jobs:
         with:
           components: llvm-tools-preview
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-llvm-cov and cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
 
-      - name: Generate code coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      # Runs the tests once: writes coverage to lcov.info and results to target/nextest/ci/junit.xml
+      - name: Run tests with coverage
+        run: cargo llvm-cov nextest --all-features --workspace --profile ci --lcov --output-path lcov.info
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7
@@ -142,3 +147,11 @@ jobs:
           files: lcov.info
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }} # Required for private repos & recommended for public repos
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: target/nextest/ci/junit.xml
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
