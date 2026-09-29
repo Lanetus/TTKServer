@@ -39,6 +39,9 @@ pub mod submod {
 
 /// AWS Nitro Enclaves root certificate (G1), from the AWS Nitro Enclaves documentation.
 const AWS_NITRO_ROOT: &[u8] = include_bytes!("certs/aws_nitro_root_g1.der");
+/// Mock root CA used by the server's `mock` provider. Its private key is public, so it is
+/// trusted only when [`Policy::allow_mock`] is set.
+const MOCK_NITRO_ROOT: &[u8] = include_bytes!("certs/mock_nitro_root.der");
 /// Intel SGX Root CA, which also roots TDX PCK certificate chains.
 const INTEL_SGX_ROOT: &[u8] = include_bytes!("certs/intel_sgx_root_ca.der");
 
@@ -106,6 +109,8 @@ pub struct VerifiedEvidence {
 pub struct TrustStore {
     /// DER of the AWS Nitro Enclaves root certificate.
     pub aws_nitro_root: Vec<u8>,
+    /// DER of the TTKServer mock root CA, trusted only when [`Policy::allow_mock`] is set.
+    pub mock_nitro_root: Vec<u8>,
     /// DER of the Intel SGX Root CA (roots both SGX and TDX PCK chains).
     pub intel_sgx_root: Vec<u8>,
     /// AMD root (ARK) and signing (ASK) certificates per processor family.
@@ -118,6 +123,7 @@ impl TrustStore {
     pub fn builtin() -> Self {
         Self {
             aws_nitro_root: AWS_NITRO_ROOT.to_vec(),
+            mock_nitro_root: MOCK_NITRO_ROOT.to_vec(),
             intel_sgx_root: INTEL_SGX_ROOT.to_vec(),
             amd: sev_snp::AmdRoots::builtin(),
         }
@@ -135,8 +141,9 @@ impl Default for TrustStore {
 /// Relaxations of the default (strict) verification policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Policy {
-    /// Accept unsigned mock Nitro documents: skips the Nitro signature and chain checks and
-    /// implies `allow_debug`. For local development only.
+    /// Accept mock Nitro documents: additionally trusts the mock root CA (whose private key is
+    /// public) and implies `allow_debug`. Mock documents are still fully verified. For local
+    /// development only.
     pub allow_mock: bool,
     /// Accept TEEs running in debug mode.
     pub allow_debug: bool,

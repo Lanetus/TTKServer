@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `EnclaveCertVerifier::with_expected_measurement` for TEE measurements (e.g. `mrtd`, `rtmr0`, `mrenclave`, `measurement`), `allow_debug`, `with_trust_store` and `verified_evidence`.
 
 ### Changed
+- Mock attestation documents are now signed: the `mock` provider issues a signing certificate from a published TTKServer mock root CA and signs the document with ES384, so the `client` verifies mock evidence exactly like Nitro evidence (signature, certificate chain, key binding) instead of skipping those checks. `TTK_ALLOW_MOCK_ATTESTATION=1` / `EnclaveCertVerifier::allow_mock()` now means "also trust the mock root CA".
+- A client that does not allow mock evidence now explains how to opt in, instead of failing with `attestation cabundle is empty`.
+- **BREAKING:** Unsigned mock documents from servers built before this change are rejected even with mock evidence allowed; rebuild and restart the server.
 - **BREAKING:** The `client` rejects evidence from debug-mode TEEs (including Nitro enclaves with all-zero PCRs) unless `EnclaveCertVerifier::allow_debug` or `allow_mock` is set.
 - The AWS Nitro root is pinned by its full certificate instead of its SHA-256 fingerprint.
 

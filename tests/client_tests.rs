@@ -53,6 +53,9 @@ mod attestation_verification {
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
     use ttk_server::attestation::by_name;
+    use ttk_server::attestation::nitro_doc::{
+        create_mock_attestation_document, parse_attestation_document, wrap_as_eat,
+    };
     use ttk_server::client::EnclaveCertVerifier;
     use ttk_server::server::create_cert_with_attestation;
     use ttk_server::AttestationParams;
@@ -98,8 +101,39 @@ mod attestation_verification {
         let cert = ra_tls_cert(&key, &key);
         let verifier = EnclaveCertVerifier::new();
 
-        assert!(verify(&verifier, &cert).is_err());
+        let err = verify(&verifier, &cert).unwrap_err();
+        assert!(
+            err.to_string().contains("TTK_ALLOW_MOCK_ATTESTATION"),
+            "the error should explain how to accept mock evidence: {err}"
+        );
         assert!(verifier.received_certificate().is_none());
+    }
+
+    #[test]
+    fn mock_evidence_is_signed_through_the_mock_root() {
+        let params = AttestationParams::new().with_user_data(vec![1; 32]);
+        let doc = parse_attestation_document(&create_mock_attestation_document(&params).unwrap())
+            .unwrap();
+        assert_eq!(doc.cabundle.len(), 1);
+        assert_eq!(
+            doc.cabundle[0],
+            ttk_server::verifier::TrustStore::builtin().mock_nitro_root
+        );
+    }
+
+    #[test]
+    fn tampered_mock_evidence_is_rejected_even_when_allowed() {
+        let key = KeyPair::generate().unwrap();
+        let params = AttestationParams::new().with_user_data_hash(&key.public_key_der());
+        let mut doc = create_mock_attestation_document(&params).unwrap();
+        let last = doc.len() - 1;
+        doc[last] ^= 1; // last byte of the COSE signature
+        let eat = wrap_as_eat(&doc).unwrap().to_cbor_bytes().unwrap();
+        let pem = create_cert_with_attestation(&key, "enclave.internal", &eat, 1).unwrap();
+        let cert = CertificateDer::from_pem_slice(pem.as_bytes()).unwrap();
+
+        let err = verify(&EnclaveCertVerifier::new().allow_mock(), &cert).unwrap_err();
+        assert!(err.to_string().contains("signature is invalid"), "{err}");
     }
 
     #[test]

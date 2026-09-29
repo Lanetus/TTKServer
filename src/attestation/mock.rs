@@ -1,13 +1,17 @@
 //! Mock provider for local development and CI where no TEE hardware exists.
+//!
+//! Produces AWS Nitro-format documents signed through a published mock root CA (see
+//! [`create_mock_attestation_document`]). Clients verify them fully, but only accept them when
+//! mock attestation is explicitly allowed.
 
 use super::nitro_doc::{create_mock_attestation_document, wrap_as_eat};
 use super::{AttestationError, AttestationProvider};
 use crate::{AttestationParams, EatClaimsSet};
 
-/// Always-available provider producing synthetic (unsigned) Nitro-format documents.
+/// Always-available provider producing Nitro-format documents signed through the mock root CA.
 pub struct MockSession;
 
-/// Mock implementation of [`AttestationProvider`]; builds a synthetic Nitro-format document.
+/// Mock implementation of [`AttestationProvider`]; builds a mock-signed Nitro-format document.
 impl AttestationProvider for MockSession {
     /// Returns `"mock"`.
     fn name(&self) -> &'static str {
