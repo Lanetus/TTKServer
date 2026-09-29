@@ -18,7 +18,8 @@ path = "src/client.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-hyper = { version = "0.14", features = ["full"] }
+bytes = "1"
+tower-service = "0.3"
 rustls = { version = "0.23", features = ["ring"] }
 aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
 sha2 = "0.10"

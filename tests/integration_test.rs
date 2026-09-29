@@ -12,8 +12,9 @@
 // 2. In `main.rs`, you would use `use ttk_server::*`.
 // 3. In this test file, you would use `use ttk_server::*`.
 
+use axum::body::{to_bytes, Body};
+use axum::http::{Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use hyper::{Body, Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
 use rcgen::generate_simple_self_signed;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
@@ -41,7 +42,7 @@ pub fn generate_identity() -> (
 pub async fn handle_request(
     req: HyperRequest<Body>,
     attestation_doc: Arc<Vec<u8>>,
-) -> Result<HyperResponse<Body>, hyper::Error> {
+) -> Result<HyperResponse<Body>, std::convert::Infallible> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/attestation") => {
             let b64_doc = STANDARD.encode(&*attestation_doc);
@@ -80,7 +81,7 @@ async fn test_handle_request_attestation() {
     let response = handle_request(req, attestation_doc).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body_bytes = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let expected_b64 = STANDARD.encode(b"test_attestation_doc");
     assert_eq!(body_bytes, expected_b64.as_bytes());
 }
@@ -97,7 +98,7 @@ async fn test_handle_request_hello() {
     let response = handle_request(req, attestation_doc).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body_bytes = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(
         body_bytes,
         "Hello from inside the VSOCK Enclave!".as_bytes()

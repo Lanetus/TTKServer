@@ -14,8 +14,8 @@
 use aws_nitro_enclaves_cose::crypto::Openssl;
 use aws_nitro_enclaves_cose::sign::CoseSign1;
 use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
+use bytes::Buf;
 use ciborium::Value;
-use hyper::body::Buf;
 use log::{debug, info};
 use quinn::Endpoint;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
