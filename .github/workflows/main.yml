@@ -163,6 +163,15 @@ jobs:
     needs: test
     permissions:
       contents: read
+      pages: write     # to deploy to GitHub Pages
+      id-token: write  # to verify the deployment originates from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # Let an in-progress deployment finish instead of cancelling it
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -196,8 +205,11 @@ jobs:
           rm -rf docs/book/api
           cp -r target/doc docs/book/api
 
-      - name: Upload docs
-        uses: actions/upload-artifact@v4
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
         with:
-          name: docs
           path: docs/book
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
