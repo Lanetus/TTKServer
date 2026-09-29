@@ -8,7 +8,7 @@ allow = ["MIT", "Apache-2.0", "BSD-3-Clause"]
 
 [bans]
 # Disallow duplicate versions of heavy crates
-multiple-versions = "warn"
+multiple-versions = "all"
 # Explicitly block specific known bad crates
 deny = [
     { name = "openssl" } # Force team to use rustls
