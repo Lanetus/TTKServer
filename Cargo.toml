@@ -3,6 +3,7 @@ name = "TTKServer"
 version = "0.9.2"
 edition = "2021"
 default-run = "TTKServer"
+license = "MIT"
 
 [lib]
 name = "ttk_server"
