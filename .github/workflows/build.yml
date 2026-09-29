@@ -106,3 +106,23 @@ jobs:
           tags: |
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:v${{ steps.version.outputs.tag }}
+
+      - name: Build EIF
+        run: |
+          mkdir -p out
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/out:/out" \
+            amazonlinux:2023 bash -c '
+              dnf install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel &&
+              mkdir -p /var/log/nitro_enclaves &&
+              nitro-cli build-enclave \
+                --docker-uri ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} \
+                --output-file /out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.platform }}.eif > /out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.platform }}.json
+            '
+          cat out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.platform }}.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.platform }}
+          path: out/
