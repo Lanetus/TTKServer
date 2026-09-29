@@ -5,7 +5,7 @@ on:
 
 jobs:
   test:
-    name: Test and Coverage
+    name: Test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,25 +49,27 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Run linter
-        run: cargo fmt --all
+      - name: Check formatting
+        run: cargo fmt --all --check
 
-      - name: Commit and push changes
-        uses: stefanzweifel/git-auto-commit-action@v7
-        with:
-          commit_message: "chore: apply automated linting [skip ci]"
-          branch: ${{ github.head_ref }}
-          push_options: --force
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   audit:
+    name: Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

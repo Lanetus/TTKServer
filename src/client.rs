@@ -154,8 +154,8 @@ impl ServerCertVerifier for EnclaveCertVerifier {
 }
 
 /// Extract raw attestation bytes from the leaf certificate
-pub fn extract_attestation_doc<'a>(
-    cert_der: &'a [u8],
+pub fn extract_attestation_doc(
+    cert_der: &[u8],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     // 1. Parse DER bytes into an X509 certificate
     let (_, cert) = X509Certificate::from_der(cert_der)?;
