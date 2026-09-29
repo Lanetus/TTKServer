@@ -84,4 +84,3 @@ Claim keys are from the IANA ["CBOR Web Token (CWT) Claims"](https://www.iana.or
 ## Docker
 
 This project includes a `Dockerfile` to build a containerized version of the application. The CI/CD pipeline automatically builds and pushes the image to a private ECR repository.
-
