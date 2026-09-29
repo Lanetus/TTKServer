@@ -109,7 +109,7 @@ mod attestation_verification {
         let cert = ra_tls_cert(&key, &other);
 
         let err = verify(&EnclaveCertVerifier::new().allow_mock(), &cert).unwrap_err();
-        assert!(err.to_string().contains("user_data"), "{err}");
+        assert!(err.to_string().contains("report data"), "{err}");
     }
 
     #[test]

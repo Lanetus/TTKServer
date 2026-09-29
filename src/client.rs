@@ -6,93 +6,107 @@
 //! Handles:
 //! - QUIC transport negotiation via `quinn` with ALPN `h3`
 //! - RA-TLS verification of the enclave's ephemeral self-signed certificate: the embedded
-//!   Nitro attestation document is verified against the AWS Nitro root and must bind
-//!   (via `user_data`) to the SHA-256 of the certificate's public key
+//!   TEE evidence (AWS Nitro, AMD SEV-SNP, Intel TDX or SGX) is verified against the vendor's
+//!   root and must bind to the SHA-256 of the certificate's public key
 //! - Sending HTTP/3 requests and receiving responses using `h3` and `h3-quinn`
 
 use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
 use bytes::Buf;
-use ciborium::Value;
 use log::{debug, info};
 use quinn::Endpoint;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::WebPkiSupportedAlgorithms;
 use rustls::Error as RustlsError;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use ttk_server::eat::EatClaimsSet;
+pub use ttk_server::verifier::nitro::AttestationDocument;
+use ttk_server::verifier::{self, Policy, TrustStore, VerifiedEvidence};
 use x509_parser::prelude::*;
-
-/// SHA-256 fingerprint of the AWS Nitro Enclaves root certificate (G1), as published in the
-/// AWS Nitro Enclaves documentation. The first certificate of every attestation document's
-/// `cabundle` must match it.
-const AWS_NITRO_ROOT_SHA256: [u8; 32] = [
-    0x64, 0x1a, 0x03, 0x21, 0xa3, 0xe2, 0x44, 0xef, 0xe4, 0x56, 0x46, 0x31, 0x95, 0xd6, 0x06, 0x31,
-    0x7e, 0xd7, 0xcd, 0xcc, 0x3c, 0x17, 0x56, 0xe0, 0x98, 0x93, 0xf3, 0xc6, 0x8f, 0x79, 0xbb, 0x5b,
-];
-
-/// Label of the EAT submodule carrying the raw Nitro COSE_Sign1 document (see `nitro_doc.rs`).
-const NITRO_SUBMOD_NAME: &str = "aws_nitro";
-
-/// COSE algorithm identifier for ECDSA P-384 with SHA-384 (RFC 9053).
-const COSE_ALG_ES384: i128 = -35;
-
-/// Tolerated clock skew when checking that the evidence is not from the future.
-const MAX_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
 
 /// Custom certificate verifier for Remote Attestation TLS (RA-TLS).
 ///
-/// The server presents an ephemeral self-signed certificate that carries an EAT with a nested
-/// AWS Nitro attestation document in a custom X.509 extension. Instead of a Web PKI CA chain,
-/// [`verify_server_cert`](ServerCertVerifier::verify_server_cert) checks:
+/// The server presents an ephemeral self-signed certificate that carries an EAT with nested
+/// TEE evidence (AWS Nitro, AMD SEV-SNP, Intel TDX or Intel SGX) in a custom X.509 extension.
+/// Instead of a Web PKI CA chain, [`verify_server_cert`](ServerCertVerifier::verify_server_cert)
+/// checks:
 ///
 /// 1. the certificate itself: well-formed, within its validity period, correctly self-signed;
-/// 2. the attestation document: COSE_Sign1 signature, certificate chain up to the pinned AWS
-///    Nitro root, and document sanity;
-/// 3. the binding: `user_data` equals the SHA-256 of the certificate's SubjectPublicKeyInfo;
-/// 4. any expected PCR values configured with [`with_expected_pcr`](Self::with_expected_pcr).
+/// 2. the evidence: vendor signature chain up to a root in the [`TrustStore`] (see
+///    [`ttk_server::verifier`]), and that the TEE is not in debug mode;
+/// 3. the binding: the evidence's report data equals the SHA-256 of the certificate's
+///    SubjectPublicKeyInfo;
+/// 4. any expected measurements configured with
+///    [`with_expected_measurement`](Self::with_expected_measurement) or
+///    [`with_expected_pcr`](Self::with_expected_pcr).
 ///
 /// The TLS handshake signature is verified against the same certificate, proving the peer holds
 /// the attested key.
 #[derive(Debug, Clone)]
 pub struct EnclaveCertVerifier {
     received_cert: Arc<Mutex<Option<CertificateDer<'static>>>>,
-    verified_attestation: Arc<Mutex<Option<AttestationDocument>>>,
-    expected_pcrs: BTreeMap<usize, Vec<u8>>,
-    allow_mock: bool,
+    verified_evidence: Arc<Mutex<Option<VerifiedEvidence>>>,
+    expected_measurements: BTreeMap<String, Vec<u8>>,
+    policy: Policy,
+    trust: Arc<TrustStore>,
     algorithms: WebPkiSupportedAlgorithms,
 }
 
 /// Construction, policy configuration and inspection of the verifier.
 impl EnclaveCertVerifier {
-    /// Creates a strict verifier: only genuine, AWS-signed Nitro attestation documents are accepted.
+    /// Creates a strict verifier: only genuine, vendor-signed evidence from a non-debug TEE is
+    /// accepted, checked against the built-in vendor roots.
     pub fn new() -> Self {
         Self {
             received_cert: Arc::new(Mutex::new(None)),
-            verified_attestation: Arc::new(Mutex::new(None)),
-            expected_pcrs: BTreeMap::new(),
-            allow_mock: false,
+            verified_evidence: Arc::new(Mutex::new(None)),
+            expected_measurements: BTreeMap::new(),
+            policy: Policy::default(),
+            trust: Arc::new(TrustStore::builtin()),
             algorithms: rustls::crypto::ring::default_provider().signature_verification_algorithms,
         }
     }
 
-    /// Requires PCR `index` of the attestation document to equal `value`.
-    pub fn with_expected_pcr(mut self, index: usize, value: impl Into<Vec<u8>>) -> Self {
-        self.expected_pcrs.insert(index, value.into());
+    /// Requires the evidence measurement `name` to equal `value`.
+    ///
+    /// See [`VerifiedEvidence::measurements`] for the names each TEE reports. Evidence that
+    /// lacks the measurement (e.g. from a different TEE) is rejected.
+    pub fn with_expected_measurement(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<Vec<u8>>,
+    ) -> Self {
+        self.expected_measurements
+            .insert(name.into().to_lowercase(), value.into());
+        self
+    }
+
+    /// Requires PCR `index` of a Nitro attestation document to equal `value`.
+    pub fn with_expected_pcr(self, index: usize, value: impl Into<Vec<u8>>) -> Self {
+        self.with_expected_measurement(format!("pcr{index}"), value)
+    }
+
+    /// Replaces the built-in vendor roots, e.g. for testing or private deployments.
+    pub fn with_trust_store(mut self, trust: TrustStore) -> Self {
+        self.trust = Arc::new(trust);
         self
     }
 
     /// Accepts unsigned mock attestation documents (for local development only).
     ///
-    /// Skips the COSE signature and AWS certificate-chain checks; the certificate checks, the
-    /// key binding and the PCR checks still apply. Never enable this in production.
+    /// Skips the Nitro COSE signature and AWS certificate-chain checks; the certificate checks,
+    /// the key binding and the measurement checks still apply. Never enable this in production.
     pub fn allow_mock(mut self) -> Self {
-        self.allow_mock = true;
+        self.policy.allow_mock = true;
+        self
+    }
+
+    /// Accepts evidence from TEEs running in debug mode, whose memory is not confidential.
+    pub fn allow_debug(mut self) -> Self {
+        self.policy.allow_debug = true;
         self
     }
 
@@ -104,12 +118,18 @@ impl EnclaveCertVerifier {
             .and_then(|guard| guard.clone())
     }
 
-    /// Returns the attestation document accepted during the last successful verification.
-    pub fn verified_attestation(&self) -> Option<AttestationDocument> {
-        self.verified_attestation
+    /// Returns the evidence accepted during the last successful verification.
+    pub fn verified_evidence(&self) -> Option<VerifiedEvidence> {
+        self.verified_evidence
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
+    }
+
+    /// Returns the Nitro attestation document accepted during the last successful verification,
+    /// if the server attested with AWS Nitro.
+    pub fn verified_attestation(&self) -> Option<AttestationDocument> {
+        self.verified_evidence().and_then(|evidence| evidence.nitro)
     }
 
     /// Runs all certificate and attestation checks on `end_entity` at time `now`.
@@ -117,7 +137,7 @@ impl EnclaveCertVerifier {
         &self,
         end_entity: &CertificateDer<'_>,
         now: UnixTime,
-    ) -> Result<AttestationDocument, String> {
+    ) -> Result<VerifiedEvidence, String> {
         // 1. The certificate itself
         let (_, cert) = X509Certificate::from_der(end_entity.as_ref())
             .map_err(|e| format!("malformed certificate: {e}"))?;
@@ -131,92 +151,33 @@ impl EnclaveCertVerifier {
         cert.verify_signature(None)
             .map_err(|e| format!("certificate is not correctly self-signed: {e}"))?;
 
-        // 2. The attestation document embedded in the certificate
+        // 2 & 3. The embedded evidence, bound to this certificate's public key
         let eat_bytes = extract_attestation_doc(end_entity.as_ref())
             .map_err(|e| format!("missing attestation extension: {e}"))?;
-        let nitro_doc = nitro_doc_from_eat(&eat_bytes)?;
-        let cose = CoseSign1Parts::parse(&nitro_doc)?;
-        let doc: AttestationDocument = ciborium::from_reader(cose.payload.as_slice())
-            .map_err(|e| format!("invalid attestation document payload: {e}"))?;
-        doc.check_sanity()?;
-
-        if doc.timestamp > (now.as_secs() + MAX_CLOCK_SKEW.as_secs()) * 1000 {
-            return Err("attestation document timestamp is in the future".into());
-        }
-
-        if self.allow_mock {
-            log::warn!("Mock attestation allowed: skipping COSE signature and AWS chain checks");
-        } else {
-            self.verify_chain(&doc)?;
-            cose.verify_signature(&doc.certificate)?;
-        }
-
-        // 3. Binding between the attestation document and this TLS key
-        let expected = Sha256::digest(cert.public_key().raw);
-        if doc.user_data.as_deref() != Some(expected.as_slice()) {
-            return Err("attestation user_data does not match the certificate's public key".into());
-        }
+        let binding = Sha256::digest(cert.public_key().raw);
+        let evidence =
+            verifier::verify_evidence(&eat_bytes, &binding, now, &self.trust, self.policy)?;
 
         // 4. Reference values
-        for (index, expected) in &self.expected_pcrs {
-            if doc.pcrs.get(index) != Some(expected) {
-                return Err(format!("PCR{index} does not match the expected value"));
+        for (name, expected) in &self.expected_measurements {
+            match evidence.measurements.get(name) {
+                Some(actual) if actual == expected => {}
+                Some(_) => {
+                    return Err(format!(
+                        "{} does not match the expected value",
+                        name.to_uppercase()
+                    ))
+                }
+                None => {
+                    return Err(format!(
+                        "{} evidence has no measurement '{name}'",
+                        evidence.tee
+                    ))
+                }
             }
         }
 
-        Ok(doc)
-    }
-
-    /// Verifies the document's signing certificate up to the pinned AWS Nitro root.
-    ///
-    /// The chain is validated at the document's timestamp: Nitro signing certificates are
-    /// short-lived, while the server reuses one document for the lifetime of its TLS certificate.
-    fn verify_chain(&self, doc: &AttestationDocument) -> Result<(), String> {
-        let root = doc
-            .cabundle
-            .first()
-            .ok_or("attestation cabundle is empty")?;
-        if Sha256::digest(root).as_slice() != AWS_NITRO_ROOT_SHA256 {
-            return Err("attestation cabundle is not rooted at the AWS Nitro root CA".into());
-        }
-
-        let root_der = CertificateDer::from(root.as_slice());
-        let anchor = webpki::anchor_from_trusted_cert(&root_der)
-            .map_err(|e| format!("invalid AWS Nitro root certificate: {e:?}"))?;
-        let intermediates: Vec<CertificateDer<'_>> = doc.cabundle[1..]
-            .iter()
-            .map(|c| CertificateDer::from(c.as_slice()))
-            .collect();
-        let leaf_der = CertificateDer::from(doc.certificate.as_slice());
-        let leaf = webpki::EndEntityCert::try_from(&leaf_der)
-            .map_err(|e| format!("invalid attestation signing certificate: {e:?}"))?;
-
-        leaf.verify_for_usage(
-            self.algorithms.all,
-            &[anchor],
-            &intermediates,
-            UnixTime::since_unix_epoch(Duration::from_millis(doc.timestamp)),
-            AnyKeyUsage,
-            None,
-            None,
-        )
-        .map_err(|e| format!("attestation certificate chain is invalid: {e:?}"))?;
-        Ok(())
-    }
-}
-
-/// EKU policy for the attestation signing chain: it signs documents, not TLS sessions, so no
-/// particular Extended Key Usage is required.
-struct AnyKeyUsage;
-
-/// Accepts any (well-formed) Extended Key Usage extension.
-impl webpki::ExtendedKeyUsageValidator for AnyKeyUsage {
-    /// Only rejects a malformed EKU extension.
-    fn validate(&self, iter: webpki::KeyPurposeIdIter<'_, '_>) -> Result<(), webpki::Error> {
-        for eku in iter {
-            eku?;
-        }
-        Ok(())
+        Ok(evidence)
     }
 }
 
@@ -231,132 +192,6 @@ impl Default for EnclaveCertVerifier {
 /// OID of the X.509 extension carrying the attestation document (placeholder, not a registered PEN).
 const ATTESTATION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 99999, 1];
 
-/// Decoded payload of an AWS Nitro attestation document.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AttestationDocument {
-    pub module_id: String,
-    pub timestamp: u64,
-    pub digest: String,
-    pub pcrs: BTreeMap<usize, Vec<u8>>,
-    pub certificate: Vec<u8>,
-    pub cabundle: Vec<Vec<u8>>,
-    #[serde(default)]
-    pub public_key: Option<Vec<u8>>,
-    #[serde(default)]
-    pub user_data: Option<Vec<u8>>,
-    #[serde(default)]
-    pub nonce: Option<Vec<u8>>,
-}
-
-/// Structural checks on a decoded attestation document.
-impl AttestationDocument {
-    /// Checks the mandatory fields per the AWS Nitro Enclaves attestation document spec.
-    fn check_sanity(&self) -> Result<(), String> {
-        if self.module_id.is_empty() {
-            return Err("attestation module_id is empty".into());
-        }
-        if self.digest != "SHA384" {
-            return Err(format!("unsupported attestation digest {}", self.digest));
-        }
-        if self.pcrs.is_empty() || self.pcrs.len() > 32 {
-            return Err("attestation document has an invalid number of PCRs".into());
-        }
-        if self.pcrs.values().any(|v| ![32, 48, 64].contains(&v.len())) {
-            return Err("attestation document has a PCR of invalid length".into());
-        }
-        if self.certificate.is_empty() {
-            return Err("attestation signing certificate is empty".into());
-        }
-        Ok(())
-    }
-}
-
-/// The parts of a COSE_Sign1 structure (RFC 9052) needed for verification.
-struct CoseSign1Parts {
-    protected: Vec<u8>,
-    payload: Vec<u8>,
-    signature: Vec<u8>,
-}
-
-/// Parsing and signature verification of COSE_Sign1 documents.
-impl CoseSign1Parts {
-    /// Parses a tagged (tag 18) or untagged COSE_Sign1 array.
-    fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let value: Value =
-            ciborium::from_reader(bytes).map_err(|e| format!("invalid COSE_Sign1 CBOR: {e}"))?;
-        let items = match value {
-            Value::Tag(18, inner) => match *inner {
-                Value::Array(items) => items,
-                _ => return Err("COSE_Sign1 tag does not contain an array".into()),
-            },
-            Value::Array(items) => items,
-            _ => return Err("attestation document is not a COSE_Sign1 structure".into()),
-        };
-        let [protected, _unprotected, payload, signature] = <[Value; 4]>::try_from(items)
-            .map_err(|_| "COSE_Sign1 structure must have 4 elements".to_string())?;
-        let bytes_of = |v: Value, what: &str| match v {
-            Value::Bytes(b) => Ok(b),
-            _ => Err(format!("COSE_Sign1 {what} is not a byte string")),
-        };
-        Ok(Self {
-            protected: bytes_of(protected, "protected header")?,
-            payload: bytes_of(payload, "payload")?,
-            signature: bytes_of(signature, "signature")?,
-        })
-    }
-
-    /// Verifies the ES384 signature with the public key of `signing_cert_der`.
-    fn verify_signature(&self, signing_cert_der: &[u8]) -> Result<(), String> {
-        let header: Value = ciborium::from_reader(self.protected.as_slice())
-            .map_err(|e| format!("invalid COSE protected header: {e}"))?;
-        let alg = header.as_map().and_then(|m| {
-            m.iter().find_map(|(k, v)| match (k, v) {
-                (Value::Integer(k), Value::Integer(v)) if i128::from(*k) == 1 => {
-                    Some(i128::from(*v))
-                }
-                _ => None,
-            })
-        });
-        if alg != Some(COSE_ALG_ES384) {
-            return Err("attestation document is not signed with ES384".into());
-        }
-
-        // Sig_structure = ["Signature1", protected, external_aad, payload] (RFC 9052 §4.4)
-        let sig_structure = Value::Array(vec![
-            Value::Text("Signature1".into()),
-            Value::Bytes(self.protected.clone()),
-            Value::Bytes(Vec::new()),
-            Value::Bytes(self.payload.clone()),
-        ]);
-        let mut to_verify = Vec::new();
-        ciborium::into_writer(&sig_structure, &mut to_verify)
-            .map_err(|e| format!("failed to encode COSE Sig_structure: {e}"))?;
-
-        let (_, signing_cert) = X509Certificate::from_der(signing_cert_der)
-            .map_err(|e| format!("malformed attestation signing certificate: {e}"))?;
-        let public_key = signing_cert.public_key().subject_public_key.data.as_ref();
-        ring::signature::UnparsedPublicKey::new(
-            &ring::signature::ECDSA_P384_SHA384_FIXED,
-            public_key,
-        )
-        .verify(&to_verify, &self.signature)
-        .map_err(|_| "attestation document signature is invalid".to_string())
-    }
-}
-
-/// Extracts the raw Nitro COSE_Sign1 document from the `submods` of an EAT claims-set.
-fn nitro_doc_from_eat(eat_bytes: &[u8]) -> Result<Vec<u8>, String> {
-    let claims =
-        EatClaimsSet::from_bytes(eat_bytes).map_err(|e| format!("invalid EAT token: {e}"))?;
-    let submods = claims.submods.ok_or("EAT token has no submods")?;
-    let entries = submods.into_map().map_err(|_| "EAT submods is not a map")?;
-    entries
-        .into_iter()
-        .find(|(k, _)| k.as_text() == Some(NITRO_SUBMOD_NAME))
-        .and_then(|(_, v)| v.into_bytes().ok())
-        .ok_or_else(|| format!("EAT token has no '{NITRO_SUBMOD_NAME}' submodule"))
-}
-
 /// RA-TLS verification: the server is trusted because of its attestation, not a CA chain.
 impl ServerCertVerifier for EnclaveCertVerifier {
     /// Verifies the RA-TLS certificate and its embedded attestation document.
@@ -370,19 +205,16 @@ impl ServerCertVerifier for EnclaveCertVerifier {
         _ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let doc = self
+        let evidence = self
             .verify(end_entity, now)
             .map_err(|e| RustlsError::General(format!("RA-TLS verification failed: {e}")))?;
-        debug!(
-            "Attestation verified for module {} (timestamp {})",
-            doc.module_id, doc.timestamp
-        );
+        debug!("{} attestation verified", evidence.tee);
 
         if let Ok(mut guard) = self.received_cert.lock() {
             *guard = Some(end_entity.clone().into_owned());
         }
-        if let Ok(mut guard) = self.verified_attestation.lock() {
-            *guard = Some(doc);
+        if let Ok(mut guard) = self.verified_evidence.lock() {
+            *guard = Some(evidence);
         }
         Ok(ServerCertVerified::assertion())
     }
