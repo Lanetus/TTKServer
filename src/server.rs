@@ -16,12 +16,12 @@
 use crate::{attestation, AttestationParams};
 use axum::{routing::get, Router};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use hyper::service::Service;
 use log::info;
 use quinn::{Endpoint, ServerConfig};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
+use tower_service::Service;
 
 const ATTESTATION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 99999, 1];
 
@@ -124,7 +124,7 @@ pub async fn run() -> Result<(), BoxError> {
 /// Requests evidence from the detected attestation provider, bound to the TLS key,
 /// and returns it as CBOR-encoded RFC 9711 EAT bytes.
 fn generate_evidence(key_pair: &KeyPair) -> Result<Vec<u8>, BoxError> {
-    let params = AttestationParams::new().with_user_data_hash(&key_pair.serialized_der());
+    let params = AttestationParams::new().with_user_data_hash(key_pair.serialized_der());
 
     let provider = attestation::detect()?;
     info!("Using attestation provider: {}", provider.name());
