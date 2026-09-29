@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The server can attest with AMD SEV-SNP (`sev-snp` feature): inside an SEV-SNP guest it obtains an attestation report through configfs-tsm (Linux 6.7+), binding the TLS key hash in `REPORT_DATA`, and embeds it with the VCEK certificate in the EAT under the `sev_snp` submodule. The VCEK comes from the certificate table the host attaches to the report, or from the file named by `TTK_SEV_SNP_VCEK` when the host supplies none. Detected automatically via `/dev/sev-guest`, or forced with `TTK_ATTESTATION=sev-snp`.
 - The server can attest with Intel TDX (`tdx` feature): inside a TDX guest it obtains a DCAP quote through the Linux configfs-tsm interface (`/sys/kernel/config/tsm/report`, Linux 6.7+), binding the TLS key hash in `REPORTDATA`, and embeds it in the EAT under the `tdx` submodule. Detected automatically via `/dev/tdx_guest`, or forced with `TTK_ATTESTATION=tdx`.
 - The `client` verifies AMD SEV-SNP, Intel TDX and Intel SGX evidence in addition to AWS Nitro. The server's EAT carries exactly one of the `submods` `aws_nitro`, `sev_snp` (`{report, vcek}`), `tdx` or `sgx` (DCAP quote).
   - SEV-SNP: ARK → ASK → VCEK chain against pinned Milan, Genoa and Turin roots, VCEK `hwID` and TCB matched to the report, and the report's ECDSA P-384 signature.
