@@ -12,8 +12,9 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
 - `src/main.rs` — bin `TTKServer`: thin entry point calling `ttk_server::server::run()`.
 - `src/service/server.rs` — attestation at startup, RA-TLS cert, QUIC/h3 accept loop on `0.0.0.0:4433`; reads request bodies up to `MAX_REQUEST_BODY` (else 413). Relay policy: `Server::with_relay_verifier` (default strict; `run()` allows mock with `TTK_ALLOW_MOCK_ATTESTATION=1`).
 - `src/service/router.rs` — all HTTP routes (`build_router`): `GET /`, `GET /evidence.eat` (base64 EAT), `POST /faf` (`FafRequest` JSON: forwards `message`+`key` to `relay_server`'s `/faf` over verified RA-TLS; no `relay_server` = last hop, 200). Also `Evidence` (re-exported from `server`), `parse_relay_server`, relay timeouts.
-- `src/service/client.rs` — lib module `ttk_server::client`: `TtkClient`, `EnclaveCertVerifier` (accepts self-signed cert, records it), `extract_attestation_doc`, `hex_encode`, `parse_client_args`/`CLIENT_USAGE`.
-- `benches/client.rs` — bin `client`: thin `main` + `parse_args()` over `ttk_server::client`.
+- `src/service/client.rs` — lib module `ttk_server::client`: `TtkClient`, `EnclaveCertVerifier` (accepts self-signed cert, records it), `extract_attestation_doc`, `hex_encode`.
+- `src/bin/client.rs` — **test-only** bin `client` (`test-client` feature, never in production): `main` plus CLI parsing (`parse_client_args`, `ClientTarget`, `CLIENT_USAGE`, private to the bin) over `ttk_server::client`. Its e2e tests live in `tests/client_bin_tests.rs`.
+- `benches/client.rs` — Criterion benches for `ttk_server::client` (hex encoding, attestation extraction, handshake + GET against an in-process mock server; needs `mock`).
 - `src/attestation/eat.rs` (`ttk_server::attestation::eat`, also re-exported as `ttk_server::eat`) — RFC 9711 EAT claim keys (`EatClaimKey`) and `EatClaimsSet` (CBOR).
 - `src/nitro.rs` — real NSM session (`NsmSession`, `/dev/nsm`), COSE parsing, mock-doc fallback when no hardware, `wrap_as_eat`.
 - `src/mock.rs` — `MockSession` for the `mock` feature.

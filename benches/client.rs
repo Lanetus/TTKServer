@@ -1,6 +1,6 @@
 //! Criterion benchmarks for the `ttk_server::client` library.
 //!
-//! Covers the offline helpers (CLI parsing, hex encoding, extracting the RA-TLS evidence from
+//! Covers the offline helpers (hex encoding, extracting the RA-TLS evidence from
 //! the server certificate) and the online paths against an in-process server with mock
 //! attestation: a full QUIC + RA-TLS handshake (including evidence appraisal) and an HTTP/3
 //! (RFC 9114) GET over an established connection.
@@ -9,9 +9,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 use std::net::SocketAddr;
 use tokio::runtime::Runtime;
-use ttk_server::client::{
-    extract_attestation_doc, hex_encode, parse_client_args, EnclaveCertVerifier, TtkClient,
-};
+use ttk_server::client::{extract_attestation_doc, hex_encode, EnclaveCertVerifier, TtkClient};
 use ttk_server::server::Server;
 
 /// Starts a mock-attestation server on a free local port inside `rt` and returns its address.
@@ -32,21 +30,6 @@ async fn connect(addr: SocketAddr) -> TtkClient {
 }
 
 fn bench_offline(c: &mut Criterion) {
-    let args: Vec<String> = [
-        "--addr",
-        "127.0.0.1:4433",
-        "--server-name",
-        "enclave.local",
-        "--path",
-        "/evidence.eat",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
-    c.bench_function("parse_client_args", |b| {
-        b.iter(|| parse_client_args(black_box(&args), None, None))
-    });
-
     let digest = [0xabu8; 32];
     c.bench_function("hex_encode/32B", |b| {
         b.iter(|| hex_encode(black_box(&digest)))
