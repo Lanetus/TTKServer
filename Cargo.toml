@@ -18,28 +18,29 @@ name = "client"
 path = "src/client.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-bytes = "1"
-tower-service = "0.3"
-rustls = { version = "0.23", features = ["ring"] }
 aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
-sha2 = "0.10"
-base64 = "0.21"
-ciborium = "0.2"
-log = "0.4"
-env_logger = "0.11"
-rustls-pki-types = "1"
-rcgen = "0.13"
-quinn = "0.11"
 axum = "0.8.9"
-h3 = "0.0.7"        # The core HTTP/3 state machine
-h3-quinn = "0.0.9"
-time = "0.3.36"
+base64 = "0.21"
+bytes = "1"
+ciborium = "0.2"
 der-parser = "10.0.0"
-x509-parser = { version = "0.18.1", features = ["verify"] }
-serde = { version = "1.0.228", features = ["derive"] }  # The adapter bridging Quinn's QUIC API to h3's Transport trait
+env_logger = "0.11"
+h3 = "0.0.7"  # The core HTTP/3 state machine
+h3-quinn = "0.0.9"  # The adapter bridging Quinn's QUIC API to h3's Transport trait
+log = "0.4"
+quinn = "0.11"
+rcgen = "0.13"
 ring = "0.17"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pki-types = "1"
 rustls-webpki = "0.103"
+serde = { version = "1.0.228", features = ["derive"] }
+sha2 = "0.10"
+time = "0.3.36"
+tokio = { version = "1", features = ["full"] }
+tower-service = "0.3"
+x509-parser = { version = "0.18.1", features = ["verify"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio-vsock = "0.3"
 
