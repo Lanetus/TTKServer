@@ -112,3 +112,165 @@ fn test_unknown_provider_is_rejected() {
         Err(AttestationError::Unsupported(_))
     ));
 }
+
+// ---------------------------------------------------------------------------
+// NsmSession without Nitro hardware
+// ---------------------------------------------------------------------------
+
+/// Opens a session on `/dev/null`: every NSM request then fails in the driver's `ioctl`, which
+/// exercises each operation's error path. The session owns (and closes) the descriptor.
+#[cfg(unix)]
+fn session_on_dev_null() -> NsmSession {
+    use std::os::fd::IntoRawFd;
+    let fd = std::fs::File::open("/dev/null").unwrap().into_raw_fd();
+    let session = NsmSession::from_raw_fd(fd).expect("a valid descriptor is accepted");
+    assert_eq!(session.raw_fd(), fd);
+    session
+}
+
+#[cfg(unix)]
+#[test]
+fn nsm_requests_on_a_non_nsm_device_fail_with_driver_errors() {
+    use ttk_server::attestation::AttestationProvider;
+
+    let session = session_on_dev_null();
+    let params = AttestationParams::new().with_user_data(vec![1; 32]);
+    let is_driver_error = |e: &AttestationError| matches!(e, AttestationError::Driver(_));
+
+    assert!(is_driver_error(
+        &session.create_attestation(&params).unwrap_err()
+    ));
+    assert!(is_driver_error(
+        &session.create_attestation_for_cert(b"cert").unwrap_err()
+    ));
+    assert!(is_driver_error(&session.describe_nsm().unwrap_err()));
+    assert!(is_driver_error(&session.get_random().unwrap_err()));
+    assert!(is_driver_error(&session.describe_pcr(0).unwrap_err()));
+    assert!(is_driver_error(
+        &session.extend_pcr(16, vec![1; 48]).unwrap_err()
+    ));
+    assert!(is_driver_error(&session.lock_pcr(16).unwrap_err()));
+    assert!(is_driver_error(
+        &session.generate_document(&params).unwrap_err()
+    ));
+    assert_eq!(session.name(), "aws-nitro");
+}
+
+#[test]
+fn nsm_open_fails_without_the_nsm_device() {
+    use ttk_server::attestation::AttestationProvider;
+
+    if NsmSession::is_available() {
+        return; // running inside a Nitro Enclave
+    }
+    assert!(matches!(
+        NsmSession::open(),
+        Err(AttestationError::DeviceOpenFailed(_))
+    ));
+    assert!(matches!(
+        by_name("aws-nitro"),
+        Err(AttestationError::DeviceOpenFailed(_))
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Malformed documents
+// ---------------------------------------------------------------------------
+
+fn cbor(value: &ciborium::Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    ciborium::into_writer(value, &mut out).unwrap();
+    out
+}
+
+/// A tagged COSE_Sign1 whose payload is `payload`.
+fn cose_with_payload(payload: Vec<u8>) -> Vec<u8> {
+    use ciborium::Value;
+    cbor(&Value::Tag(
+        18,
+        Box::new(Value::Array(vec![
+            Value::Bytes(vec![]),
+            Value::Map(vec![]),
+            Value::Bytes(payload),
+            Value::Bytes(vec![]),
+        ])),
+    ))
+}
+
+fn decoding_error(result: Result<impl std::fmt::Debug, AttestationError>) -> String {
+    match result {
+        Err(AttestationError::DocumentDecodingFailed(msg)) => msg,
+        other => panic!("expected DocumentDecodingFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn malformed_cose_structures_are_rejected() {
+    use ciborium::Value;
+
+    let tag_without_array = cbor(&Value::Tag(18, Box::new(Value::Integer(1.into()))));
+    assert!(decoding_error(extract_cose_payload(&tag_without_array)).contains("tag 18"));
+
+    let not_cose = cbor(&Value::Integer(1.into()));
+    assert!(decoding_error(extract_cose_payload(&not_cose)).contains("not a COSE_Sign1"));
+
+    let too_short = cbor(&Value::Array(vec![Value::Bytes(vec![]); 3]));
+    assert!(decoding_error(extract_cose_payload(&too_short)).contains("only 3 elements"));
+
+    let text_payload = cbor(&Value::Array(vec![
+        Value::Bytes(vec![]),
+        Value::Map(vec![]),
+        Value::Text("payload".into()),
+        Value::Bytes(vec![]),
+    ]));
+    assert!(decoding_error(extract_cose_payload(&text_payload)).contains("not a byte string"));
+
+    // Untagged 4-element arrays are accepted.
+    let untagged = cbor(&Value::Array(vec![
+        Value::Bytes(vec![]),
+        Value::Map(vec![]),
+        Value::Bytes(vec![7]),
+        Value::Bytes(vec![]),
+    ]));
+    assert_eq!(extract_cose_payload(&untagged).unwrap(), vec![7]);
+}
+
+#[test]
+fn payload_that_is_not_an_attestation_doc_is_rejected() {
+    let doc = cose_with_payload(cbor(&ciborium::Value::Integer(1.into())));
+    assert!(decoding_error(parse_attestation_document(&doc)).contains("Failed to parse"));
+}
+
+#[test]
+fn wrap_as_eat_rejects_payloads_without_module_id_or_timestamp() {
+    use ciborium::Value;
+    use ttk_server::attestation::nitro_doc::wrap_as_eat;
+
+    let field = |k: &str, v: Value| (Value::Text(k.into()), v);
+
+    let invalid_cbor = cose_with_payload(vec![0xff]);
+    assert!(decoding_error(wrap_as_eat(&invalid_cbor)).contains("Invalid CBOR payload"));
+
+    let not_a_map = cose_with_payload(cbor(&Value::Array(vec![])));
+    assert!(decoding_error(wrap_as_eat(&not_a_map)).contains("not a CBOR map"));
+
+    let no_module_id = cose_with_payload(cbor(&Value::Map(vec![field(
+        "timestamp",
+        Value::Integer(1.into()),
+    )])));
+    assert!(decoding_error(wrap_as_eat(&no_module_id)).contains("missing module_id"));
+
+    let no_timestamp = cose_with_payload(cbor(&Value::Map(vec![field(
+        "module_id",
+        Value::Text("i-123".into()),
+    )])));
+    assert!(decoding_error(wrap_as_eat(&no_timestamp)).contains("missing timestamp"));
+
+    let minimal = cose_with_payload(cbor(&Value::Map(vec![
+        field("module_id", Value::Text("i-123".into())),
+        field("timestamp", Value::Integer(5_000.into())),
+    ])));
+    let claims = wrap_as_eat(&minimal).unwrap();
+    assert_eq!(claims.iat, Some(5));
+    assert_eq!(claims.ueid.map(|u| u.len()), Some(33));
+}

@@ -159,3 +159,53 @@ fn provider_eat_is_accepted_by_the_client_verifier() {
         .expect("the verifier should accept the provider's EAT");
     assert_eq!(evidence.tee, TeeKind::Tdx);
 }
+
+#[test]
+fn quote_with_unsupported_version_is_rejected() {
+    let mut quote = TDX_QUOTE.to_vec();
+    quote[0] = 3; // version 3 is SGX-only
+    let entry = fake_entry("tdx_guest", &quote);
+    let err = quote_from_entry(&entry.0, &quote_report_data()).unwrap_err();
+    assert!(err.to_string().contains("unsupported version 3"), "{err}");
+}
+
+#[test]
+fn truncated_quote_is_rejected() {
+    let entry = fake_entry("tdx_guest", &TDX_QUOTE[..100]);
+    let err = quote_from_entry(&entry.0, &quote_report_data()).unwrap_err();
+    assert!(err.to_string().contains("truncated"), "{err}");
+}
+
+#[test]
+fn session_reports_its_name_and_propagates_errors() {
+    use ttk_server::attestation::AttestationProvider;
+
+    let root = TempDir::new();
+    let session = TdxSession::open_at(&root.0).unwrap();
+    assert_eq!(session.name(), "tdx");
+    let _ = TdxSession::is_available();
+
+    let params = AttestationParams::new().with_user_data(vec![1; 32]);
+    let err = session.generate_document(&params).unwrap_err();
+    assert!(err.to_string().contains("provider"), "{err}");
+
+    let with_nonce = params.with_nonce(vec![2; 8]);
+    assert!(matches!(
+        session.generate_document(&with_nonce),
+        Err(AttestationError::InvalidInput(_))
+    ));
+}
+
+#[test]
+fn quote_v5_layout_is_accepted() {
+    // v5 = v4 header with version 5, then body type (2 = TD 1.0) and body size before the body.
+    let mut quote = TDX_QUOTE[..48].to_vec();
+    quote[0..2].copy_from_slice(&5u16.to_le_bytes());
+    quote.extend(2u16.to_le_bytes());
+    quote.extend(584u32.to_le_bytes());
+    quote.extend(&TDX_QUOTE[48..]);
+    let entry = fake_entry("tdx_guest", &quote);
+
+    let returned = quote_from_entry(&entry.0, &quote_report_data()).unwrap();
+    assert_eq!(returned, quote);
+}
