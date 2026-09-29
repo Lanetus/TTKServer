@@ -284,4 +284,126 @@ impl EatClaimsSet {
         ciborium::ser::into_writer(&self.to_cbor_value(), &mut out)?;
         Ok(out)
     }
+
+    /// Parse from a CBOR `Value::Map` representation into [`EatClaimsSet`].
+    pub fn from_cbor_value(value: &Value) -> Result<Self, Box<dyn std::error::Error>> {
+        let map = match value {
+            Value::Map(m) => m,
+            _ => return Err("Expected CBOR Map for EatClaimsSet".into()),
+        };
+
+        let mut claims = EatClaimsSet::default();
+
+        for (k, v) in map {
+            let key_int = match k {
+                Value::Integer(i) => i128::from(*i) as i64,
+                _ => continue,
+            };
+
+            match key_int {
+                x if x == EatClaimKey::Iat as i64 => {
+                    if let Value::Integer(i) = v {
+                        claims.iat = Some(i128::from(*i) as i64);
+                    }
+                }
+                x if x == EatClaimKey::Nonce as i64 => {
+                    claims.nonce = Some(v.clone());
+                }
+                x if x == EatClaimKey::Ueid as i64 => {
+                    if let Value::Bytes(b) = v {
+                        claims.ueid = Some(b.clone());
+                    }
+                }
+                x if x == EatClaimKey::Sueids as i64 => {
+                    claims.sueids = Some(v.clone());
+                }
+                x if x == EatClaimKey::OemId as i64 => {
+                    claims.oem_id = Some(v.clone());
+                }
+                x if x == EatClaimKey::HwModel as i64 => {
+                    if let Value::Bytes(b) = v {
+                        claims.hw_model = Some(b.clone());
+                    }
+                }
+                x if x == EatClaimKey::HwVersion as i64 => {
+                    claims.hw_version = Some(v.clone());
+                }
+                x if x == EatClaimKey::Uptime as i64 => {
+                    if let Value::Integer(i) = v {
+                        claims.uptime = Some(i128::from(*i) as u64);
+                    }
+                }
+                x if x == EatClaimKey::OemBoot as i64 => {
+                    if let Value::Bool(b) = v {
+                        claims.oem_boot = Some(*b);
+                    }
+                }
+                x if x == EatClaimKey::DbgStat as i64 => {
+                    if let Value::Integer(i) = v {
+                        claims.dbg_stat = Some(i128::from(*i) as u64);
+                    }
+                }
+                x if x == EatClaimKey::Location as i64 => {
+                    claims.location = Some(v.clone());
+                }
+                x if x == EatClaimKey::EatProfile as i64 => {
+                    if let Value::Text(s) = v {
+                        claims.eat_profile = Some(s.clone());
+                    }
+                }
+                x if x == EatClaimKey::Submods as i64 => {
+                    claims.submods = Some(v.clone());
+                }
+                x if x == EatClaimKey::BootCount as i64 => {
+                    if let Value::Integer(i) = v {
+                        claims.boot_count = Some(i128::from(*i) as u64);
+                    }
+                }
+                x if x == EatClaimKey::BootSeed as i64 => {
+                    if let Value::Bytes(b) = v {
+                        claims.boot_seed = Some(b.clone());
+                    }
+                }
+                x if x == EatClaimKey::Dloas as i64 => {
+                    claims.dloas = Some(v.clone());
+                }
+                x if x == EatClaimKey::SwName as i64 => {
+                    if let Value::Text(s) = v {
+                        claims.sw_name = Some(s.clone());
+                    }
+                }
+                x if x == EatClaimKey::SwVersion as i64 => {
+                    claims.sw_version = Some(v.clone());
+                }
+                x if x == EatClaimKey::Manifests as i64 => {
+                    claims.manifests = Some(v.clone());
+                }
+                x if x == EatClaimKey::Measurements as i64 => {
+                    claims.measurements = Some(v.clone());
+                }
+                x if x == EatClaimKey::MeasRes as i64 => {
+                    claims.meas_res = Some(v.clone());
+                }
+                x if x == EatClaimKey::IntUse as i64 => {
+                    if let Value::Integer(i) = v {
+                        claims.int_use = Some(i128::from(*i) as u64);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(claims)
+    }
+
+    /// Decode the claims-set from raw CBOR bytes.
+    pub fn from_cbor_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        let value: Value = ciborium::de::from_reader(bytes)?;
+        Self::from_cbor_value(&value)
+    }
+
+    /// Alias for [`Self::from_cbor_bytes`].
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::from_cbor_bytes(bytes)
+    }
 }

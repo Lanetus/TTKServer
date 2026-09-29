@@ -120,15 +120,18 @@ async fn test_handle_request_not_found() {
 #[test]
 fn test_ttk_server_nitro_and_eat_integration() {
     use sha2::{Digest as ShaDigest, Sha256};
+    use ttk_server::attestation::nitro_doc::{
+        create_mock_attestation_document, parse_attestation_document, wrap_as_eat,
+    };
     use ttk_server::generate_identity;
-    use ttk_server::nitro::wrap_as_eat;
-    use ttk_server::nitro::{generate_attestation_for_cert_or_mock, parse_attestation_document};
+    use ttk_server::AttestationParams;
 
     // 1. Generate RA-TLS identity
     let (_certs, _key, cert_der) = generate_identity();
 
     // 2. Generate attestation document bound to certificate
-    let nitro_doc = generate_attestation_for_cert_or_mock(&cert_der)
+    let params = AttestationParams::new().with_user_data_hash(&cert_der);
+    let nitro_doc = create_mock_attestation_document(&params)
         .expect("Should generate nitro attestation document");
 
     // 3. Parse and verify attestation document
@@ -142,6 +145,16 @@ fn test_ttk_server_nitro_and_eat_integration() {
     );
 
     // 4. Wrap as RFC 9711 EAT token
-    let eat_token = wrap_as_eat(&nitro_doc).expect("Should wrap nitro document as EAT token");
+    let eat_claims = wrap_as_eat(&nitro_doc).expect("Should wrap nitro document as EAT claims");
+    let eat_token = eat_claims
+        .to_cbor_bytes()
+        .expect("Should wrap nitro document as EAT token");
     assert!(!eat_token.is_empty());
+
+    // 5. Test round-trip deserialization from bytes to EatClaimsSet
+    let deserialized = ttk_server::eat::EatClaimsSet::from_cbor_bytes(&eat_token)
+        .expect("Should deserialize EatClaimsSet from CBOR bytes");
+    assert_eq!(deserialized.iat, eat_claims.iat);
+    assert_eq!(deserialized.ueid, eat_claims.ueid);
+    assert_eq!(deserialized.eat_profile, eat_claims.eat_profile);
 }

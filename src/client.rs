@@ -11,16 +11,25 @@
 //!   which can be validated against the `user_data` field of the NSM Attestation Document
 //! - Sending HTTP/3 requests and receiving responses using `h3` and `h3-quinn`
 
+use aws_nitro_enclaves_cose::crypto::Openssl;
+use aws_nitro_enclaves_cose::sign::CoseSign1;
 use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
+use ciborium::Value;
 use hyper::body::Buf;
 use log::{debug, info};
 use quinn::Endpoint;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::Error as RustlsError;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use ttk_server::eat::EatClaimsSet;
+use x509_parser::prelude::*;
 
 /// Custom certificate verifier for Remote Attestation TLS (RA-TLS).
 ///
@@ -49,10 +58,41 @@ impl EnclaveCertVerifier {
     }
 }
 
+const ATTESTATION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 99999, 1];
+
 impl Default for EnclaveCertVerifier {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AttestationDocument {
+    pub module_id: String,
+    pub timestamp: u64,
+    pub digest: String,
+    pub pcrs: BTreeMap<usize, Vec<u8>>,
+    pub certificate: Vec<u8>,
+    pub cabundle: Vec<Vec<u8>>,
+    #[serde(default)]
+    pub public_key: Option<Vec<u8>>,
+    #[serde(default)]
+    pub user_data: Option<Vec<u8>>,
+    #[serde(default)]
+    pub nonce: Option<Vec<u8>>,
+}
+
+fn parse_attestation_doc(raw_bytes: &[u8]) -> Result<AttestationDocument, Box<dyn Error>> {
+    // 1. Unpack the COSE_Sign1 wrapper from raw CBOR bytes
+    let cose_sign1 = CoseSign1::from_bytes(raw_bytes)?;
+
+    // 2. Extract the payload bytes (this contains the CBOR-encoded document)
+    let payload_bytes = cose_sign1.get_payload::<Openssl>(None)?;
+
+    // 3. Deserialize the payload into our AttestationDocument struct
+    let doc: AttestationDocument = ciborium::from_reader(payload_bytes.as_slice())?;
+
+    Ok(doc)
 }
 
 impl ServerCertVerifier for EnclaveCertVerifier {
@@ -64,10 +104,27 @@ impl ServerCertVerifier for EnclaveCertVerifier {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        // Record the peer's certificate so the client can inspect it and compute its hash
-        if let Ok(mut guard) = self.received_cert.lock() {
-            *guard = Some(end_entity.clone().into_owned());
+        // 1. Extract the attestation document
+        let attestation_bytes = extract_attestation_doc(end_entity.as_ref())
+            .map_err(|_| RustlsError::General("Missing attestation extension".into()))?;
+
+        let _claims_set = EatClaimsSet::from_bytes(&attestation_bytes);
+        let map_val = _claims_set.unwrap().submods.unwrap();
+        if let Value::Map(entries) = map_val {
+            if let Some((first_key, first_value)) = entries.first() {
+                println!("First Key:   {:?}", first_key);
+                println!("First Value: {:?}", first_value);
+
+                let _ = parse_attestation_doc(first_value.as_bytes().unwrap())
+                    .map_err(|_| RustlsError::General("Invalid attestation document".into()))?;
+                println!("First Value: {:?}", first_value);
+            } else {
+                println!("Map is empty.");
+            }
+        } else {
+            println!("Not a CBOR Map.");
         }
+        // Note: For production mTLS/TLS, combine this with standard webpki signature checks.
         Ok(ServerCertVerified::assertion())
     }
 
@@ -94,6 +151,37 @@ impl ServerCertVerifier for EnclaveCertVerifier {
             .signature_verification_algorithms
             .supported_schemes()
     }
+}
+
+/// Extract raw attestation bytes from the leaf certificate
+pub fn extract_attestation_doc<'a>(
+    cert_der: &'a [u8],
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    // 1. Parse DER bytes into an X509 certificate
+    let (_, cert) = X509Certificate::from_der(cert_der)?;
+
+    // 2. Search for the custom extension by OID
+    for ext in cert.extensions() {
+        if ext
+            .oid
+            .iter()
+            .into_iter()
+            .flatten()
+            .eq(ATTESTATION_OID.iter().copied())
+        {
+            let raw_value = ext.value;
+
+            // 3. Un-wrap ASN.1 OCTET STRING header if present (Tag 0x04)
+            if !raw_value.is_empty() && raw_value[0] == 0x04 {
+                let (_, octet_string) = der_parser::der::parse_der_octetstring(raw_value)?;
+                return Ok(octet_string.as_slice()?.to_vec());
+            }
+
+            return Ok(raw_value.to_vec());
+        }
+    }
+
+    Err("Attestation extension OID not found in certificate".into())
 }
 
 /// Represents the response received from the HTTP/3 server.
@@ -318,6 +406,7 @@ pub fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Parse command-line target or default to `127.0.0.1:4433`.
+#[allow(dead_code)] // used by the `client` binary, which also compiles this file
 fn parse_args() -> (SocketAddr, String, String) {
     let args: Vec<String> = std::env::args().collect();
     let mut server_addr_str =
@@ -383,6 +472,7 @@ fn parse_args() -> (SocketAddr, String, String) {
     (server_addr, server_name, path)
 }
 
+#[allow(dead_code)] // entry point for the `client` binary; unused when built as a lib module
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     env_logger::init();
