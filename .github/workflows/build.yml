@@ -106,6 +106,7 @@ jobs:
           tags: |
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:v${{ steps.version.outputs.tag }}
+            ttkserver:local
 
       - name: Build EIF
         run: |
@@ -117,7 +118,7 @@ jobs:
               dnf install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel &&
               mkdir -p /var/log/nitro_enclaves &&
               nitro-cli build-enclave \
-                --docker-uri ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} \
+                --docker-uri ttkserver:local \
                 --output-file /out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.eif > /out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.json
             '
           cat out/TTKServer_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.json
