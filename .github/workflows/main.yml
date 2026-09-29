@@ -156,3 +156,48 @@ jobs:
           files: target/nextest/ci/junit.xml
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install mdBook
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook
+
+      # Writes the book to docs/book (default build dir next to docs/src)
+      - name: Build mdBook
+        run: mdbook build docs
+
+      # Clear docs restored by the cargo cache so only this crate's API is published
+      - name: Build Rust API docs
+        run: |
+          rm -rf target/doc
+          cargo doc --no-deps --lib --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      # Served under the book at api/, linked from the "API Reference" chapter (docs/src/api.md)
+      - name: Copy API docs into the book
+        run: |
+          rm -rf docs/book/api
+          cp -r target/doc docs/book/api
+
+      - name: Upload docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: docs/book
