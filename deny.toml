@@ -7,7 +7,12 @@ targets = [
 # Vulnerabilities are always denied by cargo-deny.
 unmaintained = "all"
 yanked = "deny"
-ignore = []
+ignore = [
+    # serde_cbor is unmaintained (no known vulnerability). It is pulled in
+    # transitively by aws-nitro-enclaves-cose and aws-nitro-enclaves-nsm-api,
+    # which have no release that drops it. Revisit when those crates migrate.
+    "RUSTSEC-2021-0127",
+]
 
 [licenses]
 allow = [
