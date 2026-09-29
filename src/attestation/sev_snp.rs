@@ -75,15 +75,7 @@ impl SevSnpSession {
     pub fn open() -> Result<Self, AttestationError> {
         let session = Self::open_at(CONFIGFS_TSM_REPORT)?;
         match std::env::var_os(VCEK_ENV) {
-            Some(path) => {
-                let vcek = std::fs::read(&path).map_err(|e| {
-                    AttestationError::InvalidInput(format!(
-                        "failed to read {VCEK_ENV} ({}): {e}",
-                        Path::new(&path).display()
-                    ))
-                })?;
-                session.with_vcek(&vcek)
-            }
+            Some(path) => session.with_vcek_file(path),
             None => Ok(session),
         }
     }
@@ -94,6 +86,19 @@ impl SevSnpSession {
             tsm: TsmRoot::open_at(report_root, "an SEV-SNP")?,
             vcek: None,
         })
+    }
+
+    /// Uses the VCEK certificate (DER or PEM) in the file at `path` instead of the certificate the
+    /// host attaches to the report.
+    pub fn with_vcek_file(self, path: impl AsRef<Path>) -> Result<Self, AttestationError> {
+        let path = path.as_ref();
+        let vcek = std::fs::read(path).map_err(|e| {
+            AttestationError::InvalidInput(format!(
+                "failed to read the VCEK certificate {}: {e}",
+                path.display()
+            ))
+        })?;
+        self.with_vcek(&vcek)
     }
 
     /// Uses `vcek` (DER or PEM) instead of the certificate the host attaches to the report.

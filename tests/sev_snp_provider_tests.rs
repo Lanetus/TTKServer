@@ -256,3 +256,47 @@ fn base64_encode(bytes: &[u8]) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
+
+#[test]
+fn truncated_cert_table_entry_is_rejected() {
+    let err = vcek_from_cert_table(&[1; 10]).unwrap_err();
+    assert!(err.to_string().contains("truncated entry"), "{err}");
+}
+
+#[test]
+fn vcek_is_loaded_from_a_file() {
+    let dir = TempDir::new();
+    let path = dir.0.join("vcek.der");
+    fs::write(&path, MILAN_VCEK).unwrap();
+    let root = TempDir::new();
+
+    assert!(SevSnpSession::open_at(&root.0)
+        .unwrap()
+        .with_vcek_file(&path)
+        .is_ok());
+    let err = SevSnpSession::open_at(&root.0)
+        .unwrap()
+        .with_vcek_file(dir.0.join("missing.der"))
+        .unwrap_err();
+    assert!(err.to_string().contains("failed to read the VCEK"), "{err}");
+}
+
+#[test]
+fn session_reports_its_name_and_propagates_errors() {
+    use ttk_server::attestation::AttestationProvider;
+
+    let root = TempDir::new();
+    let session = SevSnpSession::open_at(&root.0).unwrap();
+    assert_eq!(session.name(), "sev-snp");
+    let _ = SevSnpSession::is_available();
+
+    let params = AttestationParams::new().with_user_data(vec![1; 32]);
+    let err = session.generate_document(&params).unwrap_err();
+    assert!(err.to_string().contains("provider"), "{err}");
+
+    let with_key = params.with_public_key(vec![2; 8]);
+    assert!(matches!(
+        session.generate_document(&with_key),
+        Err(AttestationError::InvalidInput(_))
+    ));
+}
