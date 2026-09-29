@@ -50,7 +50,7 @@ cargo test
 This project uses GitHub Actions for CI/CD:
 
 *   **Main Workflow (`main.yml`):** Triggered on pushes to the `main` branch. This workflow builds the Docker image, bumps the version in `Cargo.toml`, and pushes the image to Amazon ECR with `latest` and version tags.
-*   **Test and Lint Workflow (`test-and-lint.yml`):** Triggered on pushes to any branch except `main`. This workflow runs tests and lints the code, automatically committing any formatting changes.
+* **Test and Lint Workflow (`CI.yml`):** Triggered on pushes to any branch except `main`. This workflow runs tests and lints the code, automatically committing any formatting changes.
 
 ## RATS Architecture (RFC 9334)
 
