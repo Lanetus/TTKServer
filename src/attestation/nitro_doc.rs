@@ -119,10 +119,6 @@ const EAT_PROFILE: &str = "tag:aws.amazon.com,2024:nitro-enclave-nested-eat";
 /// per RFC 9711 Section 4.2.1.
 const UEID_TYPE_RAND: u8 = 0x01;
 
-/// Submodule label used to embed the raw Nitro COSE_Sign1 document inside the
-/// EAT `submods` map.
-const NITRO_SUBMOD_NAME: &str = "aws_nitro";
-
 /// Wraps `nitro_doc` (raw COSE_Sign1 bytes from the NSM) as an RFC 9711 EAT
 /// claims-set and returns the CBOR-encoded bytes.
 ///
@@ -146,7 +142,7 @@ pub fn wrap_as_eat(nitro_doc: &[u8]) -> Result<EatClaimsSet, AttestationError> {
     ueid.extend_from_slice(&Sha256::digest(module_id.as_bytes()));
 
     let submods = Value::Map(vec![(
-        Value::Text(NITRO_SUBMOD_NAME.to_string()),
+        Value::Text(crate::verifier::submod::AWS_NITRO.to_string()),
         Value::Bytes(nitro_doc.to_vec()),
     )]);
 

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The `client` verifies AMD SEV-SNP, Intel TDX and Intel SGX evidence in addition to AWS Nitro. The server's EAT carries exactly one of the `submods` `aws_nitro`, `sev_snp` (`{report, vcek}`), `tdx` or `sgx` (DCAP quote).
+  - SEV-SNP: ARK → ASK → VCEK chain against pinned Milan, Genoa and Turin roots, VCEK `hwID` and TCB matched to the report, and the report's ECDSA P-384 signature.
+  - TDX and SGX: DCAP quote v3/v4/v5 with the embedded PCK chain verified against the pinned Intel SGX Root CA, the Quoting Enclave report signature and attestation-key binding, and the quote signature.
+- `ttk_server::verifier` module with `verify_evidence`, `TrustStore`, `Policy` and `VerifiedEvidence`.
+- `EnclaveCertVerifier::with_expected_measurement` for TEE measurements (e.g. `mrtd`, `rtmr0`, `mrenclave`, `measurement`), `allow_debug`, `with_trust_store` and `verified_evidence`.
+
+### Changed
+- **BREAKING:** The `client` rejects evidence from debug-mode TEEs (including Nitro enclaves with all-zero PCRs) unless `EnclaveCertVerifier::allow_debug` or `allow_mock` is set.
+- The AWS Nitro root is pinned by its full certificate instead of its SHA-256 fingerprint.
+
+### Security
+- SEV-SNP VCEK revocation, and Intel TCB status and QE identity (PCS collateral), are not yet evaluated: genuine but out-of-date or revoked platforms are accepted.
+
+## [0.11.1] - 2026-09-29
+
+No user-facing changes.
+
 ## [0.11.0] - 2026-09-29
 
 ### Added
@@ -125,7 +143,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/Lanetus/TTKServer/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/Lanetus/TTKServer/compare/v0.10.3...v0.11.0
 [0.10.3]: https://github.com/Lanetus/TTKServer/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/Lanetus/TTKServer/compare/v0.10.1...v0.10.2

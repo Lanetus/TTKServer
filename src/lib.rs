@@ -9,6 +9,7 @@ pub mod attestation;
 pub mod client;
 pub mod eat;
 pub mod server;
+pub mod verifier;
 
 // Re-export common types and functions for convenience
 pub use eat::{EatClaimKey, EatClaimsSet};
