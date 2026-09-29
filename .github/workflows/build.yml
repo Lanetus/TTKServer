@@ -1,0 +1,55 @@
+name: Build
+
+# Manually triggered: builds the production package and publishes it to crates.io.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and package only; don't upload to crates.io"
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    # Only release what is on main.
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --locked
+
+      # Production build: default features only, so the test-only `client` binary is not built.
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: TTKServer-${{ github.sha }}
+          path: target/release/TTKServer
+          if-no-files-found: error
+
+      # Packages the crate and verifies that it builds from the packaged sources.
+      - name: Package crate
+        run: cargo package --locked
+
+      - name: Publish to crates.io
+        if: ${{ !inputs.dry_run }}
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
