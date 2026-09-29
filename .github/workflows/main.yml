@@ -68,7 +68,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.arch }})
-    needs: test
+    needs: [test, bump_version]
     strategy:
       matrix:
         include:
