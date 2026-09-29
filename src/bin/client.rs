@@ -5,9 +5,99 @@
 //! the responses. Built only with the non-default `test-client` feature, so it is never part
 //! of a production build.
 
-use ttk_server::client::{
-    parse_client_args, ClientTarget, EnclaveCertVerifier, TtkClient, CLIENT_USAGE,
-};
+use axum::http::Uri;
+use std::net::SocketAddr;
+use ttk_server::client::{EnclaveCertVerifier, TtkClient};
+
+/// Usage text of this binary.
+const CLIENT_USAGE: &str = "\
+Usage: client [OPTIONS] [URL]
+
+Options:
+  -s, --server-name <NAME>  SNI server name (default: localhost)
+  -p, --path <PATH>         Request path (default: /)
+  -a, --addr <ADDR>         Server socket address (default: 127.0.0.1:4433)
+  -h, --help                Print help information
+
+Examples:
+  client
+  client https://127.0.0.1:4433/evidence.eat
+  client --addr 127.0.0.1:4433 --server-name enclave.local --path /evidence.eat
+";
+
+/// What a `client` invocation should connect to and request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClientTarget {
+    /// Server socket address.
+    server_addr: SocketAddr,
+    /// SNI server name.
+    server_name: String,
+    /// Request path, including any query string.
+    path: String,
+}
+
+/// Parses `client` arguments (without the program name).
+///
+/// `default_addr` and `default_name` come from `TTK_SERVER_ADDR` and `TTK_SERVER_NAME`; they
+/// fall back to `127.0.0.1:4433` and `localhost`. An unparsable address falls back
+/// to `127.0.0.1:4433`. Returns `None` if help was requested.
+fn parse_client_args(
+    args: &[String],
+    default_addr: Option<String>,
+    default_name: Option<String>,
+) -> Option<ClientTarget> {
+    let mut server_addr_str = default_addr.unwrap_or_else(|| "127.0.0.1:4433".to_string());
+    let mut server_name = default_name.unwrap_or_else(|| "localhost".to_string());
+    let mut path = "/".to_string();
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--help" || arg == "-h" {
+            return None;
+        } else if (arg == "--server-name" || arg == "-s") && i + 1 < args.len() {
+            i += 1;
+            server_name = args[i].clone();
+        } else if (arg == "--path" || arg == "-p") && i + 1 < args.len() {
+            i += 1;
+            path = args[i].clone();
+        } else if (arg == "--addr" || arg == "-a") && i + 1 < args.len() {
+            i += 1;
+            server_addr_str = args[i].clone();
+        } else if !arg.starts_with('-') {
+            // Positional URL or address
+            if let Ok(uri) = arg.parse::<Uri>() {
+                if let Some(host) = uri.host() {
+                    let port = uri.port_u16().unwrap_or(4433);
+                    server_addr_str = format!("{}:{}", host, port);
+                    if host != "127.0.0.1" && host != "0.0.0.0" {
+                        server_name = host.to_string();
+                    }
+                }
+                if !uri.path().is_empty() {
+                    path = uri.path().to_string();
+                    if let Some(query) = uri.query() {
+                        path.push('?');
+                        path.push_str(query);
+                    }
+                }
+            } else {
+                server_addr_str = arg.clone();
+            }
+        }
+        i += 1;
+    }
+
+    let server_addr: SocketAddr = server_addr_str
+        .parse()
+        .unwrap_or_else(|_| "127.0.0.1:4433".parse().unwrap());
+
+    Some(ClientTarget {
+        server_addr,
+        server_name,
+        path,
+    })
+}
 
 /// Parses the process arguments and environment, printing usage and exiting on `--help`.
 fn parse_args() -> ClientTarget {
