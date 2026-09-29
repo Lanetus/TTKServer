@@ -18,6 +18,9 @@ pub mod nitro;
 #[cfg(feature = "nitro")]
 pub use nitro::NsmSession;
 
+#[cfg(any(feature = "sev-snp", feature = "tdx"))]
+pub mod tsm;
+
 #[cfg(feature = "sev-snp")]
 pub mod sev_snp;
 
