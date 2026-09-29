@@ -10,7 +10,7 @@ WORKDIR /app
 # Pre-copy manifests to leverage Docker layer caching for dependencies
 COPY ../Cargo.toml Cargo.lock ./
 COPY ../src ./src
-
+COPY ../benches ./benches
 # Build the server binary in release mode, caching the cargo registry and
 # incremental build artifacts across runs (per-platform, since buildx builds
 # amd64/arm64 in separate BuildKit sessions)
