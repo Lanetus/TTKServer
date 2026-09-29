@@ -4,14 +4,10 @@ targets = [
 ]
 
 [advisories]
-# Moved severity levels into [advisories.lints] or advisory-specific settings
+# Vulnerabilities are always denied by cargo-deny.
 unmaintained = "all"
 yanked = "deny"
 ignore = []
-
-[advisories.lints]
-vulnerability = "deny"
-notice = "warn"
 
 [licenses]
 allow = [
@@ -21,9 +17,6 @@ allow = [
     "Unicode-3.0",
 ]
 confidence-threshold = 0.8
-
-[licenses.lints]
-unlicensed = "deny"
 
 [bans]
 multiple-versions = "warn"
