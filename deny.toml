@@ -1,17 +1,16 @@
 [graph]
-targets = []
-all-targets = true
-
-# Check for security advisories (via RustSec)
-[advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-notice = "warn"
-ignore = [
-    # "RUSTSEC-0000-0000", # Example: Ignore specific advisory ID if needed
+# Replaced 'all-targets = true' with targets list
+targets = [
+    { triple = "x86_64-unknown-linux-musl" },
 ]
 
-# Check license compliance across dependencies
+[advisories]
+vulnerability = "deny"
+# Changed from "warn" to enum string
+unmaintained = "all"
+notice = "warn"
+ignore = []
+
 [licenses]
 unlicensed = "deny"
 allow = [
@@ -22,24 +21,13 @@ allow = [
 ]
 confidence-threshold = 0.8
 
-[[licenses.clarify]]
-name = "ring"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
-
-# Restrict duplicate dependencies or forbid specific crates
 [bans]
-multiple-versions = "warn" # Flag duplicate crate versions in dependency tree
-wildcards = "deny"         # Forbid wildcard dependencies (e.g. "*")
+multiple-versions = "warn"
+wildcards = "deny"
 highlight = "all"
-deny = [
-    # { name = "openssl" }, # Example: Forbid specific crates
-]
-skip = [
-    # { name = "either", version = "1.5.0" }, # Allow specific older duplicate versions
-]
+deny = []
+skip = []
 
-# Ensure dependencies come only from trusted registries
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
