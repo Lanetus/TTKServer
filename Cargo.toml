@@ -3,6 +3,7 @@ name = "TTKServer"
 version = "0.9.2"
 edition = "2021"
 default-run = "TTKServer"
+license = "MIT"
 
 [lib]
 name = "ttk_server"
@@ -18,7 +19,8 @@ path = "src/client.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-hyper = { version = "0.14", features = ["full"] }
+bytes = "1"
+tower-service = "0.3"
 rustls = { version = "0.23", features = ["ring"] }
 aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
 sha2 = "0.10"
@@ -33,7 +35,6 @@ axum = "0.8.9"
 h3 = "0.0.7"        # The core HTTP/3 state machine
 h3-quinn = "0.0.9"
 time = "0.3.36"
-rustls-pemfile = "2.2.0"
 der-parser = "10.0.0"
 x509-parser = "0.18.1"
 serde = { version = "1.0.228", features = ["derive"] }  # The adapter bridging Quinn's QUIC API to h3's Transport trait

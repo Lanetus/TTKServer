@@ -1,20 +1,40 @@
-[advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-
-[licenses]
-# Reject viral copyleft licenses like GPL
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause"]
-
-[bans]
-# Disallow duplicate versions of heavy crates
-multiple-versions = "warn"
-# Explicitly block specific known bad crates
-deny = [
-    { name = "openssl" } # Force team to use rustls
+[graph]
+targets = [
+    { triple = "x86_64-unknown-linux-musl" },
 ]
 
+[advisories]
+# Vulnerabilities are always denied by cargo-deny.
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+    # serde_cbor is unmaintained (no known vulnerability). It is pulled in
+    # transitively by aws-nitro-enclaves-cose and aws-nitro-enclaves-nsm-api,
+    # which have no release that drops it. Revisit when those crates migrate.
+    "RUSTSEC-2021-0127",
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "ISC",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+deny = []
+skip = []
+
 [sources]
-# Reject crates installed directly from unverified git branches
 unknown-registry = "deny"
 unknown-git = "deny"
+allow-registry = [
+    "https://github.com/rust-lang/crates.io-index",
+]
+allow-git = []

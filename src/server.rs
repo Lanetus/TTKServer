@@ -16,12 +16,13 @@
 use crate::{attestation, AttestationParams};
 use axum::{routing::get, Router};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use hyper::service::Service;
 use log::info;
 use quinn::{Endpoint, ServerConfig};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
+use tower_service::Service;
 
 const ATTESTATION_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 99999, 1];
 
@@ -124,7 +125,7 @@ pub async fn run() -> Result<(), BoxError> {
 /// Requests evidence from the detected attestation provider, bound to the TLS key,
 /// and returns it as CBOR-encoded RFC 9711 EAT bytes.
 fn generate_evidence(key_pair: &KeyPair) -> Result<Vec<u8>, BoxError> {
-    let params = AttestationParams::new().with_user_data_hash(&key_pair.serialized_der());
+    let params = AttestationParams::new().with_user_data_hash(key_pair.serialized_der());
 
     let provider = attestation::detect()?;
     info!("Using attestation provider: {}", provider.name());
@@ -144,9 +145,9 @@ fn build_tls_config(
     let cert_pem = create_cert_with_attestation(key_pair, "enclave.internal", eat_bytes, 30)?;
     let key_pem = key_pair.serialize_pem();
 
-    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
-    let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())?.ok_or("Missing key")?;
+    let certs =
+        CertificateDer::pem_slice_iter(cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
+    let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())?;
 
     let mut config = rustls::ServerConfig::builder()
         .with_no_client_auth()
