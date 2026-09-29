@@ -7,15 +7,19 @@ use crate::{AttestationParams, EatClaimsSet};
 /// Always-available provider producing synthetic (unsigned) Nitro-format documents.
 pub struct MockSession;
 
+/// Mock implementation of [`AttestationProvider`]; builds a synthetic Nitro-format document.
 impl AttestationProvider for MockSession {
+    /// Returns `"mock"`.
     fn name(&self) -> &'static str {
         "mock"
     }
 
+    /// The mock provider is always available.
     fn is_available() -> bool {
         true
     }
 
+    /// Builds a mock attestation document for `params` and wraps it as an EAT claims-set.
     fn generate_document(
         &self,
         params: &AttestationParams,

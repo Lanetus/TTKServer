@@ -48,6 +48,7 @@ pub struct AttestationParams {
     pub public_key: Option<Vec<u8>>,
 }
 
+/// Builder-style setters and accessors for the attestation parameters.
 impl AttestationParams {
     /// Creates a new, empty set of attestation parameters.
     pub fn new() -> Self {

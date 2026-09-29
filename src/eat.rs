@@ -2,7 +2,7 @@
 //!
 //! Defines the full set of IANA-registered EAT claim keys ([`EatClaimKey`]) and a
 //! strongly-typed claims-set structure ([`EatClaimsSet`]) that can be serialised to
-//! CBOR.  Nitro-enclave-specific wrapping logic lives in [`crate::nitro`].
+//! CBOR.  Nitro-enclave-specific wrapping logic lives in [`crate::attestation::nitro_doc`].
 use ciborium::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -68,7 +68,9 @@ pub enum EatClaimKey {
     IntUse = 275,
 }
 
+/// Converts a claim key into its integer CBOR map key.
 impl From<EatClaimKey> for i64 {
+    /// Returns the numeric key of `k`.
     fn from(k: EatClaimKey) -> i64 {
         k as i64
     }
@@ -202,6 +204,7 @@ pub struct EatClaimsSet {
     pub int_use: Option<u64>,
 }
 
+/// CBOR encoding and decoding of the claims-set.
 impl EatClaimsSet {
     /// Serialise the populated fields into a CBOR map (`Value::Map`).
     ///

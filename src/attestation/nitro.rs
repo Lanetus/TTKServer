@@ -40,15 +40,19 @@ pub struct NsmSession {
     fd: i32,
 }
 
+/// Nitro implementation of [`AttestationProvider`], backed by `/dev/nsm`.
 impl AttestationProvider for NsmSession {
+    /// Returns `"aws-nitro"`.
     fn name(&self) -> &'static str {
         "aws-nitro"
     }
 
+    /// Returns `true` if the NSM device `/dev/nsm` exists.
     fn is_available() -> bool {
         Path::new("/dev/nsm").exists()
     }
 
+    /// Requests a real attestation document from the NSM for `params` and wraps it as an EAT claims-set.
     fn generate_document(
         &self,
         params: &AttestationParams,
@@ -57,6 +61,7 @@ impl AttestationProvider for NsmSession {
     }
 }
 
+/// NSM operations: opening a session, attestation requests and PCR management.
 impl NsmSession {
     /// Opens a new session with the Nitro Security Module.
     ///
@@ -182,7 +187,9 @@ impl NsmSession {
     }
 }
 
+/// Closes the NSM device file descriptor when the session goes out of scope.
 impl Drop for NsmSession {
+    /// Calls `nsm_exit` on the open file descriptor, at most once.
     fn drop(&mut self) {
         if self.fd >= 0 {
             nsm_exit(self.fd);
