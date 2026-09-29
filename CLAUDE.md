@@ -39,6 +39,12 @@ cargo deny check                              # config in deny.toml
 - Crypto: rustls 0.23 with the `ring` provider (installed explicitly in `main`); quinn 0.11 + h3 0.0.7 / h3-quinn 0.0.9 — versions are tightly coupled, upgrade together.
 - The attestation OID `1.3.6.1.4.1.99999.1` in `main.rs` is a placeholder (not a registered PEN).
 - Releases use conventional commits (`feat:`, `fix:`, `chore(release):`) and version bumps in `Cargo.toml`.
+- **STRICT commit message rule:** every commit message MUST start with one of these prefixes, no exceptions:
+  - `fix:` — bug fixes
+  - `feat:` — new features (minor version bump)
+  - `major:` — breaking changes (major version bump)
+
+  Never write an unprefixed commit message. (`chore(release):` is reserved for the automated release bump.)
 
 ## Gotchas
 - `EnclaveCertVerifier` intentionally skips CA validation; trust comes from checking the attestation doc and that its `user_data` matches the cert/key hash. Don't reuse it outside RA-TLS flows.
