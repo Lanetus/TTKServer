@@ -3,17 +3,12 @@
 //! Provides modules for AWS Nitro Enclave attestation, Entity Attestation Tokens (EAT),
 //! and remote attestation identity generation.
 
+extern crate self as ttk_server;
+
+pub mod attestation;
 pub mod client;
 pub mod eat;
-#[cfg(feature = "mock")]
-mod mock;
-#[cfg(feature = "mock")]
-pub use mock::MockSession as AttestationProcess;
-
-#[cfg(feature = "nitro")]
-pub mod nitro;
-#[cfg(feature = "nitro")]
-pub use nitro::NsmSession as AttestationProcess;
+pub mod server;
 
 // Re-export common types and functions for convenience
 pub use eat::{EatClaimKey, EatClaimsSet};
@@ -21,10 +16,6 @@ pub use eat::{EatClaimKey, EatClaimsSet};
 use rcgen::generate_simple_self_signed;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
-
-pub trait Attestation {
-    fn generate_document(attestation_params: &AttestationParams) -> EatClaimsSet;
-}
 
 /// Generates a self-signed ephemeral TLS certificate and private key for Remote Attestation TLS (RA-TLS).
 ///

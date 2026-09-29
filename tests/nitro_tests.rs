@@ -1,9 +1,10 @@
 use aws_nitro_enclaves_nsm_api::api::Digest;
 use sha2::{Digest as ShaDigest, Sha256};
-use ttk_server::nitro::{
-    create_mock_attestation_document, extract_cose_payload, generate_attestation_for_cert_or_mock,
-    parse_attestation_document, AttestationParams, NitroError, NsmSession,
+use ttk_server::attestation::nitro_doc::{
+    create_mock_attestation_document, extract_cose_payload, parse_attestation_document,
 };
+use ttk_server::attestation::{by_name, AttestationError, NsmSession};
+use ttk_server::AttestationParams;
 
 #[test]
 fn test_attestation_params_builder() {
@@ -64,8 +65,8 @@ fn test_create_and_parse_mock_attestation_doc() {
 #[test]
 fn test_generate_attestation_or_mock() {
     let cert_data = b"self-signed-ra-tls-cert";
-    let doc = generate_attestation_for_cert_or_mock(cert_data)
-        .expect("Should generate mock or real attestation");
+    let params = AttestationParams::new().with_user_data_hash(cert_data);
+    let doc = create_mock_attestation_document(&params).expect("Should generate mock attestation");
 
     let parsed = parse_attestation_document(&doc).expect("Must be valid attestation document");
     let expected_hash = Sha256::digest(cert_data);
@@ -80,7 +81,7 @@ fn test_from_invalid_raw_fd() {
     let result = NsmSession::from_raw_fd(-1);
     assert!(result.is_err());
     match result {
-        Err(NitroError::DeviceOpenFailed(_)) => {}
+        Err(AttestationError::DeviceOpenFailed(_)) => {}
         _ => panic!("Expected DeviceOpenFailed error"),
     }
 }
@@ -89,4 +90,25 @@ fn test_from_invalid_raw_fd() {
 fn test_extract_cose_payload_invalid_data() {
     let invalid = b"not a cbor data";
     assert!(extract_cose_payload(invalid).is_err());
+}
+
+#[test]
+fn test_mock_provider_by_name() {
+    let provider = by_name("mock").expect("mock provider is compiled in by default");
+    assert_eq!(provider.name(), "mock");
+
+    let params = AttestationParams::new().with_user_data_hash(b"cert");
+    let claims = provider
+        .generate_document(&params)
+        .expect("mock provider should produce an EAT claims-set");
+    assert!(claims.submods.is_some());
+    assert!(claims.eat_profile.is_some());
+}
+
+#[test]
+fn test_unknown_provider_is_rejected() {
+    assert!(matches!(
+        by_name("no-such-tee"),
+        Err(AttestationError::Unsupported(_))
+    ));
 }
