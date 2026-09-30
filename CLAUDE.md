@@ -42,6 +42,7 @@ cargo run --features test-client --bin client -- <args>   # see parse_args() in 
 cargo run --bin relay -- --cid <CID>         # parent-side UDP :443 -> enclave vsock relay (Linux)
 cargo fmt && cargo clippy --all-targets -- -D warnings
 cargo deny check                              # config in deny.toml
+scripts/build-eif.sh [amd64|arm64]            # build the EIF locally with Docker -> out/TTKServer_v<ver>_<arch>.eif + .json (PCRs)
 ```
 
 ## Conventions
