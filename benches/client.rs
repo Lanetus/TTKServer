@@ -63,7 +63,7 @@ fn bench_online(c: &mut Criterion) {
         })
     });
 
-    let mut client = rt.block_on(connect(addr));
+    let client = rt.block_on(connect(addr));
     group.bench_function("get_root", |b| {
         b.iter(|| rt.block_on(client.get(black_box("/"))).unwrap())
     });
