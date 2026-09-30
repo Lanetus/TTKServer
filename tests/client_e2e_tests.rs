@@ -22,7 +22,7 @@ fn start_server() -> SocketAddr {
 #[tokio::test(flavor = "multi_thread")]
 async fn client_verifies_the_mock_server_and_exchanges_requests() {
     let addr = start_server();
-    let mut client = TtkClient::connect_with_verifier(
+    let client = TtkClient::connect_with_verifier(
         addr,
         "localhost",
         EnclaveCertVerifier::new().allow_mock(),
@@ -100,7 +100,7 @@ async fn client_connects_over_ipv6() {
     let addr = server.local_addr().unwrap();
     tokio::spawn(server.serve());
 
-    let mut client = TtkClient::connect_with_verifier(
+    let client = TtkClient::connect_with_verifier(
         addr,
         "localhost",
         EnclaveCertVerifier::new().allow_mock(),

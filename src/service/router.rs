@@ -7,7 +7,9 @@
 //! | `POST /faf`         | Forwards a [`FafRequest`] to its relay; see [`FafRequest`]      |
 //!
 //! When forwarding a [`FafRequest`], this server is itself a RATS (RFC 9334) Relying Party: it
-//! only sends the message and key to a relay whose RA-TLS attestation verifies.
+//! only sends the message and key to a relay whose RA-TLS attestation verifies. Verified relay
+//! connections are kept open and reused (see [`MAX_POOLED_RELAYS`]), so the RA-TLS handshake
+//! and attestation check happen once per relay rather than once per request.
 
 use crate::client::{EnclaveCertVerifier, TtkClient};
 use axum::extract::State;
@@ -15,9 +17,10 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// Boxed error type that can cross task boundaries.
 type SendError = Box<dyn std::error::Error + Send + Sync>;
@@ -43,9 +46,68 @@ pub const RELAY_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// Environment variable that makes [`run`](super::server::run) accept mock attestation from relay servers.
 pub const ALLOW_MOCK_RELAY_ENV: &str = "TTK_ALLOW_MOCK_ATTESTATION";
 
-/// Builds the verifier used to attest a relay server. Called once per forwarded request, so
+/// Builds the verifier used to attest a relay server. Called once per new relay connection, so
 /// each connection gets its own verifier state.
 pub type RelayVerifierFactory = Arc<dyn Fn() -> EnclaveCertVerifier + Send + Sync>;
+
+/// Most relay connections kept open for reuse at once. Relays beyond this limit are still
+/// served, over a one-off connection closed after the request.
+pub const MAX_POOLED_RELAYS: usize = 64;
+
+/// Verified relay connections, keyed by `(host, port)` as given in `relay_server`.
+///
+/// Entries are not kept alive: a connection closed by the QUIC idle timeout (or the relay) is
+/// dropped the next time the pool is consulted.
+#[derive(Default)]
+struct RelayPool {
+    clients: Mutex<HashMap<(String, u16), Arc<TtkClient>>>,
+}
+
+/// Lookup, insertion and eviction of pooled relay connections.
+impl RelayPool {
+    /// Returns the open connection to `host:port`, evicting it if it has closed.
+    fn get(&self, host: &str, port: u16) -> Option<Arc<TtkClient>> {
+        let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+        let key = (host.to_string(), port);
+        match clients.get(&key) {
+            Some(client) if !client.is_closed() => Some(client.clone()),
+            Some(_) => {
+                clients.remove(&key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Pools `client` as the connection to `host:port`, replacing any previous one. Returns
+    /// `false` (and pools nothing) if the pool is full of open connections to other relays.
+    fn insert(&self, host: &str, port: u16, client: Arc<TtkClient>) -> bool {
+        let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+        clients.retain(|_, c| !c.is_closed());
+        let key = (host.to_string(), port);
+        if clients.len() >= MAX_POOLED_RELAYS && !clients.contains_key(&key) {
+            return false;
+        }
+        clients.insert(key, client);
+        true
+    }
+
+    /// Evicts `client` from `host:port`, unless it has already been replaced by another one.
+    fn remove(&self, host: &str, port: u16, client: &Arc<TtkClient>) {
+        let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
+        let key = (host.to_string(), port);
+        if clients.get(&key).is_some_and(|c| Arc::ptr_eq(c, client)) {
+            clients.remove(&key);
+        }
+    }
+}
+
+/// State shared by the `/faf` handlers.
+#[derive(Clone)]
+struct FafState {
+    relay_verifier: RelayVerifierFactory,
+    relays: Arc<RelayPool>,
+}
 
 /// Body of `POST /faf`: a message and key to hand to `relay_server`.
 ///
@@ -75,7 +137,10 @@ pub(crate) fn build_router(
         .route("/", get(|| async { "Hello from Enclave over HTTP/3!" }))
         .route("/evidence.eat", get(move || async move { eat_b64 }))
         .route("/faf", post(faf))
-        .with_state(relay_verifier)
+        .with_state(FafState {
+            relay_verifier,
+            relays: Arc::default(),
+        })
 }
 
 /// `POST /faf`: forwards the message and key to the relay and answers `200 OK` once the relay
@@ -85,7 +150,7 @@ pub(crate) fn build_router(
 /// attestation or answers anything but `200`, and `504` if it doesn't answer within
 /// [`RELAY_TIMEOUT`].
 async fn faf(
-    State(relay_verifier): State<RelayVerifierFactory>,
+    State(state): State<FafState>,
     Json(request): Json<FafRequest>,
 ) -> (StatusCode, String) {
     let FafRequest {
@@ -120,7 +185,7 @@ async fn faf(
 
     let relayed = tokio::time::timeout(
         RELAY_TIMEOUT,
-        forward_to_relay(&host, port, relay_verifier(), &forward),
+        forward_to_relay(&state, &host, port, &forward),
     )
     .await;
     match relayed {
@@ -194,16 +259,48 @@ async fn connect_to_relay(
     Err(last_error)
 }
 
-/// Resolves the relay, connects over RA-TLS (verified by `verifier`), posts `request` to its
-/// `/faf` and returns the relay's status.
+/// Posts `request` to the relay's `/faf` and returns the relay's status.
+///
+/// Reuses the pooled connection to the relay if there is one; otherwise resolves the relay,
+/// connects over RA-TLS (verified by a fresh verifier from `state`) and pools the connection.
+/// A pooled connection that fails the request after it has closed (e.g. it idled out as the
+/// request was sent) is evicted and the request is retried once over a new connection.
 async fn forward_to_relay(
+    state: &FafState,
     host: &str,
     port: u16,
-    verifier: EnclaveCertVerifier,
     request: &FafRequest,
 ) -> Result<StatusCode, SendError> {
-    let mut client = connect_to_relay(host, port, verifier).await?;
+    if let Some(client) = state.relays.get(host, port) {
+        match client.post_json("/faf", request).await {
+            Ok(response) => return Ok(response.status),
+            Err(e) => {
+                state.relays.remove(host, port, &client);
+                if !client.is_closed() {
+                    return Err(e);
+                }
+                debug!("/faf: pooled connection to {host}:{port} closed ({e}); reconnecting");
+            }
+        }
+    }
+
+    let client = Arc::new(connect_to_relay(host, port, (state.relay_verifier)()).await?);
+    let pooled = state.relays.insert(host, port, client.clone());
     let response = client.post_json("/faf", request).await;
-    let _ = client.close().await;
+    if !pooled {
+        close_in_background(client);
+    } else if response.is_err() {
+        state.relays.remove(host, port, &client);
+    }
     Ok(response?.status)
+}
+
+/// Closes `client` gracefully without delaying the caller: waiting for the QUIC connection to
+/// drain takes about three probe timeouts (tens of milliseconds even on loopback).
+fn close_in_background(client: Arc<TtkClient>) {
+    if let Ok(client) = Arc::try_unwrap(client) {
+        tokio::spawn(async move {
+            let _ = client.close().await;
+        });
+    }
 }

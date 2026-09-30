@@ -294,8 +294,12 @@ impl ClientResponse {
 }
 
 /// HTTP/3 client for communicating with TTKServer over QUIC.
+///
+/// Requests take `&self` and run as independent HTTP/3 streams, so one client (e.g. shared
+/// behind an `Arc`) can carry concurrent requests over the same QUIC connection.
 pub struct TtkClient {
     endpoint: Endpoint,
+    connection: quinn::Connection,
     send_request: h3::client::SendRequest<h3_quinn::OpenStreams, axum::body::Bytes>,
     driver_handle: tokio::task::JoinHandle<Result<(), h3::Error>>,
     server_addr: SocketAddr,
@@ -364,7 +368,7 @@ impl TtkClient {
         }
 
         // Establish HTTP/3 on top of the QUIC connection
-        let h3_quic_conn = h3_quinn::Connection::new(connection);
+        let h3_quic_conn = h3_quinn::Connection::new(connection.clone());
         let (mut driver, send_request) = h3::client::new(h3_quic_conn).await?;
 
         // Drive the HTTP/3 connection state machine in the background
@@ -373,6 +377,7 @@ impl TtkClient {
 
         Ok(Self {
             endpoint,
+            connection,
             send_request,
             driver_handle,
             server_addr,
@@ -389,6 +394,12 @@ impl TtkClient {
     /// Return the SNI server name configured for this client.
     pub fn server_name(&self) -> &str {
         &self.server_name
+    }
+
+    /// Returns `true` once the QUIC connection has closed (e.g. idle timeout or peer close);
+    /// a closed client can no longer send requests.
+    pub fn is_closed(&self) -> bool {
+        self.connection.close_reason().is_some()
     }
 
     /// Retrieve the peer's certificate DER bytes if captured.
@@ -412,7 +423,7 @@ impl TtkClient {
 
     /// Send an HTTP/3 GET request to the specified path.
     pub async fn get(
-        &mut self,
+        &self,
         path: &str,
     ) -> Result<ClientResponse, Box<dyn std::error::Error + Send + Sync>> {
         let uri: Uri = if path.starts_with('/') {
@@ -434,7 +445,7 @@ impl TtkClient {
 
     /// Send an HTTP/3 POST request with the given body to the specified path.
     pub async fn post(
-        &mut self,
+        &self,
         path: &str,
         body: &[u8],
     ) -> Result<ClientResponse, Box<dyn std::error::Error + Send + Sync>> {
@@ -444,7 +455,7 @@ impl TtkClient {
 
     /// Send an HTTP/3 POST request with `value` serialized as a JSON body to the specified path.
     pub async fn post_json<T: Serialize + ?Sized>(
-        &mut self,
+        &self,
         path: &str,
         value: &T,
     ) -> Result<ClientResponse, Box<dyn std::error::Error + Send + Sync>> {
@@ -455,7 +466,7 @@ impl TtkClient {
 
     /// Send an HTTP/3 POST request with the given body and `Content-Type`.
     async fn post_with_content_type(
-        &mut self,
+        &self,
         path: &str,
         content_type: &str,
         body: &[u8],
@@ -480,12 +491,12 @@ impl TtkClient {
 
     /// Send an HTTP/3 request with an optional payload and receive the response.
     pub async fn send(
-        &mut self,
+        &self,
         req: Request<()>,
         payload: Option<&[u8]>,
     ) -> Result<ClientResponse, Box<dyn std::error::Error + Send + Sync>> {
         debug!("Sending HTTP/3 request: {} {}", req.method(), req.uri());
-        let mut stream = self.send_request.send_request(req).await?;
+        let mut stream = self.send_request.clone().send_request(req).await?;
 
         if let Some(data) = payload {
             if !data.is_empty() {

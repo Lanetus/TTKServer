@@ -38,7 +38,7 @@ fn request(relay_server: Option<String>) -> FafRequest {
 #[tokio::test(flavor = "multi_thread")]
 async fn faf_relays_to_an_attested_relay_and_answers_200() {
     let relay = start_server();
-    let mut client = connect(start_server()).await;
+    let client = connect(start_server()).await;
 
     let response = client
         .post_json("/faf", &request(Some(relay.to_string())))
@@ -50,9 +50,29 @@ async fn faf_relays_to_an_attested_relay_and_answers_200() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn faf_reuses_the_relay_connection_across_sequential_and_concurrent_requests() {
+    let relay = start_server();
+    let client = connect(start_server()).await;
+    let req = request(Some(relay.to_string()));
+
+    // The first request pools the relay connection; the later ones reuse it.
+    for _ in 0..3 {
+        let response = client.post_json("/faf", &req).await.unwrap();
+        assert_eq!(response.status, 200, "{:?}", response.text());
+    }
+    // Concurrent requests share the pooled connection as separate HTTP/3 streams.
+    let send = || client.post_json("/faf", &req);
+    let (a, b, c, d) = tokio::join!(send(), send(), send(), send());
+    for response in [a, b, c, d] {
+        assert_eq!(response.unwrap().status, 200);
+    }
+    client.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn faf_accepts_an_https_relay_url() {
     let relay = start_server();
-    let mut client = connect(start_server()).await;
+    let client = connect(start_server()).await;
 
     let url = format!("https://localhost:{}", relay.port());
     let response = client.post_json("/faf", &request(Some(url))).await.unwrap();
@@ -62,7 +82,7 @@ async fn faf_accepts_an_https_relay_url() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn faf_without_relay_server_is_the_last_hop() {
-    let mut client = connect(start_server()).await;
+    let client = connect(start_server()).await;
 
     let response = client.post_json("/faf", &request(None)).await.unwrap();
     assert_eq!(response.status, 200);
@@ -74,7 +94,7 @@ async fn faf_without_relay_server_is_the_last_hop() {
 async fn faf_answers_502_when_the_relay_fails_attestation() {
     // The default relay policy accepts only genuine TEE evidence, so a mock relay is rejected.
     let relay = start_server();
-    let mut client = connect(start(|server| server)).await;
+    let client = connect(start(|server| server)).await;
 
     let response = client
         .post_json("/faf", &request(Some(relay.to_string())))
@@ -87,7 +107,7 @@ async fn faf_answers_502_when_the_relay_fails_attestation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn faf_rejects_an_invalid_relay_server() {
-    let mut client = connect(start_server()).await;
+    let client = connect(start_server()).await;
 
     for bad in [
         "http://localhost:4433",
@@ -106,7 +126,7 @@ async fn faf_rejects_an_invalid_relay_server() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn faf_rejects_malformed_requests() {
-    let mut client = connect(start_server()).await;
+    let client = connect(start_server()).await;
 
     // Not JSON.
     let not_json = client.post("/faf", b"message=hi").await.unwrap();
@@ -122,7 +142,7 @@ async fn faf_rejects_malformed_requests() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn oversized_request_bodies_get_413() {
-    let mut client = connect(start_server()).await;
+    let client = connect(start_server()).await;
 
     let huge = FafRequest {
         message: "x".repeat(ttk_server::server::MAX_REQUEST_BODY + 1),

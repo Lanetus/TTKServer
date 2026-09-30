@@ -8,6 +8,7 @@
 
 use axum::http::Uri;
 use std::net::SocketAddr;
+use std::time::Instant;
 use ttk_server::client::{EnclaveCertVerifier, TtkClient};
 use ttk_server::router::FafRequest;
 
@@ -151,14 +152,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         verifier = verifier.allow_mock();
     }
 
-    let mut client =
-        match TtkClient::connect_with_verifier(server_addr, &server_name, verifier).await {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Failed to connect to TTKServer at {}: {}", server_addr, e);
-                std::process::exit(1);
-            }
-        };
+    let client = match TtkClient::connect_with_verifier(server_addr, &server_name, verifier).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to connect to TTKServer at {}: {}", server_addr, e);
+            std::process::exit(1);
+        }
+    };
 
     if let Some(fingerprint) = client.peer_cert_sha256_hex() {
         println!("Server Certificate SHA-256 Fingerprint:");
@@ -171,9 +171,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         FAF_PATH,
         request.relay_server.as_deref().unwrap_or("<none>")
     );
-    match client.post_json(FAF_PATH, &request).await {
+    let started = Instant::now();
+    let result = client.post_json(FAF_PATH, &request).await;
+    let elapsed = started.elapsed();
+    match result {
         Ok(resp) => {
-            println!("<-- Response Status: {}", resp.status);
+            println!("<-- Response Status: {} (in {:.3?})", resp.status, elapsed);
             println!("<-- Headers:");
             for (name, val) in &resp.headers {
                 println!("    {}: {}", name, val.to_str().unwrap_or("<binary>"));
@@ -184,7 +187,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         }
         Err(e) => {
-            eprintln!("Error sending request to {}: {}", FAF_PATH, e);
+            eprintln!(
+                "Error sending request to {} after {:.3?}: {}",
+                FAF_PATH, elapsed, e
+            );
         }
     }
 
