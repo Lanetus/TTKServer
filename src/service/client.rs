@@ -293,6 +293,25 @@ impl ClientResponse {
     }
 }
 
+/// CID of the parent instance, as seen from a Nitro Enclave.
+pub const PARENT_CID: u32 = 3;
+
+/// How a [`TtkClient`] reaches the server.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClientTransport {
+    /// A regular UDP socket.
+    #[default]
+    Udp,
+    /// From inside an enclave: through the parent's relay at vsock `cid`:`port`, which sends the
+    /// datagrams on to the server over UDP (see `ttk_server::service::vsock`). Linux only.
+    Vsock {
+        /// CID of the relay, normally [`PARENT_CID`].
+        cid: u32,
+        /// vsock port the relay accepts outbound connections on.
+        port: u32,
+    },
+}
+
 /// HTTP/3 client for communicating with TTKServer over QUIC.
 ///
 /// Requests take `&self` and run as independent HTTP/3 streams, so one client (e.g. shared
@@ -324,6 +343,16 @@ impl TtkClient {
         server_name: &str,
         verifier: EnclaveCertVerifier,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::connect_over(ClientTransport::Udp, server_addr, server_name, verifier).await
+    }
+
+    /// Connect to the TTKServer over `transport`, using a custom attestation `verifier` policy.
+    pub async fn connect_over(
+        transport: ClientTransport,
+        server_addr: SocketAddr,
+        server_name: &str,
+        verifier: EnclaveCertVerifier,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Ensure the default crypto provider is installed
         let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -341,13 +370,7 @@ impl TtkClient {
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
         ));
 
-        // Bind client endpoint to an arbitrary local UDP port
-        let bind_addr: SocketAddr = if server_addr.is_ipv6() {
-            "[::]:0".parse()?
-        } else {
-            "0.0.0.0:0".parse()?
-        };
-        let mut endpoint = Endpoint::client(bind_addr)?;
+        let mut endpoint = client_endpoint(transport, server_addr)?;
         endpoint.set_default_client_config(quic_client_config);
 
         info!(
@@ -535,6 +558,36 @@ impl TtkClient {
         let _ = tokio::time::timeout(Duration::from_secs(1), self.driver_handle).await;
         self.endpoint.wait_idle().await;
         Ok(())
+    }
+}
+
+/// Creates a client endpoint on `transport` able to reach `server_addr`.
+fn client_endpoint(
+    transport: ClientTransport,
+    server_addr: SocketAddr,
+) -> Result<Endpoint, Box<dyn std::error::Error + Send + Sync>> {
+    match transport {
+        ClientTransport::Udp => {
+            // Bind client endpoint to an arbitrary local UDP port
+            let bind_addr: SocketAddr = if server_addr.is_ipv6() {
+                "[::]:0".parse()?
+            } else {
+                "0.0.0.0:0".parse()?
+            };
+            Ok(Endpoint::client(bind_addr)?)
+        }
+        #[cfg(target_os = "linux")]
+        ClientTransport::Vsock { cid, port } => {
+            let runtime = quinn::default_runtime().ok_or("no async runtime found")?;
+            Ok(Endpoint::new_with_abstract_socket(
+                quinn::EndpointConfig::default(),
+                None,
+                Arc::new(super::vsock::VsockOutboundSocket::new(cid, port)),
+                runtime,
+            )?)
+        }
+        #[cfg(not(target_os = "linux"))]
+        ClientTransport::Vsock { .. } => Err("vsock is only available on Linux".into()),
     }
 }
 
