@@ -36,5 +36,13 @@ COPY --from=builder /app/TTKServer /app/TTKServer
 # The server listens for QUIC / HTTP/3 on UDP 4433
 EXPOSE 4433/udp
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3 iproute2 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY relay.py /app/relay.py
+
+ENTRYPOINT ["/bin/sh", "-c", "ip link set lo up; /app/TTKServer & sleep 1; exec python3 -u /app/relay.py"]
+
 # Entrypoint runs the TLS server
-ENTRYPOINT ["/bin/sh", "-c", "ip link set lo up; /app/TTKServer & sleep 1; exec socat VSOCK-LISTEN:5000,fork,reuseaddr UDP:127.0.0.1:4433"]
+#ENTRYPOINT ["/bin/sh", "-c", "ip link set lo up; /app/TTKServer & sleep 1; exec socat VSOCK-LISTEN:5000,fork,reuseaddr UDP:127.0.0.1:4433"]
