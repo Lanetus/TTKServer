@@ -24,6 +24,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 ############################
 FROM debian:bookworm-slim AS runtime
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends socat iproute2 && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy the compiled server binary
@@ -33,4 +37,4 @@ COPY --from=builder /app/TTKServer /app/TTKServer
 EXPOSE 4433/udp
 
 # Entrypoint runs the TLS server
-ENTRYPOINT ["/app/TTKServer"]
+ENTRYPOINT ["/bin/sh", "-c", "ip link set lo up; /app/TTKServer & sleep 1; exec socat VSOCK-LISTEN:5000,fork,reuseaddr UDP:127.0.0.1:4433"]
