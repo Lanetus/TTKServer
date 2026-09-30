@@ -11,7 +11,7 @@
 //! connections are kept open and reused (see [`MAX_POOLED_RELAYS`]), so the RA-TLS handshake
 //! and attestation check happen once per relay rather than once per request.
 
-use crate::client::{EnclaveCertVerifier, TtkClient};
+use crate::client::{ClientTransport, EnclaveCertVerifier, TtkClient};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -106,6 +106,8 @@ impl RelayPool {
 #[derive(Clone)]
 struct FafState {
     relay_verifier: RelayVerifierFactory,
+    /// How relay connections leave this server: UDP, or vsock to the parent from an enclave.
+    relay_transport: ClientTransport,
     relays: Arc<RelayPool>,
 }
 
@@ -130,6 +132,7 @@ pub struct FafRequest {
 pub(crate) fn build_router(
     evidence: Arc<Evidence>,
     relay_verifier: RelayVerifierFactory,
+    relay_transport: ClientTransport,
 ) -> Router {
     let eat_b64 = STANDARD.encode(&evidence.eat);
 
@@ -139,6 +142,7 @@ pub(crate) fn build_router(
         .route("/faf", post(faf))
         .with_state(FafState {
             relay_verifier,
+            relay_transport,
             relays: Arc::default(),
         })
 }
@@ -243,13 +247,14 @@ pub fn parse_relay_server(relay_server: &str) -> Result<(String, u16), String> {
 /// handshake within [`RELAY_CONNECT_TIMEOUT`], e.g. falling back from `::1` to `127.0.0.1`
 /// for `localhost`.
 async fn connect_to_relay(
+    transport: ClientTransport,
     host: &str,
     port: u16,
     verifier: EnclaveCertVerifier,
 ) -> Result<TtkClient, SendError> {
     let mut last_error: SendError = format!("{host} did not resolve").into();
     for addr in tokio::net::lookup_host((host, port)).await? {
-        let connecting = TtkClient::connect_with_verifier(addr, host, verifier.clone());
+        let connecting = TtkClient::connect_over(transport, addr, host, verifier.clone());
         match tokio::time::timeout(RELAY_CONNECT_TIMEOUT, connecting).await {
             Ok(Ok(client)) => return Ok(client),
             Ok(Err(e)) => last_error = e,
@@ -284,7 +289,9 @@ async fn forward_to_relay(
         }
     }
 
-    let client = Arc::new(connect_to_relay(host, port, (state.relay_verifier)()).await?);
+    let client = Arc::new(
+        connect_to_relay(state.relay_transport, host, port, (state.relay_verifier)()).await?,
+    );
     let pooled = state.relays.insert(host, port, client.clone());
     let response = client.post_json("/faf", request).await;
     if !pooled {

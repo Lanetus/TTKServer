@@ -3,11 +3,14 @@
 //!
 //! - [`server`]: the RATS (RFC 9334) Attester endpoint, serving Evidence from inside the TEE.
 //! - [`router`]: the server's HTTP routes, including the `POST /faf` relay.
+//! - `vsock` (Linux): the server's QUIC datagram socket over vsock, its default transport.
 //! - [`client`]: the Relying Party side, verifying the RA-TLS certificate's embedded Evidence.
 
 pub mod client;
 pub mod router;
 pub mod server;
+#[cfg(target_os = "linux")]
+pub mod vsock;
 
 use rcgen::generate_simple_self_signed;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};

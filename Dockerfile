@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends socat iproute2 && \
+    apt-get install -y --no-install-recommends iproute2 && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -33,16 +33,6 @@ WORKDIR /app
 # Copy the compiled server binary
 COPY --from=builder /app/TTKServer /app/TTKServer
 
-# The server listens for QUIC / HTTP/3 on UDP 4433
-EXPOSE 4433/udp
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends python3 iproute2 && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY relay.py /app/relay.py
-
-ENTRYPOINT ["/bin/sh", "-c", "ip link set lo up; /app/TTKServer & sleep 1; exec python3 -u /app/relay.py"]
-
-# Entrypoint runs the TLS server
-#ENTRYPOINT ["/bin/sh", "-c", "ip link set lo up; /app/TTKServer & sleep 1; exec socat VSOCK-LISTEN:5000,fork,reuseaddr UDP:127.0.0.1:4433"]
+# The server listens for QUIC / HTTP/3 directly on vsock port 5000 (length-framed datagrams from
+# the parent-side relay). Set TTK_USE_UDP=1 to listen on UDP TTK_LISTEN_ADDR (0.0.0.0:4433) instead.
+ENTRYPOINT ["/bin/sh", "-c", "ip link set lo up; exec /app/TTKServer"]

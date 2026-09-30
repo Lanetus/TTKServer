@@ -16,7 +16,7 @@
 //! HTTP routes, including the `POST /faf` relay, live in [`super::router`].
 
 use super::router::{build_router, RelayVerifierFactory, ALLOW_MOCK_RELAY_ENV};
-use crate::client::EnclaveCertVerifier;
+use crate::client::{ClientTransport, EnclaveCertVerifier, PARENT_CID};
 use crate::{attestation, AttestationParams};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -107,33 +107,99 @@ type BoxError = Box<dyn std::error::Error>;
 /// Boxed error type that can cross task boundaries.
 type SendError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Default address the QUIC endpoint binds to, unless [`LISTEN_ADDR_ENV`] overrides it.
+/// Default address the QUIC endpoint binds to over UDP, unless [`LISTEN_ADDR_ENV`] overrides it.
 const LISTEN_ADDR: &str = "0.0.0.0:4433";
 
-/// Environment variable that overrides the default listen address `0.0.0.0:4433`
-/// (a socket address such as `127.0.0.1:4444`).
+/// Environment variable that overrides the default UDP listen address `0.0.0.0:4433`
+/// (a socket address such as `127.0.0.1:4444`). Only used with [`USE_UDP_ENV`].
 pub const LISTEN_ADDR_ENV: &str = "TTK_LISTEN_ADDR";
+
+/// Environment variable that, set to `1`, makes [`run`] listen on a regular UDP socket instead
+/// of vsock (for running outside an enclave).
+pub const USE_UDP_ENV: &str = "TTK_USE_UDP";
+
+/// Default vsock port the QUIC endpoint listens on, unless [`VSOCK_PORT_ENV`] overrides it.
+const VSOCK_PORT: u32 = 5000;
+
+/// Environment variable that overrides the default vsock port `5000`.
+pub const VSOCK_PORT_ENV: &str = "TTK_VSOCK_PORT";
+
+/// Default vsock port of the parent's relay for outbound (`/faf` relay) connections, unless
+/// [`OUTBOUND_VSOCK_PORT_ENV`] overrides it.
+const OUTBOUND_VSOCK_PORT: u32 = 5001;
+
+/// Environment variable that overrides the default outbound vsock port `5001`.
+pub const OUTBOUND_VSOCK_PORT_ENV: &str = "TTK_OUTBOUND_VSOCK_PORT";
+
+/// Environment variable that overrides the parent's CID (default
+/// [`PARENT_CID`], `3`) for outbound connections.
+pub const PARENT_CID_ENV: &str = "TTK_PARENT_CID";
 
 /// Largest request body the server reads; larger requests get `413 Payload Too Large`.
 pub const MAX_REQUEST_BODY: usize = 1024 * 1024;
 
-/// Runs the server: attests, builds the RA-TLS identity, then serves HTTP/3 on
-/// `TTK_LISTEN_ADDR` (default `0.0.0.0:4433`) until the endpoint closes.
+/// Runs the server: attests, builds the RA-TLS identity, then serves HTTP/3 until the endpoint
+/// closes.
+///
+/// Listens on vsock port `TTK_VSOCK_PORT` (default `5000`, Linux only) and relays `/faf`
+/// requests out through the parent's relay at vsock `TTK_PARENT_CID`:`TTK_OUTBOUND_VSOCK_PORT`
+/// (default `3:5001`). With `TTK_USE_UDP=1` it listens on, and relays over, UDP instead
+/// (`TTK_LISTEN_ADDR`, default `0.0.0.0:4433`).
 ///
 /// Relays must present genuine TEE attestation unless `TTK_ALLOW_MOCK_ATTESTATION=1`.
 pub async fn run() -> Result<(), BoxError> {
-    let listen_addr = std::env::var(LISTEN_ADDR_ENV).unwrap_or_else(|_| LISTEN_ADDR.to_string());
-    let listen_addr: SocketAddr = listen_addr
-        .parse()
-        .map_err(|e| format!("invalid {LISTEN_ADDR_ENV} {listen_addr:?}: {e}"))?;
-    let mut server = Server::bind(listen_addr)?;
+    let mut server = if std::env::var(USE_UDP_ENV).is_ok_and(|v| v == "1") {
+        let listen_addr =
+            std::env::var(LISTEN_ADDR_ENV).unwrap_or_else(|_| LISTEN_ADDR.to_string());
+        let listen_addr: SocketAddr = listen_addr
+            .parse()
+            .map_err(|e| format!("invalid {LISTEN_ADDR_ENV} {listen_addr:?}: {e}"))?;
+        let server = Server::bind(listen_addr)?;
+        info!(
+            "Server listening on UDP {} (QUIC/HTTP/3)",
+            server.local_addr()?
+        );
+        server
+    } else {
+        let port = env_u32(VSOCK_PORT_ENV, VSOCK_PORT)?;
+        let cid = env_u32(PARENT_CID_ENV, PARENT_CID)?;
+        let outbound_port = env_u32(OUTBOUND_VSOCK_PORT_ENV, OUTBOUND_VSOCK_PORT)?;
+        let server = bind_vsock(port)?.with_relay_transport(ClientTransport::Vsock {
+            cid,
+            port: outbound_port,
+        });
+        info!(
+            "Server listening on vsock port {port} (QUIC/HTTP/3), relaying out via vsock \
+             {cid}:{outbound_port}"
+        );
+        server
+    };
     if std::env::var(ALLOW_MOCK_RELAY_ENV).is_ok_and(|v| v == "1") {
         warn!("Accepting MOCK attestation from relay servers ({ALLOW_MOCK_RELAY_ENV}=1)");
         server = server.with_relay_verifier(|| EnclaveCertVerifier::new().allow_mock());
     }
-    info!("Server listening on {} (QUIC/HTTP/3)", server.local_addr()?);
     server.serve().await;
     Ok(())
+}
+
+/// Reads a `u32` from environment variable `name`, or `default` if unset.
+fn env_u32(name: &str, default: u32) -> Result<u32, BoxError> {
+    match std::env::var(name) {
+        Ok(value) => Ok(value
+            .parse()
+            .map_err(|e| format!("invalid {name} {value:?}: {e}"))?),
+        Err(_) => Ok(default),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn bind_vsock(port: u32) -> Result<Server, BoxError> {
+    Server::bind_vsock(port)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn bind_vsock(_port: u32) -> Result<Server, BoxError> {
+    Err(format!("vsock is only available on Linux; set {USE_UDP_ENV}=1 to listen on UDP").into())
 }
 
 /// An attested HTTP/3 server bound to a QUIC endpoint.
@@ -141,6 +207,7 @@ pub struct Server {
     endpoint: Endpoint,
     evidence: Arc<Evidence>,
     relay_verifier: RelayVerifierFactory,
+    relay_transport: ClientTransport,
 }
 
 /// Setup and serving.
@@ -150,30 +217,37 @@ impl Server {
     /// Must be called within a Tokio runtime. Binding port 0 picks a free port; see
     /// [`local_addr`](Self::local_addr).
     pub fn bind(addr: SocketAddr) -> Result<Self, BoxError> {
-        info!("Initializing Nitro Enclave HTTP/3 Server...");
-
-        // Install the default cryptographic provider for rustls 0.23
-        let _ = rustls::crypto::ring::default_provider().install_default();
-
-        let key_pair = KeyPair::generate()?;
-        info!("Generated ephemeral TLS certificate.");
-
-        let eat_bytes = generate_evidence(&key_pair)?;
-        let tls_config = build_tls_config(&key_pair, &eat_bytes)?;
-        let evidence = Arc::new(Evidence {
-            nitro: eat_bytes.clone(),
-            eat: eat_bytes,
-        });
-
-        let quic_config = ServerConfig::with_crypto(Arc::new(
-            quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?,
-        ));
+        let (quic_config, evidence) = attest()?;
         let endpoint = Endpoint::server(quic_config, addr)?;
-        Ok(Self {
+        Ok(Self::new(endpoint, evidence))
+    }
+
+    /// Attests, builds the RA-TLS identity and listens on vsock `port` (any CID), with
+    /// datagrams framed as described in [`super::vsock`].
+    ///
+    /// Must be called within a Tokio runtime.
+    #[cfg(target_os = "linux")]
+    pub fn bind_vsock(port: u32) -> Result<Self, BoxError> {
+        let (quic_config, evidence) = attest()?;
+        let socket = super::vsock::VsockUdpSocket::bind(port)?;
+        let runtime = quinn::default_runtime().ok_or("no async runtime found")?;
+        let endpoint = Endpoint::new_with_abstract_socket(
+            quinn::EndpointConfig::default(),
+            Some(quic_config),
+            Arc::new(socket),
+            runtime,
+        )?;
+        Ok(Self::new(endpoint, evidence))
+    }
+
+    /// Wraps a bound endpoint with the default (strict) relay policy.
+    fn new(endpoint: Endpoint, evidence: Arc<Evidence>) -> Self {
+        Self {
             endpoint,
             evidence,
             relay_verifier: Arc::new(EnclaveCertVerifier::new),
-        })
+            relay_transport: ClientTransport::Udp,
+        }
     }
 
     /// Sets the policy for attesting relay servers in `POST /faf`.
@@ -187,6 +261,13 @@ impl Server {
         self
     }
 
+    /// Sets how `POST /faf` reaches relay servers. Defaults to [`ClientTransport::Udp`]; from
+    /// inside an enclave, use [`ClientTransport::Vsock`] to go through the parent's relay.
+    pub fn with_relay_transport(mut self, transport: ClientTransport) -> Self {
+        self.relay_transport = transport;
+        self
+    }
+
     /// Returns the address the endpoint is bound to.
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.endpoint.local_addr()
@@ -194,11 +275,35 @@ impl Server {
 
     /// Accepts QUIC connections and serves HTTP/3 until the endpoint closes.
     pub async fn serve(self) {
-        let app = build_router(self.evidence, self.relay_verifier);
+        let app = build_router(self.evidence, self.relay_verifier, self.relay_transport);
         while let Some(incoming) = self.endpoint.accept().await {
             tokio::spawn(handle_connection(incoming, app.clone()));
         }
     }
+}
+
+/// Attests and builds the RA-TLS identity: an ephemeral key pair, Evidence bound to it, and the
+/// QUIC server config presenting the certificate that embeds the Evidence.
+fn attest() -> Result<(ServerConfig, Arc<Evidence>), BoxError> {
+    info!("Initializing Nitro Enclave HTTP/3 Server...");
+
+    // Install the default cryptographic provider for rustls 0.23
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let key_pair = KeyPair::generate()?;
+    info!("Generated ephemeral TLS certificate.");
+
+    let eat_bytes = generate_evidence(&key_pair)?;
+    let tls_config = build_tls_config(&key_pair, &eat_bytes)?;
+    let evidence = Arc::new(Evidence {
+        nitro: eat_bytes.clone(),
+        eat: eat_bytes,
+    });
+
+    let quic_config = ServerConfig::with_crypto(Arc::new(
+        quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?,
+    ));
+    Ok((quic_config, evidence))
 }
 
 /// Requests evidence from the detected attestation provider, bound to the TLS public key,
