@@ -43,6 +43,7 @@ cargo run --bin relay -- --cid <CID>         # parent-side UDP :443 -> enclave v
 cargo fmt && cargo clippy --all-targets -- -D warnings
 cargo deny check                              # config in deny.toml
 scripts/build-eif.sh [amd64|arm64]            # build the EIF locally with Docker -> out/TTKServer_v<ver>_<arch>.eif + .json (PCRs)
+deploy/systemd/ttk-relay.service              # systemd unit for `relay` on the parent (install steps in its header)
 ```
 
 ## Conventions
