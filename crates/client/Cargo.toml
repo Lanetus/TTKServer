@@ -45,8 +45,8 @@ x509-parser.workspace = true
 [dev-dependencies]
 # Attested servers for the end-to-end tests, with every attestation provider compiled in.
 ttk-core = { workspace = true, features = ["mock", "sev-snp", "tdx"] }
-ttk-relay = { path = "../relay" }
-ttk-terminal = { path = "../terminal" }
+ttk-relay.workspace = true
+ttk-terminal.workspace = true
 aws-nitro-enclaves-nsm-api.workspace = true
 criterion.workspace = true
 rcgen.workspace = true
