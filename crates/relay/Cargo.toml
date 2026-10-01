@@ -44,5 +44,5 @@ tdx = ["ttk-core/tdx"]
 
 [dev-dependencies]
 ttk-core = { workspace = true, features = ["mock"] }
-ttk-terminal = { path = "../terminal" }
+ttk-terminal.workspace = true
 serde_json.workspace = true
