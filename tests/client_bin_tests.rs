@@ -69,12 +69,19 @@ async fn client_binary_defaults_to_the_relay_on_port_4444() {
     let url = format!("https://127.0.0.1:{}", addr.port());
     let output = run_client_binary(&[&url], true).await;
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(output.status.success(), "{stdout}");
+    // Nothing listens there, so the relay can't be attested and nothing is sent.
     assert!(
-        stdout.contains("--> Sending POST /faf (relay: 127.0.0.1:4444)"),
+        stdout.contains("--> Attesting relay 127.0.0.1:4444"),
         "{stdout}"
     );
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("Failed to attest relay 127.0.0.1:4444"),
+        "{stderr}"
+    );
+    assert!(!stdout.contains("Sending POST /faf"), "{stdout}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

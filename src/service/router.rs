@@ -4,20 +4,21 @@
 //! |---------------------|-----------------------------------------------------------------|
 //! | `GET /`             | Greeting text                                                   |
 //! | `GET /evidence.eat` | Base64-encoded EAT carrying this server's [`Evidence`]          |
-//! | `POST /faf`         | Forwards a [`FafRequest`] to its relay; see [`FafRequest`]      |
+//! | `POST /faf`         | Relays a [`FafRequest`] to its next hop; see [`FafRequest`]     |
 //!
 //! When forwarding a [`FafRequest`], this server is itself a RATS (RFC 9334) Relying Party: it
-//! only sends the message and key to a relay whose RA-TLS attestation verifies. Verified relay
+//! only sends the request to a relay whose RA-TLS attestation verifies. Verified relay
 //! connections are kept open and reused (see [`MAX_POOLED_RELAYS`]), so the RA-TLS handshake
 //! and attestation check happen once per relay rather than once per request.
 
+use super::seal::{self, NodeSecretKey, SALT_DIGITS};
 use crate::client::{ClientTransport, EnclaveCertVerifier, TtkClient};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -34,7 +35,7 @@ pub struct Evidence {
     pub eat: Vec<u8>,
 }
 
-/// Port assumed for a `relay_server` that does not name one.
+/// Port assumed for a relay address that does not name one.
 pub const DEFAULT_RELAY_PORT: u16 = 4433;
 
 /// Time allowed for forwarding a `/faf` request to its relay, RA-TLS handshake included.
@@ -109,28 +110,65 @@ struct FafState {
     /// How relay connections leave this server: UDP, or vsock to the parent from an enclave.
     relay_transport: ClientTransport,
     relays: Arc<RelayPool>,
+    /// This server's RA-TLS private key, opening relay addresses and bodies sealed to it.
+    node_key: Arc<NodeSecretKey>,
 }
 
-/// Body of `POST /faf`: a message and key to hand to `relay_server`.
+/// Body of `POST /faf`: an onion-routed message.
 ///
-/// The relay runs this same server. The message and key are forwarded to its `POST /faf`
-/// without `relay_server`, which tells the relay it is the last hop: it accepts the request and
-/// answers `200 OK`. This server answers `200 OK` once the relay has.
+/// Every node on the route runs this same server. A node receiving a request with a non-empty
+/// `relays` removes the first entry, reads the next hop's address from it (opening it with its
+/// own RA-TLS key if `encrypted`) and forwards the rest of the request there, answering `200 OK`
+/// once the next hop has. A node receiving an empty `relays` is the last hop: only it can
+/// decrypt `body`, and it answers `200 OK` if it can. See [`super::seal`] for the encryption.
+///
+/// ```json
+/// {
+///   "relays": [
+///     { "address": "https://relay-1.example:443", "encrypted": false },
+///     { "address": "<base64 HPKE ciphertext>", "encrypted": true }
+///   ],
+///   "body": { "key": "<base64 HPKE ciphertext>", "message": "<base64 AES-256-GCM ciphertext>" }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FafRequest {
-    /// Relay to forward to, as `host[:port]` or `https://host[:port]` (default port
-    /// [`DEFAULT_RELAY_PORT`]). Absent when this server is the last hop.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relay_server: Option<String>,
-    /// The message to transmit.
-    pub message: String,
-    /// The key to transmit alongside the message.
+    /// The remaining hops, in order: the first entry is read by the node the request is at.
+    /// Empty at the last hop.
+    #[serde(default)]
+    pub relays: Vec<FafRelay>,
+    /// The message, readable only by the last hop.
+    pub body: FafBody,
+}
+
+/// One hop of a [`FafRequest`] route: where the node reading it forwards the request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FafRelay {
+    /// The next hop as `"<server> <salt>"`, where `<server>` is `host[:port]` or
+    /// `https://host[:port]` (default port [`DEFAULT_RELAY_PORT`]) and `<salt>` is
+    /// [`SALT_DIGITS`] decimal digits, e.g. `"https://server.com:443 0123456789"`.
+    ///
+    /// If `encrypted`, this is that string sealed to the reading node's RA-TLS key
+    /// ([`seal::seal_address`]) and the salt is required. Otherwise it is in the clear and the
+    /// salt is optional.
+    pub address: String,
+    /// Whether `address` is sealed to the reading node.
+    pub encrypted: bool,
+}
+
+/// The message of a [`FafRequest`], sealed to its last hop with [`seal::seal_body`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FafBody {
+    /// The message key, sealed to the last hop's RA-TLS key. Never null.
     pub key: String,
+    /// The message, encrypted with the message key.
+    pub message: String,
 }
 
 /// Builds the Axum router: the greeting, the evidence endpoint and the `/faf` relay.
 pub(crate) fn build_router(
     evidence: Arc<Evidence>,
+    node_key: Arc<NodeSecretKey>,
     relay_verifier: RelayVerifierFactory,
     relay_transport: ClientTransport,
 ) -> Router {
@@ -144,48 +182,42 @@ pub(crate) fn build_router(
             relay_verifier,
             relay_transport,
             relays: Arc::default(),
+            node_key,
         })
 }
 
-/// `POST /faf`: forwards the message and key to the relay and answers `200 OK` once the relay
-/// has; with no `relay_server`, this server is the last hop and accepts the request directly.
+/// `POST /faf`: removes the first relay entry, forwards the rest of the request to the address
+/// it names and answers `200 OK` once that hop has; with no relays left, this server is the last
+/// hop and answers `200 OK` if it can decrypt the body.
 ///
-/// Answers `400` for an unparsable `relay_server`, `502` if the relay can't be reached, fails
-/// attestation or answers anything but `200`, and `504` if it doesn't answer within
-/// [`RELAY_TIMEOUT`].
+/// Answers `400` for a relay entry that can't be opened or parsed, or (as the last hop) a body
+/// that can't be decrypted; `502` if the next hop can't be reached, fails attestation or answers
+/// anything but `200`; and `504` if it doesn't answer within [`RELAY_TIMEOUT`].
 async fn faf(
     State(state): State<FafState>,
     Json(request): Json<FafRequest>,
 ) -> (StatusCode, String) {
-    let FafRequest {
-        relay_server,
-        message,
-        key,
-    } = request;
+    let FafRequest { mut relays, body } = request;
 
-    let Some(relay_server) = relay_server else {
+    if relays.is_empty() {
         // Never log the key or the message itself.
-        info!(
-            "/faf: accepted a {}-byte message as the last hop",
-            message.len()
-        );
-        return (StatusCode::OK, "delivered".to_string());
-    };
+        return match seal::open_body(&state.node_key, &body) {
+            Ok(message) => {
+                match String::from_utf8(message) {
+                    Ok(string) => info!("Success: {string}"),
+                    Err(e) => error!("Invalid UTF-8 sequence: {e}"),
+                }
+                (StatusCode::OK, "delivered".to_string())
+            }
+            Err(e) => (StatusCode::BAD_REQUEST, format!("invalid body: {e}")),
+        };
+    }
 
-    let (host, port) = match parse_relay_server(&relay_server) {
+    let (host, port) = match next_hop(&state.node_key, &relays.remove(0)) {
         Ok(target) => target,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("invalid relay_server: {e}"),
-            )
-        }
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid relay: {e}")),
     };
-    let forward = FafRequest {
-        relay_server: None,
-        message,
-        key,
-    };
+    let forward = FafRequest { relays, body };
 
     let relayed = tokio::time::timeout(
         RELAY_TIMEOUT,
@@ -212,8 +244,35 @@ async fn faf(
     }
 }
 
-/// Splits a `relay_server` value (`host[:port]` or `https://host[:port][/...]`) into its host
-/// (without IPv6 brackets) and port.
+/// Reads the next hop's host and port from `relay`, opening it with `node_key` if encrypted.
+fn next_hop(node_key: &NodeSecretKey, relay: &FafRelay) -> Result<(String, u16), String> {
+    if relay.encrypted {
+        let address = seal::open_address(node_key, &relay.address).map_err(|e| e.to_string())?;
+        parse_relay_server(parse_relay_address(&address, true)?)
+    } else {
+        parse_relay_server(parse_relay_address(&relay.address, false)?)
+    }
+}
+
+/// Strips the salt from a relay address `"<server> <salt>"` and returns `<server>`. The salt
+/// must be [`SALT_DIGITS`] decimal digits; with `salt_required` false, `"<server>"` alone is
+/// also accepted.
+pub fn parse_relay_address(address: &str, salt_required: bool) -> Result<&str, String> {
+    let address = address.trim();
+    match address.rsplit_once(char::is_whitespace) {
+        Some((server, salt)) => {
+            if salt.len() != SALT_DIGITS || !salt.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(format!("the salt must be {SALT_DIGITS} decimal digits"));
+            }
+            Ok(server.trim_end())
+        }
+        None if salt_required => Err("the address has no salt".to_string()),
+        None => Ok(address),
+    }
+}
+
+/// Splits a relay server (`host[:port]` or `https://host[:port][/...]`) into its host (without
+/// IPv6 brackets) and port.
 pub fn parse_relay_server(relay_server: &str) -> Result<(String, u16), String> {
     let uri: axum::http::Uri = relay_server
         .trim()

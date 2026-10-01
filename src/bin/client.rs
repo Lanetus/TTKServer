@@ -1,18 +1,20 @@
 //! `client` binary: command-line HTTP/3 client for TTKServer, for testing only.
 //!
 //! Thin entry point over [`ttk_server::client`]: parses CLI arguments / environment,
-//! connects with RA-TLS verification of the enclave's attestation evidence, sends a
-//! [`FafRequest`] to `POST /faf` (relayed to [`DEFAULT_RELAY_SERVER`] unless overridden), and
-//! prints the response. Built only with the non-default `test-client` feature, so it is never part
+//! attests the relay ([`DEFAULT_RELAY_SERVER`] unless overridden) and seals the message to its
+//! RA-TLS key, connects with RA-TLS verification of the enclave's attestation evidence, sends a
+//! [`FafRequest`] routed through the server to the relay to `POST /faf`, and prints the
+//! response. Built only with the non-default `test-client` feature, so it is never part
 //! of a production build.
 
 use axum::http::Uri;
 use std::net::SocketAddr;
 use std::time::Instant;
 use ttk_server::client::{EnclaveCertVerifier, TtkClient};
-use ttk_server::router::FafRequest;
+use ttk_server::router::{parse_relay_server, FafRelay, FafRequest, RELAY_CONNECT_TIMEOUT};
+use ttk_server::seal::{self, NodePublicKey};
 
-/// Relay server the `FafRequest` is forwarded to unless `--relay` overrides it.
+/// Relay server (the last hop) the `FafRequest` is forwarded to unless `--relay` overrides it.
 const DEFAULT_RELAY_SERVER: &str = "127.0.0.1:4444";
 
 /// Path of the forward-and-forget endpoint.
@@ -25,15 +27,14 @@ Usage: client [OPTIONS] [URL]
 Options:
   -s, --server-name <NAME>  SNI server name (default: localhost)
   -a, --addr <ADDR>         Server socket address (default: 127.0.0.1:4433)
-  -r, --relay <RELAY>       Relay server for the FafRequest (default: 127.0.0.1:4444)
-  -m, --message <MESSAGE>   Message to send (default: hello)
-  -k, --key <KEY>           Key to send alongside the message (default: key)
+  -r, --relay <RELAY>       Relay server, the last hop of the FafRequest (default: 127.0.0.1:4444)
+  -m, --message <MESSAGE>   Message to send, encrypted to the relay (default: hello)
   -h, --help                Print help information
 
 Examples:
   client
   client https://127.0.0.1:4433
-  client --addr 127.0.0.1:4433 --relay 127.0.0.1:4444 --message hi --key secret
+  client --addr 127.0.0.1:4433 --relay 127.0.0.1:4444 --message hi
 ";
 
 /// What a `client` invocation should connect to and send.
@@ -43,8 +44,10 @@ struct ClientTarget {
     server_addr: SocketAddr,
     /// SNI server name.
     server_name: String,
-    /// The request to `POST` to [`FAF_PATH`].
-    request: FafRequest,
+    /// Relay server the request is routed to, as `host[:port]` or `https://host[:port]`.
+    relay_server: String,
+    /// The message, sealed to the relay before sending.
+    message: String,
 }
 
 /// Parses `client` arguments (without the program name).
@@ -62,7 +65,6 @@ fn parse_client_args(
     let mut server_name = default_name.unwrap_or_else(|| "localhost".to_string());
     let mut relay_server = DEFAULT_RELAY_SERVER.to_string();
     let mut message = "hello".to_string();
-    let mut key = "key".to_string();
 
     let mut i = 0;
     while i < args.len() {
@@ -78,9 +80,6 @@ fn parse_client_args(
         } else if (arg == "--message" || arg == "-m") && i + 1 < args.len() {
             i += 1;
             message = args[i].clone();
-        } else if (arg == "--key" || arg == "-k") && i + 1 < args.len() {
-            i += 1;
-            key = args[i].clone();
         } else if (arg == "--addr" || arg == "-a") && i + 1 < args.len() {
             i += 1;
             server_addr_str = args[i].clone();
@@ -108,11 +107,8 @@ fn parse_client_args(
     Some(ClientTarget {
         server_addr,
         server_name,
-        request: FafRequest {
-            relay_server: Some(relay_server),
-            message,
-            key,
-        },
+        relay_server,
+        message,
     })
 }
 
@@ -138,7 +134,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ClientTarget {
         server_addr,
         server_name,
-        request,
+        relay_server,
+        message,
     } = parse_args();
 
     println!("=================================================");
@@ -152,13 +149,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         verifier = verifier.allow_mock();
     }
 
-    let client = match TtkClient::connect_with_verifier(server_addr, &server_name, verifier).await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to connect to TTKServer at {}: {}", server_addr, e);
-            std::process::exit(1);
-        }
-    };
+    let client =
+        match TtkClient::connect_with_verifier(server_addr, &server_name, verifier.clone()).await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Failed to connect to TTKServer at {}: {}", server_addr, e);
+                std::process::exit(1);
+            }
+        };
 
     if let Some(fingerprint) = client.peer_cert_sha256_hex() {
         println!("Server Certificate SHA-256 Fingerprint:");
@@ -166,11 +164,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("  (Attestation verified and bound to this certificate's key)");
     }
 
-    println!(
-        "\n--> Sending POST {} (relay: {})",
-        FAF_PATH,
-        request.relay_server.as_deref().unwrap_or("<none>")
-    );
+    println!("\n--> Attesting relay {relay_server} to seal the message to it");
+    let relay_key = match attest_relay(&relay_server, verifier).await {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("Failed to attest relay {relay_server}: {e}");
+            std::process::exit(1);
+        }
+    };
+    let request = FafRequest {
+        // Read by the server, in the clear; the relay is the last hop.
+        relays: vec![FafRelay {
+            address: format!("{relay_server} {}", seal::random_salt()?),
+            encrypted: false,
+        }],
+        body: seal::seal_body(&relay_key, message.as_bytes())?,
+    };
+
+    println!("\n--> Sending POST {FAF_PATH} (relay: {relay_server})");
     let started = Instant::now();
     let result = client.post_json(FAF_PATH, &request).await;
     let elapsed = started.elapsed();
@@ -199,4 +210,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Connection closed successfully.");
 
     Ok(())
+}
+
+/// Connects to `relay_server` with `verifier`, and returns the RA-TLS key of the first of its
+/// addresses whose attestation verifies within [`RELAY_CONNECT_TIMEOUT`].
+async fn attest_relay(
+    relay_server: &str,
+    verifier: EnclaveCertVerifier,
+) -> Result<NodePublicKey, Box<dyn std::error::Error + Send + Sync>> {
+    let (host, port) = parse_relay_server(relay_server)?;
+    let mut last_error: Box<dyn std::error::Error + Send + Sync> =
+        format!("{host} did not resolve").into();
+    for addr in tokio::net::lookup_host((host.as_str(), port)).await? {
+        let connecting = TtkClient::connect_with_verifier(addr, &host, verifier.clone());
+        match tokio::time::timeout(RELAY_CONNECT_TIMEOUT, connecting).await {
+            Ok(Ok(relay)) => {
+                let key = relay
+                    .peer_cert()
+                    .ok_or("relay presented no certificate")
+                    .map(|cert| NodePublicKey::from_certificate(cert));
+                relay.close().await?;
+                return Ok(key??);
+            }
+            Ok(Err(e)) => last_error = e,
+            Err(_) => last_error = format!("connecting to {addr} timed out").into(),
+        }
+    }
+    Err(last_error)
 }
