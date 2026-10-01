@@ -7,6 +7,6 @@ published alongside this book.
 
 **[Open the ttk-client API reference →](api/ttk_client/index.html)**
 
-**[Open the ttk-relay API reference →](api/ttk_realy/index.html)**
+**[Open the ttk-relay API reference →](api/ttk_relay/index.html)**
 
 **[Open the ttk-terminal API reference →](api/ttk_terminal/index.html)**
