@@ -3,40 +3,6 @@
 version = 4
 
 [[package]]
-name = "TTKServer"
-version = "1.0.0"
-dependencies = [
- "aws-nitro-enclaves-nsm-api",
- "axum",
- "base64 0.21.7",
- "bytes 1.12.1",
- "ciborium",
- "criterion",
- "der-parser",
- "env_logger",
- "h3",
- "h3-quinn",
- "hpke",
- "log",
- "p256",
- "quinn",
- "rand_core 0.6.4",
- "rcgen",
- "ring",
- "rustls",
- "rustls-pki-types",
- "rustls-webpki",
- "serde",
- "serde_json",
- "sha2",
- "time",
- "tokio",
- "tokio-vsock",
- "tower-service",
- "x509-parser",
-]
-
-[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2436,6 +2402,94 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a04e24fab5c89c6a36eb8558c9656f30d81de51dfa4d3b45f26b21d61fa0a6c"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "ttk-client"
+version = "1.0.0"
+dependencies = [
+ "aws-nitro-enclaves-nsm-api",
+ "axum",
+ "base64 0.21.7",
+ "bytes 1.12.1",
+ "ciborium",
+ "criterion",
+ "der-parser",
+ "env_logger",
+ "h3",
+ "h3-quinn",
+ "hpke",
+ "log",
+ "p256",
+ "quinn",
+ "rand_core 0.6.4",
+ "rcgen",
+ "ring",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "ttk-core",
+ "ttk-relay",
+ "ttk-terminal",
+ "x509-parser",
+]
+
+[[package]]
+name = "ttk-core"
+version = "1.0.0"
+dependencies = [
+ "aws-nitro-enclaves-nsm-api",
+ "axum",
+ "base64 0.21.7",
+ "bytes 1.12.1",
+ "ciborium",
+ "h3",
+ "h3-quinn",
+ "log",
+ "quinn",
+ "rcgen",
+ "ring",
+ "rustls",
+ "rustls-pki-types",
+ "sha2",
+ "time",
+ "tokio",
+ "tokio-vsock",
+ "tower-service",
+ "x509-parser",
+]
+
+[[package]]
+name = "ttk-relay"
+version = "1.0.0"
+dependencies = [
+ "axum",
+ "bytes 1.12.1",
+ "env_logger",
+ "log",
+ "serde_json",
+ "tokio",
+ "tokio-vsock",
+ "ttk-client",
+ "ttk-core",
+ "ttk-terminal",
+]
+
+[[package]]
+name = "ttk-terminal"
+version = "1.0.0"
+dependencies = [
+ "axum",
+ "env_logger",
+ "log",
+ "rcgen",
+ "tokio",
+ "ttk-client",
+ "ttk-core",
 ]
 
 [[package]]

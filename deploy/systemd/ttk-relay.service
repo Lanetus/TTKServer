@@ -1,9 +1,9 @@
-# systemd unit for the TTKServer `relay` on the Nitro Enclave's parent instance: relays public
-# QUIC (UDP 443) into the enclave over vsock, and the enclave's outbound traffic back out.
+# systemd unit for the TTKServer `vsock-proxy` on the Nitro Enclave's parent instance: relays
+# public QUIC (UDP 443) into the enclave over vsock, and the enclave's outbound traffic back out.
 #
 # Install:
-#   cargo build --release --bin relay
-#   sudo install -m 0755 target/release/relay /usr/local/bin/ttk-relay
+#   cargo build --release -p ttk-relay --bin vsock-proxy
+#   sudo install -m 0755 target/release/vsock-proxy /usr/local/bin/ttk-relay
 #   sudo install -m 0644 deploy/systemd/ttk-relay.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now ttk-relay
 #
@@ -17,7 +17,7 @@
 # Logs: journalctl -u ttk-relay -f
 
 [Unit]
-Description=TTKServer relay (public UDP <-> Nitro Enclave vsock)
+Description=TTKServer vsock-proxy (public UDP <-> Nitro Enclave vsock)
 Documentation=https://github.com/Lanetus/TTKServer
 Wants=network-online.target
 After=network-online.target nitro-enclaves-allocator.service
