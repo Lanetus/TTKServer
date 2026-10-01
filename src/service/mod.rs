@@ -3,11 +3,13 @@
 //!
 //! - [`server`]: the RATS (RFC 9334) Attester endpoint, serving Evidence from inside the TEE.
 //! - [`router`]: the server's HTTP routes, including the `POST /faf` relay.
+//! - [`seal`]: onion encryption of `POST /faf` requests to the nodes' RA-TLS keys (RFC 9180 HPKE).
 //! - `vsock` (Linux): the server's QUIC datagram socket over vsock, its default transport.
 //! - [`client`]: the Relying Party side, verifying the RA-TLS certificate's embedded Evidence.
 
 pub mod client;
 pub mod router;
+pub mod seal;
 pub mod server;
 #[cfg(target_os = "linux")]
 pub mod vsock;

@@ -75,31 +75,46 @@ RUST_LOG=info cargo run --release
 |------------------|----------------------------------------------------------------------|
 | `GET /`          | Greeting text                                                        |
 | `GET /evidence.eat` | Base64-encoded EAT carrying the Evidence                          |
-| `POST /faf`      | Forwards a message and key to an attested relay (see below)          |
+| `POST /faf`      | Onion-routes a sealed message through attested relays (see below)    |
 
-### `POST /faf`: relaying a message and key
+### `POST /faf`: onion-routing a sealed message
 
 The request body is JSON (`Content-Type: application/json`):
 
 ```json
-{ "relay_server": "relay.example:4433", "message": "…", "key": "…" }
+{
+  "relays": [
+    { "address": "https://relay-1.example:443 0123456789", "encrypted": false },
+    { "address": "<base64 HPKE ciphertext>", "encrypted": true }
+  ],
+  "body": { "key": "<base64 HPKE ciphertext>", "message": "<base64 AES-256-GCM ciphertext>" }
+}
 ```
 
-`relay_server` is `host[:port]` or `https://host[:port]`; the port defaults to `4433`. The relay runs this same server. The server:
+Every node on the route runs this same server. A node that receives a request with relays left:
 
-1. connects to the relay over QUIC / HTTP/3 and **verifies the relay's RA-TLS attestation**, so the key is only sent to an attested TEE;
-2. posts `{ "message", "key" }` to the relay's own `POST /faf`, without `relay_server`, which tells the relay it is the last hop;
-3. answers `200 OK` once the relay has answered `200 OK`.
+1. removes the first entry from `relays` and reads the next hop from it. With `encrypted: true`, the address was sealed to **this node's** RA-TLS key, and only this node can open it;
+2. connects to the next hop over QUIC / HTTP/3 and **verifies its RA-TLS attestation**;
+3. posts the rest of the request (the remaining `relays` and the unchanged `body`) to the next hop's `POST /faf`, and answers `200 OK` once that hop has.
 
-A request without `relay_server` is accepted directly with `200 OK` (this server is the last hop). Other responses:
+A node that receives an empty `relays` is the last hop. It is the only node that can decrypt `body`, and it answers `200 OK` (`delivered`) if it can.
+
+An opened address has the form `"<server> <salt>"`, e.g. `"https://server.com:443 0123456789"`. `<server>` is `host[:port]` or `https://host[:port]`, and the port defaults to `4433`. The salt is 10 random decimal digits. It is required in encrypted addresses and optional in plain ones.
+
+Encryption uses the nodes' attested RA-TLS keys (ECDSA P-256), so a client seals only to nodes it has attested. It uses RFC 9180 HPKE in base mode with DHKEM(P-256, HKDF-SHA256), HKDF-SHA256 and AES-256-GCM:
+
+- `relays[i].address` (encrypted) is sealed to the node that reads it;
+- `body.message` is encrypted with a fresh AES-256-GCM key (base64 of a 12-byte nonce followed by the ciphertext), and `body.key` is that key sealed to the last hop. `body.key` is required and never null.
+
+HPKE values are base64 of the encapsulated key (65 bytes) followed by the ciphertext. Clients build requests with `ttk_server::seal` (`NodePublicKey::from_certificate`, `seal_address`, `seal_body`). Other responses:
 
 | Status | When                                                                         |
 |--------|------------------------------------------------------------------------------|
-| `400`  | `relay_server` can't be parsed (e.g. an `http://` URL)                       |
+| `400`  | The first relay entry can't be opened or parsed (e.g. an `http://` URL or a bad salt), or, at the last hop, `body` can't be decrypted |
 | `413`  | The request body is over 1 MiB                                               |
-| `415` / `422` | The body isn't JSON, or a field is missing                            |
-| `502`  | The relay can't be reached, fails attestation, or answers anything but `200` |
-| `504`  | The relay doesn't answer within 10 seconds                                   |
+| `415` / `422` | The body isn't JSON, or a field is missing or null                    |
+| `502`  | The next hop can't be reached, fails attestation, or answers anything but `200` |
+| `504`  | The next hop doesn't answer within 10 seconds                                |
 
 By default relays must present genuine TEE evidence. For local development with mock attestation, start the server with `TTK_ALLOW_MOCK_ATTESTATION=1`.
 

@@ -17,4 +17,4 @@ pub mod verifier;
 // Re-export common types and functions for convenience
 pub use attestation::eat;
 pub use attestation::eat::{EatClaimKey, EatClaimsSet};
-pub use service::{client, generate_identity, router, server, AttestationParams};
+pub use service::{client, generate_identity, router, seal, server, AttestationParams};

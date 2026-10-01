@@ -16,6 +16,7 @@
 //! HTTP routes, including the `POST /faf` relay, live in [`super::router`].
 
 use super::router::{build_router, RelayVerifierFactory, ALLOW_MOCK_RELAY_ENV};
+use super::seal::NodeSecretKey;
 use crate::client::{ClientTransport, EnclaveCertVerifier, PARENT_CID};
 use crate::{attestation, AttestationParams};
 use axum::http::StatusCode;
@@ -206,6 +207,7 @@ fn bind_vsock(_port: u32) -> Result<Server, BoxError> {
 pub struct Server {
     endpoint: Endpoint,
     evidence: Arc<Evidence>,
+    node_key: Arc<NodeSecretKey>,
     relay_verifier: RelayVerifierFactory,
     relay_transport: ClientTransport,
 }
@@ -217,9 +219,9 @@ impl Server {
     /// Must be called within a Tokio runtime. Binding port 0 picks a free port; see
     /// [`local_addr`](Self::local_addr).
     pub fn bind(addr: SocketAddr) -> Result<Self, BoxError> {
-        let (quic_config, evidence) = attest()?;
+        let (quic_config, evidence, node_key) = attest()?;
         let endpoint = Endpoint::server(quic_config, addr)?;
-        Ok(Self::new(endpoint, evidence))
+        Ok(Self::new(endpoint, evidence, node_key))
     }
 
     /// Attests, builds the RA-TLS identity and listens on vsock `port` (any CID), with
@@ -228,7 +230,7 @@ impl Server {
     /// Must be called within a Tokio runtime.
     #[cfg(target_os = "linux")]
     pub fn bind_vsock(port: u32) -> Result<Self, BoxError> {
-        let (quic_config, evidence) = attest()?;
+        let (quic_config, evidence, node_key) = attest()?;
         let socket = super::vsock::VsockUdpSocket::bind(port)?;
         let runtime = quinn::default_runtime().ok_or("no async runtime found")?;
         let endpoint = Endpoint::new_with_abstract_socket(
@@ -237,14 +239,15 @@ impl Server {
             Arc::new(socket),
             runtime,
         )?;
-        Ok(Self::new(endpoint, evidence))
+        Ok(Self::new(endpoint, evidence, node_key))
     }
 
     /// Wraps a bound endpoint with the default (strict) relay policy.
-    fn new(endpoint: Endpoint, evidence: Arc<Evidence>) -> Self {
+    fn new(endpoint: Endpoint, evidence: Arc<Evidence>, node_key: Arc<NodeSecretKey>) -> Self {
         Self {
             endpoint,
             evidence,
+            node_key,
             relay_verifier: Arc::new(EnclaveCertVerifier::new),
             relay_transport: ClientTransport::Udp,
         }
@@ -275,22 +278,29 @@ impl Server {
 
     /// Accepts QUIC connections and serves HTTP/3 until the endpoint closes.
     pub async fn serve(self) {
-        let app = build_router(self.evidence, self.relay_verifier, self.relay_transport);
+        let app = build_router(
+            self.evidence,
+            self.node_key,
+            self.relay_verifier,
+            self.relay_transport,
+        );
         while let Some(incoming) = self.endpoint.accept().await {
             tokio::spawn(handle_connection(incoming, app.clone()));
         }
     }
 }
 
-/// Attests and builds the RA-TLS identity: an ephemeral key pair, Evidence bound to it, and the
-/// QUIC server config presenting the certificate that embeds the Evidence.
-fn attest() -> Result<(ServerConfig, Arc<Evidence>), BoxError> {
+/// Attests and builds the RA-TLS identity: an ephemeral key pair, Evidence bound to it, the
+/// QUIC server config presenting the certificate that embeds the Evidence, and the key pair's
+/// private key for opening `/faf` values sealed to it.
+fn attest() -> Result<(ServerConfig, Arc<Evidence>, Arc<NodeSecretKey>), BoxError> {
     info!("Initializing Nitro Enclave HTTP/3 Server...");
 
     // Install the default cryptographic provider for rustls 0.23
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let key_pair = KeyPair::generate()?;
+    let node_key = Arc::new(NodeSecretKey::from_pkcs8_der(&key_pair.serialize_der())?);
     info!("Generated ephemeral TLS certificate.");
 
     let eat_bytes = generate_evidence(&key_pair)?;
@@ -303,7 +313,7 @@ fn attest() -> Result<(ServerConfig, Arc<Evidence>), BoxError> {
     let quic_config = ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?,
     ));
-    Ok((quic_config, evidence))
+    Ok((quic_config, evidence, node_key))
 }
 
 /// Requests evidence from the detected attestation provider, bound to the TLS public key,
