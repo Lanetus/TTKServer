@@ -42,6 +42,7 @@ cargo run --bin vsock-proxy -- --cid <CID>    # parent-side UDP :443 -> enclave 
 cargo bench -p ttk-client --bench client      # client library benchmarks
 cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo deny check                              # config in deny.toml
+mdbook build docs                             # book -> docs/book; needs `cargo install mdbook-mermaid` (```mermaid blocks)
 scripts/build-eif.sh [amd64|arm64] [relay|terminal]   # EIF via Docker (Dockerfile ARG NODE) -> out/ttk-<node>_v<ver>_<arch>.eif + .json (PCRs)
 deploy/systemd/ttk-relay.service              # systemd unit for `vsock-proxy` on the parent (installed as ttk-relay; steps in its header)
 deploy/ec2/user-data.sh                       # EC2 user data: installs nitro-cli, downloads EIF/vsock-proxy/units over HTTP, starts both
