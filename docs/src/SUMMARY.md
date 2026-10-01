@@ -1,4 +1,7 @@
-[A Prefix Chapter](m.md)
+[Architecture](ARCHITECTURE.md)
 
-- [First Chapter](m2.md)
+- [Core](core.md)
+- [Client](client.md)
+- [Relay](relay.md)
+- [Terminal](terminal.md)
 - [API Reference](api.md)
