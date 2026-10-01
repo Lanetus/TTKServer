@@ -132,10 +132,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # mdbook-mermaid renders ```mermaid blocks (flowcharts etc.); config in docs/book.toml
       - name: Install mdBook
         uses: taiki-e/install-action@v2
         with:
-          tool: mdbook
+          tool: mdbook,mdbook-mermaid
 
       # Writes the book to docs/book (default build dir next to docs/src)
       - name: Build mdBook
