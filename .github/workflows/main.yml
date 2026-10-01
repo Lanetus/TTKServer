@@ -53,11 +53,11 @@ jobs:
         run: cargo install cargo-edit
 
       - name: Bump version
-        run: cargo set-version --bump ${{ steps.bump_level.outputs.level }}
+        run: cargo set-version --workspace --bump ${{ steps.bump_level.outputs.level }}
 
       - name: Get new version
         id: version
-        run: echo "tag=$(cargo pkgid | sed 's/.*#//')" >> $GITHUB_OUTPUT
+        run: echo "tag=$(cargo pkgid -p ttk-core | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
 
       - name: Commit version bump and create tag
         uses: stefanzweifel/git-auto-commit-action@v4
@@ -141,11 +141,11 @@ jobs:
       - name: Build mdBook
         run: mdbook build docs
 
-      # Clear docs restored by the cargo cache so only this crate's API is published
+      # Clear docs restored by the cargo cache so only the workspace crates' API is published
       - name: Build Rust API docs
         run: |
           rm -rf target/doc
-          cargo doc --no-deps --lib --all-features
+          cargo doc --workspace --no-deps --lib --all-features
         env:
           RUSTDOCFLAGS: -D warnings
 

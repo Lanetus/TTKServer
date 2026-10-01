@@ -1,38 +1,21 @@
-[package]
-name = "TTKServer"
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
 version = "1.0.0"
 edition = "2021"
-default-run = "TTKServer"
 license = "MIT"
-description = "RA-TLS HTTP/3 (QUIC) server and client for TEEs (AWS Nitro, AMD SEV-SNP, Intel TDX) with RFC 9711 EAT evidence"
 repository = "https://github.com/Lanetus/TTKServer"
 readme = "README.md"
 keywords = ["attestation", "ra-tls", "nitro-enclaves", "http3", "quic"]
 categories = ["cryptography", "network-programming"]
-# Files shipped to crates.io; everything else (CI, Docker, docs, editor/agent config) stays local.
-include = ["src/**", "tests/**", "benches/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "CHANGELOG.md"]
 
-[lib]
-name = "ttk_server"
-path = "src/lib.rs"
+[workspace.dependencies]
+ttk-core = { path = "crates/core", version = "1.0.0", default-features = false }
+ttk-client = { path = "crates/client", version = "1.0.0" }
 
-[[bin]]
-name = "TTKServer"
-path = "src/main.rs"
-
-# Test-only command-line client; needs the `test-client` feature, so release builds skip it.
-[[bin]]
-name = "client"
-path = "src/bin/client.rs"
-required-features = ["test-client"]
-
-# Parent-instance daemon relaying QUIC between public UDP and the enclave's vsock, both ways. Linux only.
-[[bin]]
-name = "relay"
-path = "src/bin/relay.rs"
-
-[dependencies]
-aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
+aws-nitro-enclaves-nsm-api = "0.4"
 axum = "0.8.9"
 base64 = "0.21"
 bytes = "1"
@@ -57,26 +40,7 @@ serde_json = "1"
 sha2 = "0.10"
 time = "0.3.36"
 tokio = { version = "1", features = ["full"] }
+tokio-vsock = "0.3"
 tower-service = "0.3"
 x509-parser = { version = "0.18.1", features = ["verify"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-tokio-vsock = "0.3"
-
-[features]
-default = ["nitro", "mock"]
-
-nitro = ["dep:aws-nitro-enclaves-nsm-api"]
-mock = ["dep:aws-nitro-enclaves-nsm-api"]
-sev-snp = []
-tdx = []
-# Builds the test-only `client` binary (src/bin/client.rs). Never enable in production.
-test-client = []
-
-[dev-dependencies]
 criterion = "0.8.2"
-
-[[bench]]
-name = "client"
-harness = false
-required-features = ["mock"]

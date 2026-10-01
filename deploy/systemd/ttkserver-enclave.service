@@ -5,8 +5,8 @@
 # ttk-relay.service, which relays traffic between the network and the enclave's vsock.
 #
 # Install:
-#   scripts/build-eif.sh amd64            # or arm64, matching the instance
-#   sudo install -D -m 0644 out/TTKServer_v<version>_<arch>.eif /opt/ttkserver/ttkserver.eif
+#   scripts/build-eif.sh amd64 relay      # or arm64, matching the instance; or the terminal node
+#   sudo install -D -m 0644 out/ttk-relay_v<version>_<arch>.eif /opt/ttkserver/ttkserver.eif
 #   sudo install -m 0644 deploy/systemd/ttkserver-enclave.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now ttkserver-enclave
 #

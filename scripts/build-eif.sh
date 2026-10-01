@@ -1,10 +1,11 @@
 #!/usr/bin/env sh
-# Builds the TTKServer Nitro Enclave image file (EIF) locally with Docker, mirroring the
+# Builds a TTKServer Nitro Enclave image file (EIF) locally with Docker, mirroring the
 # "Build EIF" steps of .github/workflows/build.yml.
 #
-# Usage: scripts/build-eif.sh [amd64|arm64]    (default: this machine's architecture)
+# Usage: scripts/build-eif.sh [amd64|arm64] [relay|terminal]
+#        (defaults: this machine's architecture, and the relay node)
 #
-# Output: out/TTKServer_v<version>_<arch>.eif and .json (nitro-cli's measurements: PCR0-2,
+# Output: out/ttk-<node>_v<version>_<arch>.eif and .json (nitro-cli's measurements: PCR0-2,
 # the reference values a Verifier appraises the enclave's evidence against).
 #
 # Needs only Docker. nitro-cli runs in an Amazon Linux container that reaches the host's Docker
@@ -17,7 +18,7 @@ case "${1:-$(uname -m)}" in
     amd64 | x86_64) arch=amd64 ;;
     arm64 | aarch64) arch=arm64 ;;
     -h | --help)
-        sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *)
@@ -27,13 +28,21 @@ case "${1:-$(uname -m)}" in
 esac
 platform="linux/$arch"
 
+case "${2:-relay}" in
+    relay | terminal) node="${2:-relay}" ;;
+    *)
+        echo "error: unknown node '$2' (expected relay or terminal)" >&2
+        exit 2
+        ;;
+esac
+
 version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
-name="TTKServer_v${version}_${arch}"
-app_image="ttkserver:local-$arch"
+name="ttk-${node}_v${version}_${arch}"
+app_image="ttk-$node:local-$arch"
 cli_image="ttkserver-nitro-cli:$arch"
 
 echo "==> Building app image $app_image ($platform)"
-docker build --platform "$platform" -t "$app_image" .
+docker build --platform "$platform" --build-arg NODE="$node" -t "$app_image" .
 
 # nitro-cli image, built once per architecture and reused on later runs.
 if ! docker image inspect "$cli_image" > /dev/null 2>&1; then

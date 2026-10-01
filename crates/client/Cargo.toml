@@ -1,0 +1,56 @@
+[package]
+name = "ttk-client"
+description = "RA-TLS HTTP/3 (QUIC) client and TEE evidence verifier for TTKServer nodes, with onion-sealed /faf requests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "ttk_client"
+
+# Command-line client for testing; the enclave images never include it.
+[[bin]]
+name = "client"
+path = "src/main.rs"
+
+[dependencies]
+ttk-core.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+ciborium.workspace = true
+der-parser.workspace = true
+env_logger.workspace = true
+h3.workspace = true
+h3-quinn.workspace = true
+hpke.workspace = true
+log.workspace = true
+p256.workspace = true
+quinn.workspace = true
+rand_core.workspace = true
+ring.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+rustls-webpki.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+# Attested servers for the end-to-end tests, with every attestation provider compiled in.
+ttk-core = { workspace = true, features = ["mock", "sev-snp", "tdx"] }
+ttk-relay = { path = "../relay" }
+ttk-terminal = { path = "../terminal" }
+aws-nitro-enclaves-nsm-api.workspace = true
+criterion.workspace = true
+rcgen.workspace = true
+
+[[bench]]
+name = "client"
+harness = false

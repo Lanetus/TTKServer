@@ -1,0 +1,38 @@
+[package]
+name = "ttk-terminal"
+description = "TTKServer terminal node: an attested enclave server that is the last hop of onion-routed /faf requests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "ttk_terminal"
+
+# The terminal node, run inside the enclave.
+[[bin]]
+name = "terminal"
+path = "src/main.rs"
+
+[dependencies]
+ttk-core.workspace = true
+ttk-client.workspace = true
+axum.workspace = true
+env_logger.workspace = true
+log.workspace = true
+tokio.workspace = true
+
+[features]
+default = ["nitro", "mock"]
+
+nitro = ["ttk-core/nitro"]
+mock = ["ttk-core/mock"]
+sev-snp = ["ttk-core/sev-snp"]
+tdx = ["ttk-core/tdx"]
+
+[dev-dependencies]
+ttk-core = { workspace = true, features = ["mock"] }
+rcgen.workspace = true

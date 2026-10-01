@@ -1,6 +1,6 @@
 #!/bin/bash
 # EC2 user data that turns a fresh Amazon Linux instance into a TTKServer parent instance: it
-# installs the Nitro Enclaves tooling, downloads the EIF, the `relay` binary and the systemd units
+# installs the Nitro Enclaves tooling, downloads the EIF, the `vsock-proxy` binary and the systemd units
 # from an HTTP server, and starts the enclave and the relay (both also start on every reboot).
 #
 # Launch the instance with:
@@ -12,8 +12,8 @@
 #   - This file as user data, with TTK_BASE_URL (and ideally the SHA-256 values) filled in.
 #
 # The HTTP server must serve, under TTK_BASE_URL:
-#   ttkserver.eif               scripts/build-eif.sh output (out/TTKServer_v<ver>_<arch>.eif)
-#   ttk-relay                   target/release/relay, built for Linux on the same architecture
+#   ttkserver.eif               scripts/build-eif.sh output (out/ttk-<relay|terminal>_v<ver>_<arch>.eif)
+#   ttk-relay                   target/release/vsock-proxy, built for Linux on the same architecture
 #   ttk-relay.service           deploy/systemd/ttk-relay.service
 #   ttkserver-enclave.service   deploy/systemd/ttkserver-enclave.service
 #
