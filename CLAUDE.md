@@ -44,6 +44,7 @@ cargo fmt && cargo clippy --all-targets -- -D warnings
 cargo deny check                              # config in deny.toml
 scripts/build-eif.sh [amd64|arm64]            # build the EIF locally with Docker -> out/TTKServer_v<ver>_<arch>.eif + .json (PCRs)
 deploy/systemd/ttk-relay.service              # systemd unit for `relay` on the parent (install steps in its header)
+deploy/ec2/user-data.sh                       # EC2 user data: installs nitro-cli, downloads EIF/relay/units over HTTP, starts both
 deploy/systemd/ttkserver-enclave.service      # systemd unit running the EIF via nitro-cli (CID 16, 2 vCPU, 1024 MiB; /etc/default/ttkserver-enclave)
 ```
 
