@@ -2,6 +2,8 @@
 
 Thanks for your interest in improving TTKServer! This guide covers how to set up the workspace, the checks your change must pass, and how commits and releases work.
 
+Everyone participating in this project is expected to follow our [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Getting set up
 
 You need stable [Rust](https://www.rust-lang.org/tools/install) (edition 2021). Optional tools, depending on what you touch:
