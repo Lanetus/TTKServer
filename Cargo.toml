@@ -29,7 +29,7 @@ h3-quinn = "0.0.9"  # The adapter bridging Quinn's QUIC API to h3's Transport tr
 # RFC 9180 HPKE (DHKEM(P-256)) sealing `/faf` relay addresses and message keys to a node's RA-TLS key.
 hpke = { version = "0.12", default-features = false, features = ["alloc", "p256"] }
 log = "0.4"
-p256 = { version = "0.13", default-features = false, features = ["arithmetic", "pkcs8", "std"] }
+p256 = { version = "0.14", default-features = false, features = ["arithmetic", "pkcs8", "std"] }
 quinn = "0.11"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rcgen = "0.13"
@@ -42,7 +42,7 @@ serde_json = "1"
 sha2 = "0.11"
 time = "0.3.36"
 tokio = { version = "1", features = ["full"] }
-tokio-vsock = "0.7.2"
+tokio-vsock = "0.3"
 tower-service = "0.3"
 x509-parser = { version = "0.18.1", features = ["verify"] }
 criterion = "0.8.2"
