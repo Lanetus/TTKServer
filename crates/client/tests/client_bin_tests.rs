@@ -49,15 +49,22 @@ async fn run_client_binary_with_env(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn client_binary_sends_a_faf_request_through_the_relay() {
+async fn client_binary_sends_a_faf_request_through_two_relays() {
     let addr = start_relay().to_string();
-    let relay = start_terminal().to_string();
-    let output = run_client_binary(&["--addr", &addr, "--relay", &relay], true).await;
+    let relay = start_relay().to_string();
+    let terminal = start_terminal().to_string();
+    let output = run_client_binary(
+        &["--addr", &addr, "--relay", &relay, "--terminal", &terminal],
+        true,
+    )
+    .await;
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(output.status.success(), "{stdout}");
     assert!(
-        stdout.contains(&format!("--> Sending POST /faf (relay: {relay})")),
+        stdout.contains(&format!(
+            "--> Sending POST /faf (route: {addr} -> {relay} -> {terminal})"
+        )),
         "{stdout}"
     );
     assert!(stdout.contains("Response Status: 200"), "{stdout}");
@@ -69,7 +76,30 @@ async fn client_binary_sends_a_faf_request_through_the_relay() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn client_binary_defaults_to_the_relay_on_port_4444() {
+async fn client_binary_fails_when_the_second_relay_is_a_terminal() {
+    let addr = start_relay().to_string();
+    let terminal = start_terminal().to_string();
+    // The terminal rejects a request that still has relays left, so the entry relay reports a
+    // bad gateway.
+    let output = run_client_binary(
+        &[
+            "--addr",
+            &addr,
+            "--relay",
+            &terminal,
+            "--terminal",
+            &terminal,
+        ],
+        true,
+    )
+    .await;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("Response Status: 502"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_binary_defaults_to_the_second_relay_on_port_4434() {
     let addr = start_relay();
     let url = format!("https://127.0.0.1:{}", addr.port());
     let output = run_client_binary(&[&url], true).await;
@@ -78,12 +108,33 @@ async fn client_binary_defaults_to_the_relay_on_port_4444() {
 
     // Nothing listens there, so the relay can't be attested and nothing is sent.
     assert!(
-        stdout.contains("--> Attesting relay 127.0.0.1:4444"),
+        stdout.contains("--> Attesting relay 127.0.0.1:4434"),
         "{stdout}"
     );
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("Failed to attest relay 127.0.0.1:4444"),
+        stderr.contains("Failed to attest relay 127.0.0.1:4434"),
+        "{stderr}"
+    );
+    assert!(!stdout.contains("Sending POST /faf"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_binary_defaults_to_the_terminal_on_port_4444() {
+    let addr = start_relay().to_string();
+    let relay = start_relay().to_string();
+    let output = run_client_binary(&["--addr", &addr, "--relay", &relay], true).await;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Nothing listens there, so the terminal can't be attested and nothing is sent.
+    assert!(
+        stdout.contains("--> Attesting terminal 127.0.0.1:4444"),
+        "{stdout}"
+    );
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("Failed to attest terminal 127.0.0.1:4444"),
         "{stderr}"
     );
     assert!(!stdout.contains("Sending POST /faf"), "{stdout}");
@@ -110,9 +161,10 @@ async fn client_binary_prints_usage() {
 #[tokio::test(flavor = "multi_thread")]
 async fn client_binary_logs_the_verified_certificate() {
     let addr = start_relay().to_string();
+    let relay = start_relay().to_string();
     let terminal = start_terminal().to_string();
     let output = run_client_binary_with_env(
-        &["--addr", &addr, "--relay", &terminal],
+        &["--addr", &addr, "--relay", &relay, "--terminal", &terminal],
         true,
         &[("RUST_LOG", "info")],
     )

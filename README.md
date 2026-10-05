@@ -148,12 +148,16 @@ By default next hops must present genuine TEE evidence. For local development wi
 
 ### Test client
 
-The `client` binary (crate `ttk-client`) is for testing only. It attests the terminal node and seals a message to it, connects to the relay node over HTTP/3 verifying its certificate's embedded Evidence, sends the message through the relay to the terminal with `POST /faf` and prints the response:
+The `client` binary (crate `ttk-client`) is for testing only. It routes a message through two relay nodes to a terminal node: it connects to the entry relay (`--addr`) over HTTP/3 verifying its certificate's embedded Evidence, attests the second relay (`--relay`) and the terminal (`--terminal`), seals each hop's address to the relay that reads it and the message to the terminal, sends the request to the entry relay with `POST /faf` and prints the response:
 
 ```sh
-# Relay and terminal nodes as above (they fall back to mock attestation off-TEE), with
-# TTK_ALLOW_MOCK_ATTESTATION=1 on the relay; then the client, accepting mock Evidence:
-TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --bin client -- --addr 127.0.0.1:4433 --relay 127.0.0.1:4444
+# Two relays and a terminal (they fall back to mock attestation off-TEE), with
+# TTK_ALLOW_MOCK_ATTESTATION=1 on the relays so they accept mock next hops:
+TTK_ALLOW_MOCK_ATTESTATION=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4433 cargo run --bin relay
+TTK_ALLOW_MOCK_ATTESTATION=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4434 cargo run --bin relay
+TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --bin terminal
+# Then the client, accepting mock Evidence:
+TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --bin client -- --addr 127.0.0.1:4433 --relay 127.0.0.1:4434 --terminal 127.0.0.1:4444
 ```
 
 Run `cargo run --bin client -- --help` for all options.
