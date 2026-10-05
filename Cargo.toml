@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "2.3.3"
+version = "2.3.4"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/Lanetus/TTKServer"
@@ -12,10 +12,10 @@ keywords = ["attestation", "ra-tls", "nitro-enclaves", "http3", "quic"]
 categories = ["cryptography", "network-programming"]
 
 [workspace.dependencies]
-ttk-core = { path = "crates/core", version = "2.3.3", default-features = false }
-ttk-client = { path = "crates/client", version = "2.3.3" }
-ttk-relay = { path = "crates/relay", version = "2.3.3" }
-ttk-terminal = { path = "crates/terminal", version = "2.3.3" }
+ttk-core = { path = "crates/core", version = "2.3.4", default-features = false }
+ttk-client = { path = "crates/client", version = "2.3.4" }
+ttk-relay = { path = "crates/relay", version = "2.3.4" }
+ttk-terminal = { path = "crates/terminal", version = "2.3.4" }
 
 aws-nitro-enclaves-nsm-api = "0.4"
 axum = "0.8.9"
