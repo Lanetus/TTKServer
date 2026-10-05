@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-05
+
+### Added
+- The test-only `client` binary sends its `POST /faf` request through two relays and a terminal: an entry relay (`--addr`), a second relay (`--relay`, default `127.0.0.1:4434`) and a terminal (`--terminal`, default `127.0.0.1:4444`).
+
+### Changed
+- **BREAKING:** The `client` binary's `--relay` option now names the second relay instead of the terminal; use the new `--terminal` option to name the terminal.
+- Hop addresses in the `/faf` request are now HPKE-sealed to the relay that reads them; previously the single hop address was sent in the clear.
+
+## [2.3.5] - 2026-10-05
+
+No user-facing changes.
+
 ## [2.3.4] - 2026-10-05
 
 ### Security
@@ -334,7 +347,9 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v2.3.4...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/Lanetus/TTKServer/compare/v2.3.5...v2.4.0
+[2.3.5]: https://github.com/Lanetus/TTKServer/compare/v2.3.4...v2.3.5
 [2.3.4]: https://github.com/Lanetus/TTKServer/compare/v2.3.3...v2.3.4
 [2.3.3]: https://github.com/Lanetus/TTKServer/compare/v2.3.2...v2.3.3
 [2.3.2]: https://github.com/Lanetus/TTKServer/compare/v2.3.1...v2.3.2
