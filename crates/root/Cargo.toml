@@ -1,0 +1,38 @@
+[package]
+name = "ttk-root"
+description = "TTKServer root node: an attested enclave server that publishes the checksums of the accepted enclave images"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "ttk_root"
+
+# The root node, run inside the enclave.
+[[bin]]
+name = "root"
+path = "src/main.rs"
+
+[dependencies]
+ttk-core.workspace = true
+ttk-client.workspace = true
+axum.workspace = true
+env_logger.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
+[features]
+default = ["nitro", "mock"]
+
+nitro = ["ttk-core/nitro"]
+mock = ["ttk-core/mock"]
+sev-snp = ["ttk-core/sev-snp"]
+tdx = ["ttk-core/tdx"]
+
+[dev-dependencies]
+ttk-core = { workspace = true, features = ["mock"] }
+serde_json.workspace = true

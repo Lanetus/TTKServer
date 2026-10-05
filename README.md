@@ -71,6 +71,13 @@ The test `client` binary lives in its own crate (`ttk-client`), so the enclave i
 ```sh
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4433 cargo run --release --bin relay
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --release --bin terminal
+TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4455 cargo run --release --bin root
+```
+
+The `root` node (crate `ttk-root`) serves `GET /root-attestation`, a JSON list of the accepted enclave image checksums (PCR0, the SHA-384 of each EIF), taken from the client verifier's built-in allowlist (`crates/client/src/verifier/nitro_image_allowlist.txt`):
+
+```json
+{ "hash_algorithm": "SHA384", "pcr0": ["7807833a90cc86f5…"] }
 ```
 
 Both listen on vsock port `TTK_VSOCK_PORT` (default `5000`, Linux only) unless `TTK_USE_UDP=1`, in which case they listen on UDP `TTK_LISTEN_ADDR` (default `0.0.0.0:4433`). From an enclave, the relay reaches next hops through the parent's `vsock-proxy` at vsock `TTK_PARENT_CID`:`TTK_OUTBOUND_VSOCK_PORT` (default `3:5001`).
@@ -267,7 +274,7 @@ Claim keys are from the IANA ["CBOR Web Token (CWT) Claims"](https://www.iana.or
 
 ## Docker
 
-The `Dockerfile` builds one enclave node, `relay` (default) or `terminal` (`--build-arg NODE=terminal`), in release mode with the default features and packages it in a `debian:bookworm-slim` image. The test-only `client` binary is not included. `scripts/build-eif.sh [amd64|arm64] [relay|terminal]` turns the image into an EIF. The CD pipeline builds and pushes the image to a private Amazon ECR repository.
+The `Dockerfile` builds one enclave node, `relay` (default), `terminal` or `root` (`--build-arg NODE=terminal`, `NODE=root`), in release mode with the default features and packages it in a `debian:bookworm-slim` image. The test-only `client` binary is not included. `scripts/build-eif.sh [amd64|arm64] [relay|terminal|root]` turns the image into an EIF. The CD pipeline builds and pushes the image to a private Amazon ECR repository.
 
 ## License
 

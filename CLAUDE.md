@@ -22,6 +22,7 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
   - `src/main.rs` — **test-only** bin `client` (never in enclave images): routes `/faf` through two relays to a terminal: connects to the entry relay (`--addr`), attests the second relay (`--relay`, default `127.0.0.1:4434`) and the terminal (`--terminal`, default `127.0.0.1:4444`), seals each hop address to the relay reading it and the body to the terminal. E2E tests in `tests/client_bin_tests.rs`.
   - `benches/client.rs` — Criterion benches.
 - `crates/relay/` — crate `ttk-relay` (lib `ttk_relay`): `Relay` (wraps a core `Server`, adds `POST /faf` forwarding with a verified connection pool; empty `relays` = 400), `run()` (env config, `TTK_PARENT_CID`/`TTK_OUTBOUND_VSOCK_PORT`, `TTK_ALLOW_MOCK_ATTESTATION=1` for mock next hops). Bins: `relay` (`src/main.rs`, enclave) and `vsock-proxy` (`src/bin/vsock-proxy.rs`, Linux, parent instance: public UDP `:443` to enclave vsock `5000`, and outbound vsock `5001` to UDP).
+- `crates/root/` — crate `ttk-root` (lib `ttk_root`): `Root` (wraps a core `Server`, adds `GET /root-attestation`: JSON `RootAttestation` `{hash_algorithm: "SHA384", pcr0: [hex…]}`, the accepted enclave image checksums from `TrustStore::builtin().nitro_image_allowlist`; `with_trust_store` overrides), `run()`. Bin `root` (enclave).
 - `crates/terminal/` — crate `ttk-terminal` (lib `ttk_terminal`): `Terminal` (wraps a core `Server`, adds `POST /faf` last hop: non-empty `relays` = 400, must decrypt `body` or 400), `run()`. Bin `terminal` (enclave).
 
 ## Features (`ttk-core`; `ttk-relay` / `ttk-terminal` forward them)
@@ -37,13 +38,14 @@ cargo test --workspace                        # nitro tests fall back to mock do
 cargo test --workspace --all-features
 TTK_USE_UDP=1 cargo run --bin relay           # relay node on UDP :4433 (TTK_LISTEN_ADDR overrides; RUST_LOG=info for logs)
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --bin terminal
+TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4455 cargo run --bin root   # GET /root-attestation
 cargo run --bin client -- <args>              # see parse_client_args() in crates/client/src/main.rs
 cargo run --bin vsock-proxy -- --cid <CID>    # parent-side UDP :443 -> enclave vsock relay (Linux)
 cargo bench -p ttk-client --bench client      # client library benchmarks
 cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo deny check                              # config in deny.toml
 mdbook build docs                             # book -> docs/book; needs `cargo install mdbook-mermaid` (```mermaid blocks)
-scripts/build-eif.sh [amd64|arm64] [relay|terminal]   # EIF via Docker (Dockerfile ARG NODE) -> out/ttk-<node>_v<ver>_<arch>.eif + .json (PCRs)
+scripts/build-eif.sh [amd64|arm64] [relay|terminal|root]   # EIF via Docker (Dockerfile ARG NODE) -> out/ttk-<node>_v<ver>_<arch>.eif + .json (PCRs)
 deploy/systemd/ttk-relay.service              # systemd unit for `vsock-proxy` on the parent (installed as ttk-relay; steps in its header)
 deploy/ec2/user-data.sh                       # EC2 user data: installs nitro-cli, downloads EIF/vsock-proxy/units over HTTP, starts both
 deploy/systemd/ttkserver-enclave.service      # systemd unit running the EIF via nitro-cli (CID 16, 2 vCPU, 1024 MiB; /etc/default/ttkserver-enclave)
