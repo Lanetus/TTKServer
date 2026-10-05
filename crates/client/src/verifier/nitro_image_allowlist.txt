@@ -1,0 +1,7 @@
+# Verified AWS Nitro enclave images, compiled into ttk-client (TrustStore::builtin).
+#
+# One PCR0 per line: the SHA-384 of the enclave image file (EIF), as 96 hex characters.
+# `scripts/build-eif.sh` prints it ("PCR0" in out/<image>.json). Blank lines and text after `#`
+# are ignored. Evidence from a non-debug Nitro enclave whose PCR0 is not listed is rejected.
+
+9a800a707a9feb9fba72da91372e31302b90b8bcc25529b2aa6436b4ac8d8ad73ae3e51ead196e3e23b697eaa4dc05e3 # ttk-terminal v2.3.3 arm64

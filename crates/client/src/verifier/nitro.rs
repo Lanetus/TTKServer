@@ -79,6 +79,10 @@ pub fn verify(
 
     // Debug-mode enclaves report all-zero PCRs.
     let debug = doc.pcrs.get(&0).is_some_and(|p| p.iter().all(|b| *b == 0));
+    // A debug enclave's image cannot be identified; `verify_evidence` rejects it by policy.
+    if !debug {
+        check_image_allowed(&doc, trust)?;
+    }
     let measurements = doc
         .pcrs
         .iter()
@@ -92,6 +96,47 @@ pub fn verify(
         debug,
         nitro: Some(doc),
     })
+}
+
+/// Checks that PCR0, the SHA-384 of the enclave image file, is a verified image checksum.
+fn check_image_allowed(doc: &AttestationDocument, trust: &TrustStore) -> Result<(), String> {
+    let pcr0 = doc
+        .pcrs
+        .get(&0)
+        .ok_or("attestation document has no PCR0 (enclave image measurement)")?;
+    if trust.nitro_image_allowlist.iter().any(|p| p == pcr0) {
+        return Ok(());
+    }
+    Err(format!(
+        "enclave image checksum (PCR0) {} is not in the list of verified images",
+        crate::hex_encode(pcr0)
+    ))
+}
+
+/// Parses a Nitro image allowlist: one PCR0 (96 hex characters, the SHA-384 of an enclave
+/// image file) per line. Blank lines and text after `#` are ignored.
+pub fn parse_image_allowlist(text: &str) -> Result<Vec<Vec<u8>>, String> {
+    text.lines()
+        .enumerate()
+        .map(|(i, line)| (i + 1, line.split('#').next().unwrap_or_default().trim()))
+        .filter(|(_, entry)| !entry.is_empty())
+        .map(|(n, entry)| {
+            decode_sha384_hex(entry).ok_or(format!(
+                "line {n}: expected a PCR0 of 96 hex characters, got '{entry}'"
+            ))
+        })
+        .collect()
+}
+
+/// Decodes 96 hex characters into a 48-byte SHA-384 digest.
+fn decode_sha384_hex(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() != 96 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
 }
 
 /// `module_id` the server's mock provider puts in its documents.
