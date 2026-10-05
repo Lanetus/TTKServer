@@ -102,3 +102,6 @@ fabric.properties
 
 .idea/
 docs/book/
+
+# macOS Finder metadata
+.DS_Store
