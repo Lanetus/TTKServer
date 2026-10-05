@@ -39,7 +39,8 @@ use x509_parser::prelude::*;
 ///
 /// 1. the certificate itself: well-formed, within its validity period, correctly self-signed;
 /// 2. the evidence: vendor signature chain up to a root in the [`TrustStore`] (see
-///    [`crate::verifier`]), and that the TEE is not in debug mode;
+///    [`crate::verifier`]), that the TEE is not in debug mode, and for Nitro that the enclave
+///    image's PCR0 is in [`TrustStore::nitro_image_allowlist`];
 /// 3. the binding: the evidence's report data equals the SHA-256 of the certificate's
 ///    SubjectPublicKeyInfo;
 /// 4. any expected measurements configured with

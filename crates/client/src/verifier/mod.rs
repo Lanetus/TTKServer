@@ -11,7 +11,8 @@
 //! | `sgx`       | Intel SGX      | DCAP quote v3/v4/v5 with PCK chain         | [`dcap`]      |
 //!
 //! Every verifier checks the vendor signature chain up to a root in the [`TrustStore`] and
-//! returns a [`VerifiedEvidence`]. [`verify_evidence`] then enforces the [`Policy`] and checks
+//! returns a [`VerifiedEvidence`]; the Nitro verifier also requires the enclave image's PCR0 to
+//! be in [`TrustStore::nitro_image_allowlist`]. [`verify_evidence`] then enforces the [`Policy`] and checks
 //! that the evidence's report data is bound to the expected hash (the SHA-256 of the RA-TLS
 //! certificate's public key).
 
@@ -35,6 +36,8 @@ const AWS_NITRO_ROOT: &[u8] = include_bytes!("certs/aws_nitro_root_g1.der");
 const MOCK_NITRO_ROOT: &[u8] = include_bytes!("certs/mock_nitro_root.der");
 /// Intel SGX Root CA, which also roots TDX PCK certificate chains.
 const INTEL_SGX_ROOT: &[u8] = include_bytes!("certs/intel_sgx_root_ca.der");
+/// PCR0 values (enclave image checksums) of the verified Nitro enclave images.
+const NITRO_IMAGE_ALLOWLIST: &str = include_str!("nitro_image_allowlist.txt");
 
 /// The trusted execution environment that produced a piece of evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -106,17 +109,23 @@ pub struct TrustStore {
     pub intel_sgx_root: Vec<u8>,
     /// AMD root (ARK) and signing (ASK) certificates per processor family.
     pub amd: Vec<sev_snp::AmdRoots>,
+    /// PCR0 values (SHA-384 of the enclave image file) of the verified Nitro enclave images.
+    /// Evidence from a non-debug Nitro enclave running any other image is rejected.
+    pub nitro_image_allowlist: Vec<Vec<u8>>,
 }
 
 /// Construction of the trust store.
 impl TrustStore {
-    /// The vendor roots embedded in this crate, downloaded from AWS, Intel and AMD KDS.
+    /// The vendor roots embedded in this crate, downloaded from AWS, Intel and AMD KDS, and the
+    /// Nitro image allowlist in `nitro_image_allowlist.txt`.
     pub fn builtin() -> Self {
         Self {
             aws_nitro_root: AWS_NITRO_ROOT.to_vec(),
             mock_nitro_root: MOCK_NITRO_ROOT.to_vec(),
             intel_sgx_root: INTEL_SGX_ROOT.to_vec(),
             amd: sev_snp::AmdRoots::builtin(),
+            nitro_image_allowlist: nitro::parse_image_allowlist(NITRO_IMAGE_ALLOWLIST)
+                .expect("built-in nitro_image_allowlist.txt is invalid"),
         }
     }
 }

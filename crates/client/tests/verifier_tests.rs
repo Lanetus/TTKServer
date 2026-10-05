@@ -5,6 +5,7 @@
 //! parsed correctly; synthetic evidence signed by test PKIs exercises the policy and binding
 //! checks for every TEE.
 
+use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
 use ciborium::Value;
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CustomExtension, DnType, IsCa, KeyPair,
@@ -19,10 +20,11 @@ use rustls::client::danger::ServerCertVerifier;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::time::Duration;
 use ttk_client::verifier::sev_snp::{AmdProduct, AmdRoots};
 use ttk_client::verifier::{
-    dcap, is_bound_to, sev_snp, submod, verify_evidence, Policy, TeeKind, TrustStore,
+    dcap, is_bound_to, nitro, sev_snp, submod, verify_evidence, Policy, TeeKind, TrustStore,
 };
 use ttk_client::EnclaveCertVerifier;
 use ttk_core::attestation::eat::EatClaimsSet;
@@ -535,6 +537,165 @@ fn report_data_binding_allows_zero_padding_only() {
     padded[63] = 1;
     assert!(!is_bound_to(&padded, &hash));
     assert!(!is_bound_to(&hash[..16], &hash));
+}
+
+// ---------------------------------------------------------------------------
+// Nitro enclave image allowlist
+// ---------------------------------------------------------------------------
+
+/// PCR0 of an image in the test allowlist.
+const LISTED_PCR0: &str = "7807833a90cc86f5a853a1f49043a568f3428f6b03eb983aed99899fbfa77d6b86b34fa934e318dd3741debca32c0aba";
+
+/// A test AWS Nitro PKI: root CA → signing certificate, both ECDSA P-384.
+struct NitroPki {
+    root: Vec<u8>,
+    signing_cert: Vec<u8>,
+    signing_key: EcdsaKeyPair,
+}
+
+fn nitro_pki() -> NitroPki {
+    let root_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
+    let root = cert("Test Nitro Root CA", &root_key, true, None, vec![]);
+    let key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
+    let leaf = cert(
+        "Test Nitro Signer",
+        &key,
+        false,
+        Some((&root, &root_key)),
+        vec![],
+    );
+    NitroPki {
+        root: root.der().to_vec(),
+        signing_cert: leaf.der().to_vec(),
+        signing_key: signer(&key, &ECDSA_P384_SHA384_FIXED_SIGNING),
+    }
+}
+
+/// Builds a signed COSE_Sign1 Nitro attestation document whose PCR0 is `pcr0`.
+fn build_nitro_doc(pki: &NitroPki, pcr0: Vec<u8>) -> Vec<u8> {
+    let mut pcrs = BTreeMap::from([(0, pcr0)]);
+    for i in 1..16 {
+        pcrs.insert(i, vec![i as u8; 48]);
+    }
+    let timestamp = UnixTime::now().as_secs() * 1000;
+    let payload = AttestationDoc::new(
+        "i-0123456789abcdef0-enc0123456789abcdef".into(),
+        aws_nitro_enclaves_nsm_api::api::Digest::SHA384,
+        timestamp,
+        pcrs,
+        pki.signing_cert.clone(),
+        vec![pki.root.clone()],
+        Some(vec![7; 32]),
+        None,
+        None,
+    )
+    .to_binary();
+
+    let protected = vec![0xa1, 0x01, 0x38, 0x22]; // {1: -35} (alg: ES384)
+    let mut to_sign = Vec::new();
+    ciborium::into_writer(
+        &Value::Array(vec![
+            Value::Text("Signature1".into()),
+            Value::Bytes(protected.clone()),
+            Value::Bytes(Vec::new()),
+            Value::Bytes(payload.clone()),
+        ]),
+        &mut to_sign,
+    )
+    .unwrap();
+    let signature = sign(&pki.signing_key, &to_sign);
+
+    let mut out = Vec::new();
+    ciborium::into_writer(
+        &Value::Tag(
+            18,
+            Box::new(Value::Array(vec![
+                Value::Bytes(protected),
+                Value::Map(vec![]),
+                Value::Bytes(payload),
+                Value::Bytes(signature),
+            ])),
+        ),
+        &mut out,
+    )
+    .unwrap();
+    out
+}
+
+/// A trust store rooted at the test Nitro PKI, allowing only [`LISTED_PCR0`].
+fn nitro_trust(pki: &NitroPki) -> TrustStore {
+    TrustStore {
+        aws_nitro_root: pki.root.clone(),
+        nitro_image_allowlist: nitro::parse_image_allowlist(LISTED_PCR0).unwrap(),
+        ..TrustStore::builtin()
+    }
+}
+
+fn listed_pcr0() -> Vec<u8> {
+    nitro::parse_image_allowlist(LISTED_PCR0).unwrap().remove(0)
+}
+
+#[test]
+fn builtin_nitro_image_allowlist_is_valid_and_not_empty() {
+    assert!(!TrustStore::builtin().nitro_image_allowlist.is_empty());
+}
+
+#[test]
+fn nitro_image_allowlist_skips_comments_and_blank_lines() {
+    let text = format!(
+        "# header\n\n  {LISTED_PCR0} # v1\n{}\n",
+        LISTED_PCR0.to_uppercase()
+    );
+    let list = nitro::parse_image_allowlist(&text).unwrap();
+    assert_eq!(list, vec![listed_pcr0(), listed_pcr0()]);
+    assert_eq!(list[0].len(), 48);
+}
+
+#[test]
+fn nitro_image_allowlist_rejects_malformed_entries() {
+    let too_long = format!("{LISTED_PCR0}00");
+    let signed = format!("+{}", &LISTED_PCR0[1..]);
+    for bad in [&LISTED_PCR0[..94], &too_long, &signed] {
+        let err = nitro::parse_image_allowlist(bad).unwrap_err();
+        assert!(err.starts_with("line 1:"), "{err}");
+    }
+}
+
+#[test]
+fn nitro_evidence_from_a_listed_image_is_accepted() {
+    let pki = nitro_pki();
+    let doc = build_nitro_doc(&pki, listed_pcr0());
+    let evidence = nitro::verify(&doc, UnixTime::now(), &nitro_trust(&pki), Policy::default())
+        .expect("a listed image should verify");
+    assert_eq!(evidence.tee, TeeKind::AwsNitro);
+    assert_eq!(evidence.measurements["pcr0"], listed_pcr0());
+    assert!(!evidence.debug);
+}
+
+#[test]
+fn nitro_evidence_from_an_unlisted_image_is_rejected() {
+    let pki = nitro_pki();
+    let mut pcr0 = listed_pcr0();
+    pcr0[0] ^= 1;
+    let doc = build_nitro_doc(&pki, pcr0);
+    let err =
+        nitro::verify(&doc, UnixTime::now(), &nitro_trust(&pki), Policy::default()).unwrap_err();
+    assert!(err.contains("not in the list of verified images"), "{err}");
+}
+
+#[test]
+fn nitro_debug_evidence_is_left_to_the_debug_policy() {
+    let pki = nitro_pki();
+    let doc = build_nitro_doc(&pki, vec![0; 48]);
+    let trust = nitro_trust(&pki);
+    let evidence = nitro::verify(&doc, UnixTime::now(), &trust, Policy::default())
+        .expect("debug images cannot be identified, so the allowlist does not apply");
+    assert!(evidence.debug);
+
+    let eat = eat_with(vec![(submod::AWS_NITRO, Value::Bytes(doc))]);
+    let err =
+        verify_evidence(&eat, &[7; 32], UnixTime::now(), &trust, Policy::default()).unwrap_err();
+    assert!(err.contains("debug-mode TEE"), "{err}");
 }
 
 // ---------------------------------------------------------------------------
