@@ -5,12 +5,13 @@ use std::net::SocketAddr;
 use ttk_client::faf::{FafBody, FafRelay, FafRequest};
 use ttk_client::seal::{self, NodePublicKey};
 use ttk_client::{EnclaveCertVerifier, TtkClient};
-use ttk_relay::Relay;
+use ttk_relay::{Relay, MAX_RELAYS};
 use ttk_terminal::Terminal;
 
-/// Starts a relay node that accepts mock-attested next hops, and returns its address.
+/// Starts a relay node that accepts mock-attested next hops on local addresses, and returns its
+/// address.
 fn start_relay() -> SocketAddr {
-    start(Relay::allow_mock)
+    start(|relay| relay.allow_mock().allow_private_next_hops())
 }
 
 /// Starts a relay node configured by `configure` on a free local port and returns its address.
@@ -106,7 +107,7 @@ async fn faf_answers_502_when_the_body_is_not_sealed_to_the_terminal() {
     };
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 502);
-    assert_eq!(response.text().unwrap(), "relay answered 400 Bad Request");
+    assert_eq!(response.text().unwrap(), "relay failed");
     client.close().await.unwrap();
 }
 
@@ -122,7 +123,7 @@ async fn faf_answers_502_when_the_route_ends_at_a_relay() {
     };
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 502);
-    assert_eq!(response.text().unwrap(), "relay answered 400 Bad Request");
+    assert_eq!(response.text().unwrap(), "relay failed");
     client.close().await.unwrap();
 }
 
@@ -202,7 +203,7 @@ async fn faf_accepts_a_plain_address_without_a_salt() {
 async fn faf_answers_502_when_the_next_hop_fails_attestation() {
     // The default policy accepts only genuine TEE evidence, so a mock terminal is rejected.
     let terminal = start_terminal();
-    let client = connect(start(|relay| relay)).await;
+    let client = connect(start(Relay::allow_private_next_hops)).await;
 
     let request = FafRequest {
         relays: vec![plain(terminal)],
@@ -210,7 +211,64 @@ async fn faf_answers_502_when_the_next_hop_fails_attestation() {
     };
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 502);
-    assert!(response.text().unwrap().starts_with("relay failed"));
+    assert_eq!(response.text().unwrap(), "relay failed");
+    client.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn faf_refuses_loopback_next_hops_by_default() {
+    // Mock attestation is allowed, so only the egress policy can stop this hop.
+    let terminal = start_terminal();
+    let client = connect(start(Relay::allow_mock)).await;
+
+    for address in [
+        format!("https://{terminal}"),
+        format!("localhost:{}", terminal.port()),
+    ] {
+        let request = FafRequest {
+            relays: vec![FafRelay {
+                address,
+                encrypted: false,
+            }],
+            body: body_for(&node_key(terminal).await),
+        };
+        let response = client.post_json("/faf", &request).await.unwrap();
+        assert_eq!(response.status, 502);
+        assert_eq!(response.text().unwrap(), "relay failed");
+    }
+    client.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn faf_refuses_link_local_next_hops_even_when_private_ones_are_allowed() {
+    let client = connect(start_relay()).await;
+
+    let request = FafRequest {
+        // The instance metadata endpoint.
+        relays: vec![FafRelay {
+            address: "169.254.169.254:80".to_string(),
+            encrypted: false,
+        }],
+        body: body_for(&node_key(start_terminal()).await),
+    };
+    let response = client.post_json("/faf", &request).await.unwrap();
+    assert_eq!(response.status, 502);
+    assert_eq!(response.text().unwrap(), "relay failed");
+    client.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn faf_rejects_routes_longer_than_max_relays() {
+    let terminal = start_terminal();
+    let client = connect(start_relay()).await;
+
+    let request = FafRequest {
+        relays: vec![plain(terminal); MAX_RELAYS + 1],
+        body: body_for(&node_key(terminal).await),
+    };
+    let response = client.post_json("/faf", &request).await.unwrap();
+    assert_eq!(response.status, 400);
+    assert!(response.text().unwrap().starts_with("too many relays"));
     client.close().await.unwrap();
 }
 

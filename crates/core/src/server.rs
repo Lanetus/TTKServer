@@ -23,12 +23,13 @@ use axum::response::IntoResponse;
 use axum::Router;
 use bytes::{Buf, Bytes, BytesMut};
 use log::info;
-use quinn::{Endpoint, ServerConfig};
+use quinn::{Endpoint, ServerConfig, TransportConfig, VarInt};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
+use tokio::sync::Semaphore;
 use tower_service::Service;
 
 pub use super::router::Evidence;
@@ -129,6 +130,23 @@ pub const PARENT_CID: u32 = 3;
 
 /// Largest request body the server reads; larger requests get `413 Payload Too Large`.
 pub const MAX_REQUEST_BODY: usize = 1024 * 1024;
+
+/// Largest request header section (HTTP/3 `SETTINGS_MAX_FIELD_SECTION_SIZE`) the server
+/// accepts, in bytes.
+pub const MAX_REQUEST_HEADERS: u64 = 16 * 1024;
+
+/// Time allowed for a request's body to arrive; slower requests get `408 Request Timeout`.
+pub const REQUEST_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Most QUIC connections served at once; further connection attempts are refused.
+pub const MAX_CONNECTIONS: usize = 1024;
+
+/// Most concurrent requests (bidirectional streams) per connection.
+pub const MAX_STREAMS_PER_CONNECTION: u32 = 16;
+
+/// Flow-control window for all streams of one connection together, in bytes: bounds the request
+/// data a connection can have buffered at once.
+pub const CONNECTION_RECEIVE_WINDOW: u32 = 4 * 1024 * 1024;
 
 /// Where the server's QUIC endpoint listens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,11 +282,22 @@ impl Server {
     }
 
     /// Accepts QUIC connections and serves the base routes merged with `routes` over HTTP/3
-    /// until the endpoint closes.
+    /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections, new ones are
+    /// refused.
     pub async fn serve_with(self, routes: Router) {
         let app = build_router(&self.evidence, routes);
+        let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         while let Some(incoming) = self.endpoint.accept().await {
-            tokio::spawn(handle_connection(incoming, app.clone()));
+            let Ok(permit) = connections.clone().try_acquire_owned() else {
+                eprintln!("Refusing connection: {MAX_CONNECTIONS} already open");
+                incoming.refuse();
+                continue;
+            };
+            let app = app.clone();
+            tokio::spawn(async move {
+                handle_connection(incoming, app).await;
+                drop(permit);
+            });
         }
     }
 }
@@ -293,10 +322,21 @@ fn attest() -> Result<(ServerConfig, Arc<Evidence>, Vec<u8>), BoxError> {
         eat: eat_bytes,
     });
 
-    let quic_config = ServerConfig::with_crypto(Arc::new(
+    let mut quic_config = ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?,
     ));
+    quic_config.transport_config(Arc::new(transport_config()));
     Ok((quic_config, evidence, private_key))
+}
+
+/// QUIC limits for each connection: [`MAX_STREAMS_PER_CONNECTION`] concurrent requests sharing
+/// a [`CONNECTION_RECEIVE_WINDOW`], so one peer can't make the server buffer unbounded data.
+fn transport_config() -> TransportConfig {
+    let mut transport = TransportConfig::default();
+    transport
+        .max_concurrent_bidi_streams(VarInt::from_u32(MAX_STREAMS_PER_CONNECTION))
+        .receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW));
+    transport
 }
 
 /// Requests evidence from the detected attestation provider, bound to the TLS public key,
@@ -341,13 +381,14 @@ async fn handle_connection(incoming: quinn::Incoming, app: Router) {
         Err(err) => return eprintln!("Handshake failed: {err}"),
     };
 
-    let mut h3_conn =
-        match h3::server::Connection::<_, axum::body::Bytes>::new(h3_quinn::Connection::new(conn))
-            .await
-        {
-            Ok(h3) => h3,
-            Err(e) => return eprintln!("H3 setup failed: {e}"),
-        };
+    let mut h3_conn = match h3::server::builder()
+        .max_field_section_size(MAX_REQUEST_HEADERS)
+        .build::<_, axum::body::Bytes>(h3_quinn::Connection::new(conn))
+        .await
+    {
+        Ok(h3) => h3,
+        Err(e) => return eprintln!("H3 setup failed: {e}"),
+    };
 
     while let Ok(Some((req, stream))) = h3_conn.accept().await {
         let app = app.clone();
@@ -379,13 +420,15 @@ async fn read_body(stream: &mut ServerStream) -> Result<Option<Bytes>, SendError
 /// Reads the body of `req`, runs it through `app` and streams the response back over the
 /// HTTP/3 `stream`.
 async fn respond(mut app: Router, req: axum::http::Request<()>, mut stream: ServerStream) {
-    let response = match read_body(&mut stream).await {
-        Ok(Some(body)) => match app.call(req.map(|()| axum::body::Body::from(body))).await {
+    let body = tokio::time::timeout(REQUEST_BODY_TIMEOUT, read_body(&mut stream)).await;
+    let response = match body {
+        Err(_) => (StatusCode::REQUEST_TIMEOUT, "request body timed out").into_response(),
+        Ok(Ok(Some(body))) => match app.call(req.map(|()| axum::body::Body::from(body))).await {
             Ok(response) => response,
             Err(e) => return eprintln!("App call error: {e}"),
         },
-        Ok(None) => (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response(),
-        Err(e) => return eprintln!("Failed to read request body: {e}"),
+        Ok(Ok(None)) => (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response(),
+        Ok(Err(e)) => return eprintln!("Failed to read request body: {e}"),
     };
 
     let (parts, body) = response.into_parts();

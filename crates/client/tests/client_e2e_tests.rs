@@ -4,9 +4,9 @@
 use base64::Engine as _;
 use std::net::SocketAddr;
 use ttk_client::verifier::TeeKind;
-use ttk_client::{EnclaveCertVerifier, TtkClient};
+use ttk_client::{EnclaveCertVerifier, TtkClient, MAX_RESPONSE_BODY};
 use ttk_core::attestation::eat::EatClaimsSet;
-use ttk_core::server::Server;
+use ttk_core::server::{Server, MAX_REQUEST_HEADERS};
 
 /// Starts a server on a free local port and returns its address. It serves until the test's
 /// runtime shuts down.
@@ -107,4 +107,53 @@ async fn client_connects_over_ipv6() {
     .expect("the client should connect over IPv6");
     assert_eq!(client.get("/").await.unwrap().status, 200);
     client.close().await.unwrap();
+}
+
+/// Connects to the server at `addr`, accepting its mock evidence.
+async fn connect_mock(addr: SocketAddr) -> TtkClient {
+    TtkClient::connect_with_verifier(addr, "localhost", EnclaveCertVerifier::new().allow_mock())
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_rejects_responses_larger_than_max_response_body() {
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = server.local_addr().unwrap();
+    let routes = axum::Router::new()
+        .route(
+            "/big",
+            axum::routing::get(|| async { vec![b'x'; MAX_RESPONSE_BODY + 1] }),
+        )
+        .route(
+            "/fits",
+            axum::routing::get(|| async { vec![b'x'; MAX_RESPONSE_BODY] }),
+        );
+    tokio::spawn(server.serve_with(routes));
+    let client = connect_mock(addr).await;
+
+    let err = client.get("/big").await.unwrap_err();
+    assert!(err.to_string().contains("response body exceeds"), "{err}");
+    let fits = client.get("/fits").await.unwrap();
+    assert_eq!(fits.body.len(), MAX_RESPONSE_BODY);
+    client.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn server_refuses_request_headers_larger_than_max_request_headers() {
+    let addr = start_server();
+    let client = connect_mock(addr).await;
+
+    let request = axum::http::Request::get("https://localhost/")
+        .header("x-padding", "x".repeat(MAX_REQUEST_HEADERS as usize + 1))
+        .body(())
+        .unwrap();
+    // The oversized header section closes the connection instead of being served.
+    assert!(client.send(request, None).await.is_err());
+    assert!(client.get("/").await.is_err());
+
+    // The server itself keeps serving new connections.
+    let fresh = connect_mock(addr).await;
+    assert_eq!(fresh.get("/").await.unwrap().status, 200);
+    fresh.close().await.unwrap();
 }

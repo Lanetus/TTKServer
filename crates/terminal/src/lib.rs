@@ -14,7 +14,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use log::{error, info};
+use log::info;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use ttk_client::faf::{FafRequest, FAF_PATH};
@@ -80,13 +80,10 @@ async fn faf(
         );
     }
 
-    // Never log the key or the message itself.
+    // Never log the key or the message itself, only its size.
     match seal::open_body(&node_key, &request.body) {
         Ok(message) => {
-            match String::from_utf8(message) {
-                Ok(string) => info!("Success: {string}"),
-                Err(e) => error!("Invalid UTF-8 sequence: {e}"),
-            }
+            info!("/faf: delivered a {}-byte message", message.len());
             (StatusCode::OK, "delivered".to_string())
         }
         Err(e) => (StatusCode::BAD_REQUEST, format!("invalid body: {e}")),

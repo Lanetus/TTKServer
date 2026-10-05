@@ -11,6 +11,9 @@
 //! - **Outbound**: listens on vsock port `--outbound-port` (default `5001`) for connections from
 //!   the enclave (only from CID `--cid`). Each starts with a destination header, and its
 //!   datagrams are sent to that UDP address from a socket of its own, with replies framed back.
+//!   Destinations that are link-local (including the instance metadata and DNS endpoints),
+//!   multicast, broadcast or unspecified are refused, and loopback or private ones are refused
+//!   unless `--allow-private` is given (see `ttk_client::faf::classify_hop_address`).
 //!
 //! The relay only moves opaque QUIC datagrams: TLS terminates inside the enclave, so peers still
 //! verify the RA-TLS evidence end to end. It runs in the foreground; run it as a daemon under a
@@ -29,10 +32,13 @@ Options:
   -p, --vsock-port <PORT>        Enclave vsock port (default: 5000)
   -o, --outbound-port <PORT>     vsock port for outbound traffic from the enclave
                                  (default: 5001; 0 disables outbound relaying)
+  -P, --allow-private            Allow outbound traffic to loopback and private addresses
+                                 (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7)
   -h, --help                     Print help information
 
-Environment variables TTK_ENCLAVE_CID, TTK_RELAY_LISTEN, TTK_VSOCK_PORT and
-TTK_OUTBOUND_VSOCK_PORT set the same options; flags take precedence. RUST_LOG=info enables logs.
+Environment variables TTK_ENCLAVE_CID, TTK_RELAY_LISTEN, TTK_VSOCK_PORT,
+TTK_OUTBOUND_VSOCK_PORT and TTK_ALLOW_PRIVATE_NEXT_HOPS=1 set the same options; flags take
+precedence. RUST_LOG=info enables logs.
 ";
 
 /// Default UDP address the relay listens on.
@@ -55,6 +61,8 @@ struct RelayConfig {
     vsock_port: u32,
     /// vsock port accepting outbound traffic from the enclave; 0 disables it.
     outbound_port: u32,
+    /// Whether outbound traffic may go to loopback and private addresses.
+    allow_private: bool,
 }
 
 /// Parses `vsock-proxy` arguments (without the program name) over `env` defaults.
@@ -69,6 +77,7 @@ fn parse_relay_args(
     let mut cid = env("TTK_ENCLAVE_CID");
     let mut vsock_port = env("TTK_VSOCK_PORT");
     let mut outbound_port = env("TTK_OUTBOUND_VSOCK_PORT");
+    let mut allow_private = env("TTK_ALLOW_PRIVATE_NEXT_HOPS").is_some_and(|v| v == "1");
 
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -83,6 +92,7 @@ fn parse_relay_args(
             "-l" | "--listen" => listen = value()?,
             "-p" | "--vsock-port" => vsock_port = Some(value()?),
             "-o" | "--outbound-port" => outbound_port = Some(value()?),
+            "-P" | "--allow-private" => allow_private = true,
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -97,6 +107,7 @@ fn parse_relay_args(
             .map_err(|e| format!("invalid CID {cid:?}: {e}"))?,
         vsock_port: parse_port(vsock_port, DEFAULT_VSOCK_PORT)?,
         outbound_port: parse_port(outbound_port, DEFAULT_OUTBOUND_PORT)?,
+        allow_private,
     }))
 }
 
@@ -155,6 +166,7 @@ mod imp {
     use tokio::net::UdpSocket;
     use tokio::sync::mpsc::{self, error::TrySendError};
     use tokio_vsock::{SockAddr, VsockListener, VsockStream};
+    use ttk_client::faf::{classify_hop_address, HopAddressClass};
     use ttk_core::vsock::{read_destination, read_frame, write_frame};
 
     /// `VMADDR_CID_ANY`: accept vsock connections addressed to any CID of this instance.
@@ -190,7 +202,7 @@ mod imp {
                 "Relaying vsock port {} (from CID {}) -> UDP",
                 config.outbound_port, config.cid
             );
-            Some(serve_outbound(listener, config.cid))
+            Some(serve_outbound(listener, config.cid, config.allow_private))
         };
         let inbound = serve_inbound(config);
         match outbound {
@@ -299,7 +311,11 @@ mod imp {
 
     /// Outbound: accepts vsock connections from the enclave (CID `enclave_cid` only) and relays
     /// each to the UDP destination named in its header.
-    async fn serve_outbound(mut listener: VsockListener, enclave_cid: u32) -> std::io::Result<()> {
+    async fn serve_outbound(
+        mut listener: VsockListener,
+        enclave_cid: u32,
+        allow_private: bool,
+    ) -> std::io::Result<()> {
         let active = Arc::new(AtomicUsize::new(0));
         loop {
             let (stream, addr) = match listener.accept().await {
@@ -325,7 +341,7 @@ mod imp {
             active.fetch_add(1, Ordering::Relaxed);
             let active = active.clone();
             tokio::spawn(async move {
-                relay_outbound(stream).await;
+                relay_outbound(stream, allow_private).await;
                 active.fetch_sub(1, Ordering::Relaxed);
             });
         }
@@ -333,14 +349,22 @@ mod imp {
 
     /// Relays one outbound connection: reads its destination, then pumps datagrams between the
     /// vsock and a UDP socket connected to the destination until the destination goes idle or
-    /// either side closes.
-    async fn relay_outbound(mut stream: VsockStream) {
+    /// either side closes. Destinations the egress policy refuses are dropped unanswered.
+    async fn relay_outbound(mut stream: VsockStream, allow_private: bool) {
         let destination =
             match tokio::time::timeout(HEADER_TIMEOUT, read_destination(&mut stream)).await {
                 Ok(Ok(destination)) => destination,
                 Ok(Err(e)) => return warn!("Outbound: invalid destination header: {e}"),
                 Err(_) => return warn!("Outbound: no destination header"),
             };
+        let permitted = match classify_hop_address(destination.ip()) {
+            HopAddressClass::Public => true,
+            HopAddressClass::Private => allow_private,
+            HopAddressClass::Forbidden => false,
+        };
+        if !permitted {
+            return warn!("Outbound to {destination}: refused by the egress policy");
+        }
         let bind: SocketAddr = if destination.is_ipv4() {
             (std::net::Ipv4Addr::UNSPECIFIED, 0).into()
         } else {
@@ -416,6 +440,20 @@ mod tests {
         assert_eq!(config.cid, 16);
         assert_eq!(config.vsock_port, DEFAULT_VSOCK_PORT);
         assert_eq!(config.outbound_port, DEFAULT_OUTBOUND_PORT);
+        assert!(!config.allow_private);
+    }
+
+    #[test]
+    fn allow_private_from_flag_or_env() {
+        let env = |name: &str| (name == "TTK_ALLOW_PRIVATE_NEXT_HOPS").then(|| "1".to_string());
+        let from_env = parse_relay_args(&args(&["--cid", "16"]), env)
+            .unwrap()
+            .unwrap();
+        assert!(from_env.allow_private);
+        let from_flag = parse_relay_args(&args(&["--cid", "16", "-P"]), no_env)
+            .unwrap()
+            .unwrap();
+        assert!(from_flag.allow_private);
     }
 
     #[test]
