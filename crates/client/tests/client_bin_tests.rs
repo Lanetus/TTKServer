@@ -11,7 +11,8 @@ use ttk_terminal::Terminal;
 fn start_relay() -> SocketAddr {
     let relay = Relay::bind("127.0.0.1:0".parse().unwrap())
         .expect("relay should start")
-        .allow_mock();
+        .allow_mock()
+        .allow_private_next_hops();
     let addr = relay.local_addr().unwrap();
     tokio::spawn(async move { relay.serve().await.unwrap() });
     addr

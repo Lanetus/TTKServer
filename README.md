@@ -131,13 +131,18 @@ HPKE values are base64 of the encapsulated key (65 bytes) followed by the cipher
 
 | Status | When                                                                         |
 |--------|------------------------------------------------------------------------------|
-| `400`  | Relay: no relays left, or the first relay entry can't be opened or parsed (e.g. an `http://` URL or a bad salt). Terminal: relays left, or `body` can't be decrypted |
+| `400`  | Relay: no relays left, more than 8, or the first relay entry can't be opened or parsed (e.g. an `http://` URL or a bad salt). Terminal: relays left, or `body` can't be decrypted |
+| `408`  | The request body didn't arrive within 10 seconds                             |
 | `413`  | The request body is over 1 MiB                                               |
 | `415` / `422` | The body isn't JSON, or a field is missing or null                    |
-| `502`  | The next hop can't be reached, fails attestation, or answers anything but `200` |
-| `504`  | The next hop doesn't answer within 10 seconds                                |
+| `502`  | `relay failed`: the next hop has a refused address, can't be reached, fails attestation, answers anything but `200`, or doesn't answer within 10 seconds. The reason is only logged, so the relay can't be used to probe the network |
+| `503`  | The relay is already forwarding 256 requests                                 |
 
 By default next hops must present genuine TEE evidence. For local development with mock attestation, start the relay with `TTK_ALLOW_MOCK_ATTESTATION=1`.
+
+The next hop comes from the request, so a relay limits where it sends traffic. It never contacts link-local (including `169.254.169.254` and the VPC DNS), multicast, broadcast or unspecified addresses. It contacts loopback and private addresses (`127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `::1`, `fc00::/7`) only with `TTK_ALLOW_PRIVATE_NEXT_HOPS=1`: for local development, or relays that reach each other over a private network. On the parent instance, `vsock-proxy` applies the same rule to the enclave's outbound traffic (`--allow-private` / `TTK_ALLOW_PRIVATE_NEXT_HOPS=1`).
+
+Each node also limits what a peer can make it hold: 1024 connections, 16 concurrent requests per connection sharing a 4 MiB receive window, 16 KiB of request headers, and 1 MiB per request body (`ttk_core::server`). The client reads at most 1 MiB per response (`ttk_client::MAX_RESPONSE_BODY`).
 
 ### Environment variables
 
@@ -152,6 +157,7 @@ By default next hops must present genuine TEE evidence. For local development wi
 | `TTK_SERVER_ADDR`            | client   | Default server address (default `127.0.0.1:4433`)                                         |
 | `TTK_SERVER_NAME`            | client   | Default SNI server name (default `localhost`)                                             |
 | `TTK_ALLOW_MOCK_ATTESTATION` | client, relay | Set to `1` to accept mock Evidence from the nodes (client) or from `/faf` next hops (relay). Development only |
+| `TTK_ALLOW_PRIVATE_NEXT_HOPS` | relay, vsock-proxy | Set to `1` to let `/faf` next hops have loopback or private addresses (local development, private networks) |
 
 ### Test client
 
@@ -159,9 +165,10 @@ The `client` binary (crate `ttk-client`) is for testing only. It routes a messag
 
 ```sh
 # Two relays and a terminal (they fall back to mock attestation off-TEE), with
-# TTK_ALLOW_MOCK_ATTESTATION=1 on the relays so they accept mock next hops:
-TTK_ALLOW_MOCK_ATTESTATION=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4433 cargo run --bin relay
-TTK_ALLOW_MOCK_ATTESTATION=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4434 cargo run --bin relay
+# TTK_ALLOW_MOCK_ATTESTATION=1 and TTK_ALLOW_PRIVATE_NEXT_HOPS=1 on the relays so they accept
+# mock next hops on 127.0.0.1:
+TTK_ALLOW_MOCK_ATTESTATION=1 TTK_ALLOW_PRIVATE_NEXT_HOPS=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4433 cargo run --bin relay
+TTK_ALLOW_MOCK_ATTESTATION=1 TTK_ALLOW_PRIVATE_NEXT_HOPS=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4434 cargo run --bin relay
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --bin terminal
 # Then the client, accepting mock Evidence:
 TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --bin client -- --addr 127.0.0.1:4433 --relay 127.0.0.1:4434 --terminal 127.0.0.1:4444

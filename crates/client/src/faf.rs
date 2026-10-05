@@ -9,6 +9,7 @@
 use crate::seal::SALT_DIGITS;
 use crate::{ClientTransport, EnclaveCertVerifier, TtkClient};
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 /// Boxed error type that can cross task boundaries.
 type SendError = Box<dyn std::error::Error + Send + Sync>;
@@ -125,8 +126,28 @@ pub async fn connect_to_node(
     port: u16,
     verifier: EnclaveCertVerifier,
 ) -> Result<TtkClient, SendError> {
+    connect_to_node_filtered(transport, host, port, verifier, |_| true).await
+}
+
+/// Like [`connect_to_node`], but only tries the resolved addresses `allow` accepts; if it
+/// accepts none, fails without sending anything.
+///
+/// Used by relay nodes to keep attacker-chosen next hops away from internal addresses (see
+/// [`classify_hop_address`]).
+pub async fn connect_to_node_filtered(
+    transport: ClientTransport,
+    host: &str,
+    port: u16,
+    verifier: EnclaveCertVerifier,
+    allow: impl Fn(&SocketAddr) -> bool,
+) -> Result<TtkClient, SendError> {
     let mut last_error: SendError = format!("{host} did not resolve").into();
+    let mut refused = Vec::new();
     for addr in tokio::net::lookup_host((host, port)).await? {
+        if !allow(&addr) {
+            refused.push(addr.ip().to_string());
+            continue;
+        }
         let connecting = TtkClient::connect_over(transport, addr, host, verifier.clone());
         match tokio::time::timeout(RELAY_CONNECT_TIMEOUT, connecting).await {
             Ok(Ok(client)) => return Ok(client),
@@ -134,5 +155,64 @@ pub async fn connect_to_node(
             Err(_) => last_error = format!("connecting to {addr} timed out").into(),
         }
     }
+    if !refused.is_empty() && last_error.to_string().ends_with("did not resolve") {
+        last_error = format!(
+            "{host} resolved only to refused addresses ({})",
+            refused.join(", ")
+        )
+        .into();
+    }
     Err(last_error)
+}
+
+/// Where a next-hop address points, for a relay's egress policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HopAddressClass {
+    /// A globally routable unicast address: always a valid next hop.
+    Public,
+    /// Loopback (`127.0.0.0/8`, `::1`), private (`10/8`, `172.16/12`, `192.168/16`,
+    /// `fc00::/7`) or shared (`100.64/10`) address: a valid next hop only where relays run on a
+    /// private network or in local development.
+    Private,
+    /// An address never valid as a next hop: unspecified, "this network" (`0/8`), link-local
+    /// (`169.254/16`, including cloud metadata and DNS endpoints, and `fe80::/10`), multicast
+    /// or broadcast.
+    Forbidden,
+}
+
+/// Classifies `ip` as a next-hop destination. IPv4-mapped IPv6 addresses are classified as
+/// their IPv4 address.
+pub fn classify_hop_address(ip: IpAddr) -> HopAddressClass {
+    match ip {
+        IpAddr::V4(v4) => classify_v4(v4),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => classify_v4(v4),
+            None => classify_v6(v6),
+        },
+    }
+}
+
+/// [`classify_hop_address`] for IPv4.
+fn classify_v4(ip: Ipv4Addr) -> HopAddressClass {
+    let [a, b, ..] = ip.octets();
+    if ip.is_unspecified() || a == 0 || ip.is_link_local() || ip.is_multicast() || ip.is_broadcast()
+    {
+        HopAddressClass::Forbidden
+    } else if ip.is_loopback() || ip.is_private() || (a == 100 && (64..128).contains(&b)) {
+        HopAddressClass::Private
+    } else {
+        HopAddressClass::Public
+    }
+}
+
+/// [`classify_hop_address`] for IPv6.
+fn classify_v6(ip: Ipv6Addr) -> HopAddressClass {
+    let first = ip.segments()[0];
+    if ip.is_unspecified() || ip.is_multicast() || (first & 0xffc0) == 0xfe80 {
+        HopAddressClass::Forbidden
+    } else if ip.is_loopback() || (first & 0xfe00) == 0xfc00 {
+        HopAddressClass::Private
+    } else {
+        HopAddressClass::Public
+    }
 }

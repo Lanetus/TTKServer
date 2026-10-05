@@ -309,6 +309,13 @@ pub enum ClientTransport {
     },
 }
 
+/// Largest response body [`TtkClient`] reads; a larger response fails the request.
+pub const MAX_RESPONSE_BODY: usize = 1024 * 1024;
+
+/// Largest response header section (HTTP/3 `SETTINGS_MAX_FIELD_SECTION_SIZE`) [`TtkClient`]
+/// accepts, in bytes.
+pub const MAX_RESPONSE_HEADERS: u64 = 16 * 1024;
+
 /// HTTP/3 client for communicating with TTKServer over QUIC.
 ///
 /// Requests take `&self` and run as independent HTTP/3 streams, so one client (e.g. shared
@@ -389,7 +396,10 @@ impl TtkClient {
 
         // Establish HTTP/3 on top of the QUIC connection
         let h3_quic_conn = h3_quinn::Connection::new(connection.clone());
-        let (mut driver, send_request) = h3::client::new(h3_quic_conn).await?;
+        let (mut driver, send_request) = h3::client::builder()
+            .max_field_section_size(MAX_RESPONSE_HEADERS)
+            .build(h3_quic_conn)
+            .await?;
 
         // Drive the HTTP/3 connection state machine in the background
         let driver_handle =
@@ -510,6 +520,8 @@ impl TtkClient {
     }
 
     /// Send an HTTP/3 request with an optional payload and receive the response.
+    ///
+    /// Fails if the response body exceeds [`MAX_RESPONSE_BODY`].
     pub async fn send(
         &self,
         req: Request<()>,
@@ -533,6 +545,10 @@ impl TtkClient {
 
         let mut body = Vec::new();
         while let Some(mut chunk) = stream.recv_data().await? {
+            if body.len() + chunk.remaining() > MAX_RESPONSE_BODY {
+                stream.stop_sending(h3::error::Code::H3_REQUEST_CANCELLED);
+                return Err(format!("response body exceeds {MAX_RESPONSE_BODY} bytes").into());
+            }
             while chunk.has_remaining() {
                 let slice = chunk.chunk();
                 body.extend_from_slice(slice);

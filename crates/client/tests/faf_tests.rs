@@ -3,7 +3,8 @@
 
 use rcgen::KeyPair;
 use ttk_client::faf::{
-    parse_relay_address, parse_relay_server, FafBody, FafRelay, FafRequest, DEFAULT_RELAY_PORT,
+    classify_hop_address, parse_relay_address, parse_relay_server, FafBody, FafRelay, FafRequest,
+    HopAddressClass, DEFAULT_RELAY_PORT,
 };
 use ttk_client::seal::{self, NodePublicKey, NodeSecretKey, SALT_DIGITS};
 
@@ -147,4 +148,38 @@ fn faf_request_json_shape() {
     }))
     .unwrap();
     assert!(last.relays.is_empty());
+}
+
+#[test]
+fn hop_addresses_are_classified_for_the_egress_policy() {
+    let class = |ip: &str| classify_hop_address(ip.parse().unwrap());
+    for public in ["8.8.8.8", "52.95.110.1", "2001:4860:4860::8888"] {
+        assert_eq!(class(public), HopAddressClass::Public, "{public}");
+    }
+    for private in [
+        "127.0.0.1",
+        "10.0.0.1",
+        "172.16.5.4",
+        "192.168.1.1",
+        "100.64.0.1",
+        "::1",
+        "fd00::1",
+        "::ffff:10.0.0.1",
+    ] {
+        assert_eq!(class(private), HopAddressClass::Private, "{private}");
+    }
+    for forbidden in [
+        "0.0.0.0",
+        "0.1.2.3",
+        "169.254.169.254",
+        "169.254.169.253",
+        "224.0.0.1",
+        "255.255.255.255",
+        "::",
+        "fe80::1",
+        "ff02::1",
+        "::ffff:169.254.169.254",
+    ] {
+        assert_eq!(class(forbidden), HopAddressClass::Forbidden, "{forbidden}");
+    }
 }
