@@ -2694,6 +2694,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttk-root"
+version = "2.4.0"
+dependencies = [
+ "axum",
+ "env_logger",
+ "serde",
+ "serde_json",
+ "tokio",
+ "ttk-client",
+ "ttk-core",
+]
+
+[[package]]
 name = "ttk-terminal"
 version = "2.4.0"
 dependencies = [

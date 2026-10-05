@@ -12,7 +12,7 @@
 #   - This file as user data, with TTK_BASE_URL (and ideally the SHA-256 values) filled in.
 #
 # The HTTP server must serve, under TTK_BASE_URL:
-#   ttkserver.eif               scripts/build-eif.sh output (out/ttk-<relay|terminal>_v<ver>_<arch>.eif)
+#   ttkserver.eif               scripts/build-eif.sh output (out/ttk-<relay|terminal|root>_v<ver>_<arch>.eif)
 #   ttk-relay                   target/release/vsock-proxy, built for Linux on the same architecture
 #   ttk-relay.service           deploy/systemd/ttk-relay.service
 #   ttkserver-enclave.service   deploy/systemd/ttkserver-enclave.service

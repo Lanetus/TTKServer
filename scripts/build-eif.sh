@@ -2,7 +2,7 @@
 # Builds a TTKServer Nitro Enclave image file (EIF) locally with Docker, mirroring the
 # "Build EIF" steps of .github/workflows/build.yml.
 #
-# Usage: scripts/build-eif.sh [amd64|arm64] [relay|terminal]
+# Usage: scripts/build-eif.sh [amd64|arm64] [relay|terminal|root]
 #        (defaults: this machine's architecture, and the relay node)
 #
 # Output: out/ttk-<node>_v<version>_<arch>.eif and .json (nitro-cli's measurements: PCR0-2,
@@ -29,9 +29,9 @@ esac
 platform="linux/$arch"
 
 case "${2:-relay}" in
-    relay | terminal) node="${2:-relay}" ;;
+    relay | terminal | root) node="${2:-relay}" ;;
     *)
-        echo "error: unknown node '$2' (expected relay or terminal)" >&2
+        echo "error: unknown node '$2' (expected relay, terminal or root)" >&2
         exit 2
         ;;
 esac

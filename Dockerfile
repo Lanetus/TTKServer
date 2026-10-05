@@ -7,7 +7,8 @@ FROM rust:1-bookworm AS builder
 
 WORKDIR /app
 
-# The enclave node to build: `relay` (forwards /faf requests) or `terminal` (the last hop).
+# The enclave node to build: `relay` (forwards /faf requests), `terminal` (the last hop) or
+# `root` (serves the accepted enclave image checksums at /root-attestation).
 ARG NODE=relay
 
 COPY Cargo.toml Cargo.lock ./

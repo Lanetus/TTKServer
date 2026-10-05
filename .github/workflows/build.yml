@@ -38,7 +38,7 @@ jobs:
 
       # Production build: the enclave nodes and the parent's vsock-proxy, not the test-only `client`.
       - name: Build release
-        run: cargo build --release --locked -p ttk-relay -p ttk-terminal
+        run: cargo build --release --locked -p ttk-relay -p ttk-terminal -p ttk-root
 
       - name: Upload node binaries
         uses: actions/upload-artifact@v4
@@ -47,6 +47,7 @@ jobs:
           path: |
             target/release/relay
             target/release/terminal
+            target/release/root
             target/release/vsock-proxy
           if-no-files-found: error
 
@@ -65,7 +66,7 @@ jobs:
     if: ${{ github.ref == 'refs/heads/main' &&  !inputs.dry_run }}
     strategy:
       matrix:
-        node: [relay, terminal]
+        node: [relay, terminal, root]
         include:
           - arch: amd64
             platform: linux/amd64
