@@ -1,10 +1,18 @@
 //! `client` binary: command-line HTTP/3 client for TTKServer, for testing only.
 //!
-//! Thin entry point over [`ttk_client`]: parses CLI arguments / environment, attests the
-//! terminal node ([`DEFAULT_RELAY_SERVER`] unless overridden) and seals the message to its
-//! RA-TLS key, connects to the relay node with RA-TLS verification of the enclave's attestation
-//! evidence, sends a [`FafRequest`] routed through the relay to the terminal to `POST /faf`, and
-//! prints the response. The enclave images never include it.
+//! Thin entry point over [`ttk_client`]: parses CLI arguments / environment and routes a message
+//! through two relay nodes to a terminal node:
+//!
+//! ```text
+//! client --> entry relay (--addr) --> second relay (--relay) --> terminal (--terminal)
+//! ```
+//!
+//! It connects to the entry relay with RA-TLS verification of the enclave's attestation
+//! evidence, attests the second relay ([`DEFAULT_RELAY_SERVER`]) and the terminal
+//! ([`DEFAULT_TERMINAL_SERVER`]) to learn their RA-TLS keys, and builds an onion-routed
+//! [`FafRequest`]: each hop's address is sealed to the relay that reads it, and the message is
+//! sealed to the terminal. It sends the request to the entry relay's `POST /faf` and prints the
+//! response. The enclave images never include it.
 
 use axum::http::Uri;
 use std::net::SocketAddr;
@@ -13,8 +21,12 @@ use ttk_client::faf::{connect_to_node, parse_relay_server, FafRelay, FafRequest,
 use ttk_client::seal::{self, NodePublicKey};
 use ttk_client::{ClientTransport, EnclaveCertVerifier, TtkClient};
 
-/// Terminal node (the last hop) the `FafRequest` is forwarded to unless `--relay` overrides it.
-const DEFAULT_RELAY_SERVER: &str = "127.0.0.1:4444";
+/// Second relay node, which the entry relay forwards the `FafRequest` to unless `--relay`
+/// overrides it.
+const DEFAULT_RELAY_SERVER: &str = "127.0.0.1:4434";
+
+/// Terminal node (the last hop) unless `--terminal` overrides it.
+const DEFAULT_TERMINAL_SERVER: &str = "127.0.0.1:4444";
 
 /// Usage text of this binary.
 const CLIENT_USAGE: &str = "\
@@ -22,26 +34,29 @@ Usage: client [OPTIONS] [URL]
 
 Options:
   -s, --server-name <NAME>  SNI server name (default: localhost)
-  -a, --addr <ADDR>         Relay node socket address (default: 127.0.0.1:4433)
-  -r, --relay <RELAY>       Terminal node, the last hop of the FafRequest (default: 127.0.0.1:4444)
+  -a, --addr <ADDR>         Entry relay node socket address (default: 127.0.0.1:4433)
+  -r, --relay <RELAY>       Second relay node, forwarded to by the entry relay (default: 127.0.0.1:4434)
+  -t, --terminal <TERMINAL> Terminal node, the last hop (default: 127.0.0.1:4444)
   -m, --message <MESSAGE>   Message to send, encrypted to the terminal (default: hello)
   -h, --help                Print help information
 
 Examples:
   client
   client https://127.0.0.1:4433
-  client --addr 127.0.0.1:4433 --relay 127.0.0.1:4444 --message hi
+  client --addr 127.0.0.1:4433 --relay 127.0.0.1:4434 --terminal 127.0.0.1:4444 --message hi
 ";
 
 /// What a `client` invocation should connect to and send.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ClientTarget {
-    /// Relay node socket address.
+    /// Entry relay node socket address.
     server_addr: SocketAddr,
     /// SNI server name.
     server_name: String,
-    /// Terminal node the request is routed to, as `host[:port]` or `https://host[:port]`.
+    /// Second relay node, as `host[:port]` or `https://host[:port]`.
     relay_server: String,
+    /// Terminal node the request is routed to, as `host[:port]` or `https://host[:port]`.
+    terminal_server: String,
     /// The message, sealed to the terminal before sending.
     message: String,
 }
@@ -50,8 +65,8 @@ struct ClientTarget {
 ///
 /// `default_addr` and `default_name` come from `TTK_SERVER_ADDR` and `TTK_SERVER_NAME`; they
 /// fall back to `127.0.0.1:4433` and `localhost`. An unparsable address falls back
-/// to `127.0.0.1:4433`. The relay defaults to [`DEFAULT_RELAY_SERVER`]. Returns `None` if help
-/// was requested.
+/// to `127.0.0.1:4433`. The second relay defaults to [`DEFAULT_RELAY_SERVER`] and the terminal
+/// to [`DEFAULT_TERMINAL_SERVER`]. Returns `None` if help was requested.
 fn parse_client_args(
     args: &[String],
     default_addr: Option<String>,
@@ -60,6 +75,7 @@ fn parse_client_args(
     let mut server_addr_str = default_addr.unwrap_or_else(|| "127.0.0.1:4433".to_string());
     let mut server_name = default_name.unwrap_or_else(|| "localhost".to_string());
     let mut relay_server = DEFAULT_RELAY_SERVER.to_string();
+    let mut terminal_server = DEFAULT_TERMINAL_SERVER.to_string();
     let mut message = "hello".to_string();
 
     let mut i = 0;
@@ -73,6 +89,9 @@ fn parse_client_args(
         } else if (arg == "--relay" || arg == "-r") && i + 1 < args.len() {
             i += 1;
             relay_server = args[i].clone();
+        } else if (arg == "--terminal" || arg == "-t") && i + 1 < args.len() {
+            i += 1;
+            terminal_server = args[i].clone();
         } else if (arg == "--message" || arg == "-m") && i + 1 < args.len() {
             i += 1;
             message = args[i].clone();
@@ -104,6 +123,7 @@ fn parse_client_args(
         server_addr,
         server_name,
         relay_server,
+        terminal_server,
         message,
     })
 }
@@ -131,6 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         server_addr,
         server_name,
         relay_server,
+        terminal_server,
         message,
     } = parse_args();
 
@@ -160,24 +181,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("  (Attestation verified and bound to this certificate's key)");
     }
 
-    println!("\n--> Attesting relay {relay_server} to seal the message to it");
-    let relay_key = match attest_relay(&relay_server, verifier).await {
+    println!("\n--> Attesting relay {relay_server} to seal the terminal's address to it");
+    let relay_key = match attest_node(&relay_server, verifier.clone()).await {
         Ok(key) => key,
         Err(e) => {
             eprintln!("Failed to attest relay {relay_server}: {e}");
             std::process::exit(1);
         }
     };
-    let request = FafRequest {
-        // Read by the relay node, in the clear; the terminal is the last hop.
-        relays: vec![FafRelay {
-            address: format!("{relay_server} {}", seal::random_salt()?),
-            encrypted: false,
-        }],
-        body: seal::seal_body(&relay_key, message.as_bytes())?,
+    println!("--> Attesting terminal {terminal_server} to seal the message to it");
+    let terminal_key = match attest_node(&terminal_server, verifier).await {
+        Ok(key) => key,
+        Err(e) => {
+            eprintln!("Failed to attest terminal {terminal_server}: {e}");
+            std::process::exit(1);
+        }
     };
 
-    println!("\n--> Sending POST {FAF_PATH} (relay: {relay_server})");
+    // Each hop's address is sealed to the relay that reads it: the entry relay learns only the
+    // second relay, which learns only the terminal. Only the terminal can open the body.
+    let request = FafRequest {
+        relays: vec![
+            FafRelay {
+                address: relay_server.clone(),
+                encrypted: false,
+            },
+            FafRelay {
+                address: seal::seal_address(&relay_key, &terminal_server)?,
+                encrypted: true,
+            },
+        ],
+        body: seal::seal_body(&terminal_key, message.as_bytes())?,
+    };
+
+    println!(
+        "\n--> Sending POST {FAF_PATH} (route: {server_addr} -> {relay_server} -> {terminal_server})"
+    );
     let started = Instant::now();
     let result = client.post_json(FAF_PATH, &request).await;
     let elapsed = started.elapsed();
@@ -208,18 +247,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-/// Connects to `relay_server` with `verifier`, and returns the RA-TLS key of the first of its
+/// Connects to the node `server` with `verifier`, and returns the RA-TLS key of the first of its
 /// addresses whose attestation verifies (see [`connect_to_node`]).
-async fn attest_relay(
-    relay_server: &str,
+async fn attest_node(
+    server: &str,
     verifier: EnclaveCertVerifier,
 ) -> Result<NodePublicKey, Box<dyn std::error::Error + Send + Sync>> {
-    let (host, port) = parse_relay_server(relay_server)?;
-    let relay = connect_to_node(ClientTransport::Udp, &host, port, verifier).await?;
-    let key = relay
+    let (host, port) = parse_relay_server(server)?;
+    let node = connect_to_node(ClientTransport::Udp, &host, port, verifier).await?;
+    let key = node
         .peer_cert()
-        .ok_or("relay presented no certificate")
+        .ok_or("node presented no certificate")
         .map(|cert| NodePublicKey::from_certificate(cert));
-    relay.close().await?;
+    node.close().await?;
     Ok(key??)
 }
