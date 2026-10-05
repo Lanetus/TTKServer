@@ -1,8 +1,8 @@
-[![Documentation](https://docs.rs/TTKServer/badge.svg)](https://docs.rs/TTKServer/)
-[![Crates.io](https://img.shields.io/crates/v/TTKServer.svg)](https://crates.io/crates/TTKServer)
+[![Documentation](https://docs.rs/ttk-core/badge.svg)](https://lanetus.github.io/TTKServer/api/ttk_core/index.html)
+[![Crates.io](https://img.shields.io/crates/v/ttk-core.svg)](https://crates.io/crates/ttk-core)
 [![codecov](https://codecov.io/gh/Lanetus/TTKServer/graph/badge.svg?token=G4380O9RMS)](https://codecov.io/gh/Lanetus/TTKServer)
 [![CI](https://github.com/Lanetus/TTKServer/actions/workflows/CI.yml/badge.svg)](https://github.com/Lanetus/TTKServer/actions/workflows/CI.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/Lanetus/TTKServer/blob/main/LICENSE)
 
 
 # TTKServer
