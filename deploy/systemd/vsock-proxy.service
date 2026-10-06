@@ -3,18 +3,18 @@
 #
 # Install:
 #   cargo build --release -p ttk-relay --bin vsock-proxy
-#   sudo install -m 0755 target/release/vsock-proxy /usr/local/bin/ttk-relay
-#   sudo install -m 0644 deploy/systemd/ttk-relay.service /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now ttk-relay
+#   sudo install -m 0755 target/release/vsock-proxy /usr/local/bin/vsock-proxy
+#   sudo install -m 0644 deploy/systemd/vsock-proxy.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now vsock-proxy
 #
-# Configure in /etc/default/ttk-relay (optional; overrides the defaults below), e.g.
+# Configure in /etc/default/vsock-proxy (optional; overrides the defaults below), e.g.
 #   TTK_ENCLAVE_CID=16             # must match `nitro-cli run-enclave --enclave-cid`
 #   TTK_RELAY_LISTEN=0.0.0.0:443   # public UDP address
 #   TTK_VSOCK_PORT=5000            # enclave server's vsock port
 #   TTK_OUTBOUND_VSOCK_PORT=5001   # outbound relaying from the enclave; 0 disables
 #   RUST_LOG=info
 #
-# Logs: journalctl -u ttk-relay -f
+# Logs: journalctl -u vsock-proxy -f
 
 [Unit]
 Description=TTKServer vsock-proxy (public UDP <-> Nitro Enclave vsock)
@@ -27,9 +27,9 @@ Type=exec
 Environment=TTK_ENCLAVE_CID=16
 Environment=TTK_RELAY_LISTEN=0.0.0.0:443
 Environment=RUST_LOG=info
-EnvironmentFile=-/etc/default/ttk-relay
-ExecStart=/usr/local/bin/ttk-relay
-# The relay retries the enclave on each new client, but exits if its own sockets fail.
+EnvironmentFile=-/etc/default/vsock-proxy
+ExecStart=/usr/local/bin/vsock-proxy
+# The proxy retries the enclave on each new client, but exits if its own sockets fail.
 Restart=always
 RestartSec=2
 
@@ -42,7 +42,7 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 
-# Sandboxing: the relay needs no files, only UDP and vsock sockets.
+# Sandboxing: the proxy needs no files, only UDP and vsock sockets.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_VSOCK AF_UNIX
 ProtectSystem=strict
 ProtectHome=yes

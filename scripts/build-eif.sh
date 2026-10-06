@@ -5,6 +5,10 @@
 # Usage: scripts/build-eif.sh [amd64|arm64] [relay|terminal|root]
 #        (defaults: this machine's architecture, and the relay node)
 #
+# TTK_DEBUG=1 builds a debug image (suffix _debug): RUST_LOG=info and
+# TTK_ALLOW_MOCK_ATTESTATION=1 baked in, for running with `nitro-cli run-enclave --debug-mode`
+# and reading logs with `nitro-cli console`. Never deploy it for production.
+#
 # Output: out/ttk-<node>_v<version>_<arch>.eif and .json (nitro-cli's measurements: PCR0-2,
 # the reference values a Verifier appraises the enclave's evidence against).
 #
@@ -18,7 +22,7 @@ case "${1:-$(uname -m)}" in
     amd64 | x86_64) arch=amd64 ;;
     arm64 | aarch64) arch=arm64 ;;
     -h | --help)
-        sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *)
@@ -38,11 +42,17 @@ esac
 
 version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
 name="ttk-${node}_v${version}_${arch}"
+debug_args=""
+if [ "${TTK_DEBUG:-0}" = 1 ]; then
+    name="${name}_debug"
+    debug_args="--build-arg RUST_LOG=info --build-arg TTK_ALLOW_MOCK_ATTESTATION=1"
+fi
 app_image="ttk-$node:local-$arch"
 cli_image="ttkserver-nitro-cli:$arch"
 
 echo "==> Building app image $app_image ($platform)"
-docker build --platform "$platform" --build-arg NODE="$node" -t "$app_image" .
+# shellcheck disable=SC2086 # $debug_args is a list of arguments
+docker build --platform "$platform" --build-arg NODE="$node" $debug_args -t "$app_image" .
 
 # nitro-cli image, built once per architecture and reused on later runs.
 if ! docker image inspect "$cli_image" > /dev/null 2>&1; then

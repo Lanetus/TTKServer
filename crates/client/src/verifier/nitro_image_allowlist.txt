@@ -5,3 +5,5 @@
 # are ignored. Evidence from a non-debug Nitro enclave whose PCR0 is not listed is rejected.
 
 9a800a707a9feb9fba72da91372e31302b90b8bcc25529b2aa6436b4ac8d8ad73ae3e51ead196e3e23b697eaa4dc05e3 # ttk-terminal v2.3.3 arm64
+e523396bacac00fe4cc5bc4774a7ee45a5843709e2f1bfd2e7e1de2829ab32863c6d2d5b78f26bf7f334a5da6943f84f
+da59200c2664461243a7a5868c05b84fc7ab2380a766e63b77775db01d341c7d6e3df746ea548682bb4f056c55972e6e

@@ -1,46 +1,46 @@
-# systemd unit that runs the TTKServer Nitro Enclave on the parent instance.
+# systemd unit that runs the TTKServer terminal node Nitro Enclave on the parent instance.
 #
 # `nitro-cli run-enclave` launches the enclave and returns, so this is a oneshot unit that stays
 # active while the enclave runs; stopping it terminates the enclave. Pair it with
-# ttk-relay.service, which relays traffic between the network and the enclave's vsock.
+# vsock-proxy.service, which relays traffic between the network and the enclave's vsock.
 #
 # Install:
-#   scripts/build-eif.sh amd64 relay      # or arm64, matching the instance; or the terminal or root node
-#   sudo install -D -m 0644 out/ttk-relay_v<version>_<arch>.eif /opt/ttkserver/ttkserver.eif
-#   sudo install -m 0644 deploy/systemd/ttkserver-enclave.service /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now ttkserver-enclave
+#   scripts/build-eif.sh amd64 terminal   # or arm64, matching the instance
+#   sudo install -D -m 0644 out/ttk-terminal_v<version>_<arch>.eif /opt/ttkserver/ttk-terminal.eif
+#   sudo install -m 0644 deploy/systemd/ttk-terminal-enclave.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ttk-terminal-enclave
 #
 # The Nitro Enclaves allocator must reserve at least TTK_ENCLAVE_CPUS and TTK_ENCLAVE_MEMORY
 # (memory_mib / cpu_count in /etc/nitro_enclaves/allocator.yaml, then
 # `systemctl restart nitro-enclaves-allocator`). nitro-cli reports the minimum memory for the EIF
 # if it is set too low.
 #
-# Configure in /etc/default/ttkserver-enclave (optional; overrides the defaults below), e.g.
-#   TTK_EIF=/opt/ttkserver/ttkserver.eif
-#   TTK_ENCLAVE_CID=16                 # ttk-relay's TTK_ENCLAVE_CID must match
+# Configure in /etc/default/ttk-terminal-enclave (optional; overrides the defaults below), e.g.
+#   TTK_EIF=/opt/ttkserver/ttk-terminal.eif
+#   TTK_ENCLAVE_CID=17                 # vsock-proxy's TTK_ENCLAVE_CID must match
 #   TTK_ENCLAVE_CPUS=2
 #   TTK_ENCLAVE_MEMORY=1024            # MiB
 #   TTK_ENCLAVE_EXTRA_ARGS=--debug-mode   # debug only: zeroes PCRs, so strict clients reject it
 #
-# Status: nitro-cli describe-enclaves; logs: journalctl -u ttkserver-enclave
+# Status: nitro-cli describe-enclaves; logs: journalctl -u ttk-terminal-enclave
 
 [Unit]
-Description=TTKServer Nitro Enclave
+Description=TTKServer terminal node Nitro Enclave
 Documentation=https://github.com/Lanetus/TTKServer
 Requires=nitro-enclaves-allocator.service
 After=nitro-enclaves-allocator.service
-Before=ttk-relay.service
+Before=vsock-proxy.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-Environment=TTK_EIF=/opt/ttkserver/ttkserver.eif
-Environment=TTK_ENCLAVE_NAME=ttkserver
-Environment=TTK_ENCLAVE_CID=16
+Environment=TTK_EIF=/opt/ttkserver/ttk-terminal.eif
+Environment=TTK_ENCLAVE_NAME=ttk-terminal
+Environment=TTK_ENCLAVE_CID=17
 Environment=TTK_ENCLAVE_CPUS=2
 Environment=TTK_ENCLAVE_MEMORY=1024
 Environment=TTK_ENCLAVE_EXTRA_ARGS=
-EnvironmentFile=-/etc/default/ttkserver-enclave
+EnvironmentFile=-/etc/default/ttk-terminal-enclave
 # Clear an enclave left over from an unclean stop, so its CID and resources are free.
 ExecStartPre=-/usr/bin/nitro-cli terminate-enclave --enclave-name ${TTK_ENCLAVE_NAME}
 ExecStart=/usr/bin/nitro-cli run-enclave \

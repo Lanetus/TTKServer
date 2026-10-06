@@ -46,9 +46,9 @@ cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D w
 cargo deny check                              # config in deny.toml
 mdbook build docs                             # book -> docs/book; needs `cargo install mdbook-mermaid` (```mermaid blocks)
 scripts/build-eif.sh [amd64|arm64] [relay|terminal|root]   # EIF via Docker (Dockerfile ARG NODE) -> out/ttk-<node>_v<ver>_<arch>.eif + .json (PCRs)
-deploy/systemd/ttk-relay.service              # systemd unit for `vsock-proxy` on the parent (installed as ttk-relay; steps in its header)
+deploy/systemd/vsock-proxy.service            # systemd unit for `vsock-proxy` on the parent (steps in its header)
 deploy/ec2/user-data.sh                       # EC2 user data: installs nitro-cli, downloads EIF/vsock-proxy/units over HTTP, starts both
-deploy/systemd/ttkserver-enclave.service      # systemd unit running the EIF via nitro-cli (CID 16, 2 vCPU, 1024 MiB; /etc/default/ttkserver-enclave)
+deploy/systemd/ttk-{relay,terminal}-enclave.service  # systemd units running the node EIF via nitro-cli (CID 16 / 17, 2 vCPU, 1024 MiB; /etc/default/ttk-<node>-enclave)
 ```
 
 ## Conventions
