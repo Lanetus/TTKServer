@@ -35,6 +35,14 @@ WORKDIR /app
 # Copy the compiled node binary
 COPY --from=builder /app/node /app/node
 
+# An enclave gets no environment from `nitro-cli run-enclave`: the node only sees what is baked
+# in here. Debug builds (scripts/build-eif.sh with TTK_DEBUG=1) log at info and accept mock and
+# debug-mode next hops; never deploy those for production.
+ARG RUST_LOG=error
+ARG TTK_ALLOW_MOCK_ATTESTATION=0
+ENV RUST_LOG=$RUST_LOG \
+    TTK_ALLOW_MOCK_ATTESTATION=$TTK_ALLOW_MOCK_ATTESTATION
+
 # The node listens for QUIC / HTTP/3 directly on vsock port 5000 (length-framed datagrams from
 # the parent-side vsock-proxy). Set TTK_USE_UDP=1 to listen on UDP TTK_LISTEN_ADDR (0.0.0.0:4433) instead.
 ENTRYPOINT ["/bin/sh", "-c", "ip link set lo up; exec /app/node"]
