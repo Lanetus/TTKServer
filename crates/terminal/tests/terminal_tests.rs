@@ -35,17 +35,23 @@ fn body_for(last: &NodePublicKey) -> FafBody {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn faf_without_relays_is_delivered() {
+async fn faf_without_relays_answers_hello_sealed_to_the_sender() {
     let terminal = start_terminal();
     let client = connect(terminal).await;
 
+    let (body, key) =
+        seal::seal_body_with_key(&node_key(terminal).await, b"hello terminal").unwrap();
     let request = FafRequest {
         relays: vec![],
-        body: body_for(&node_key(terminal).await),
+        body,
     };
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 200);
-    assert_eq!(response.text().unwrap(), "delivered");
+    let sealed = response.text().unwrap();
+    assert_eq!(
+        seal::open_response(&key, &sealed).unwrap(),
+        b"hello:hello terminal"
+    );
     client.close().await.unwrap();
 }
 

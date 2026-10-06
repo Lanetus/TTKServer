@@ -69,13 +69,16 @@ async fn faf_relays_to_an_attested_terminal_and_answers_200() {
     let terminal = start_terminal();
     let client = connect(start_relay()).await;
 
+    let (body, key) = seal::seal_body_with_key(&node_key(terminal).await, b"hello relay").unwrap();
     let request = FafRequest {
         relays: vec![plain(terminal)],
-        body: body_for(&node_key(terminal).await),
+        body,
     };
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 200, "{:?}", response.text());
-    assert_eq!(response.text().unwrap(), "relayed");
+    // The terminal's sealed reply comes back through the relay unchanged.
+    let reply = seal::open_response(&key, &response.text().unwrap()).unwrap();
+    assert_eq!(reply, b"hello:hello relay");
     client.close().await.unwrap();
 }
 
@@ -86,12 +89,15 @@ async fn faf_routes_through_plain_and_sealed_relays_to_the_terminal() {
     let client = connect(entry).await;
 
     // entry reads `middle` in the clear; middle opens the address of `last`; last opens the body.
+    let (body, key) = seal::seal_body_with_key(&node_key(last).await, b"hello relay").unwrap();
     let request = FafRequest {
         relays: vec![plain(middle), sealed(&middle_key, last)],
-        body: body_for(&node_key(last).await),
+        body,
     };
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 200, "{:?}", response.text());
+    let reply = seal::open_response(&key, &response.text().unwrap()).unwrap();
+    assert_eq!(reply, b"hello:hello relay");
     client.close().await.unwrap();
 }
 
