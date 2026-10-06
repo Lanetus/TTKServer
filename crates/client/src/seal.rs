@@ -11,10 +11,12 @@
 //!   is [`SALT_DIGITS`] random decimal digits.
 //! - **The body** is for the last node only: `body.message` is encrypted with a fresh
 //!   AES-256-GCM message key, and `body.key` is that key sealed to the last node.
+//! - **The response** of the last node is encrypted with the same message key (see
+//!   [`seal_response`]), so only the client that sealed the body can read it.
 //!
 //! Every sealed value is base64 (standard alphabet, padded): HPKE values as the encapsulated
-//! key (65-byte uncompressed P-256 point) followed by the ciphertext, and `body.message` as a
-//! 12-byte nonce followed by the ciphertext.
+//! key (65-byte uncompressed P-256 point) followed by the ciphertext, and `body.message` and
+//! responses as a 12-byte nonce followed by the ciphertext.
 
 use crate::faf::FafBody;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -36,6 +38,10 @@ type Aead = hpke::aead::AesGcm256;
 const ADDRESS_INFO: &[u8] = b"ttk-faf/v1 relay address";
 /// HPKE `info` for a sealed message key.
 const KEY_INFO: &[u8] = b"ttk-faf/v1 message key";
+
+/// AES-GCM associated data of a sealed response, separating it from the request message sealed
+/// under the same message key.
+const RESPONSE_AAD: &[u8] = b"ttk-faf/v1 response";
 
 /// Length of the encapsulated key: an uncompressed SEC1 P-256 point.
 const ENCAPPED_KEY_LEN: usize = 65;
@@ -107,6 +113,17 @@ impl NodeSecretKey {
     }
 }
 
+/// The AES-256-GCM message key of a `/faf` body: chosen by the client in [`seal_body_with_key`],
+/// recovered by the last node in [`open_body_with_key`], and used by both for the response.
+#[derive(Clone)]
+pub struct MessageKey([u8; MESSAGE_KEY_LEN]);
+
+impl std::fmt::Debug for MessageKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MessageKey(..)")
+    }
+}
+
 /// Returns a fresh salt of [`SALT_DIGITS`] random decimal digits.
 pub fn random_salt() -> Result<String, SealError> {
     let mut bytes = [0u8; 8];
@@ -133,47 +150,93 @@ pub fn open_address(node: &NodeSecretKey, sealed: &str) -> Result<String, SealEr
 
 /// Encrypts `message` for `last`, the last node of the route, under a fresh message key.
 pub fn seal_body(last: &NodePublicKey, message: &[u8]) -> Result<FafBody, SealError> {
-    let rng = SystemRandom::new();
+    seal_body_with_key(last, message).map(|(body, _)| body)
+}
+
+/// Like [`seal_body`], but also returns the message key, to open the last node's response
+/// with [`open_response`].
+pub fn seal_body_with_key(
+    last: &NodePublicKey,
+    message: &[u8],
+) -> Result<(FafBody, MessageKey), SealError> {
     let mut key = [0u8; MESSAGE_KEY_LEN];
-    let mut nonce = [0u8; NONCE_LEN];
-    rng.fill(&mut key)
-        .and_then(|()| rng.fill(&mut nonce))
+    SystemRandom::new()
+        .fill(&mut key)
         .map_err(|_| SealError::new("no randomness available"))?;
-
-    let mut ciphertext = message.to_vec();
-    message_key(&key)?
-        .seal_in_place_append_tag(
-            Nonce::assume_unique_for_key(nonce),
-            Aad::empty(),
-            &mut ciphertext,
-        )
-        .map_err(|_| SealError::new("message encryption failed"))?;
-    let mut sealed_message = nonce.to_vec();
-    sealed_message.extend_from_slice(&ciphertext);
-
-    Ok(FafBody {
-        key: hpke_seal(last, KEY_INFO, &key)?,
-        message: STANDARD.encode(sealed_message),
-    })
+    let key = MessageKey(key);
+    let body = FafBody {
+        key: hpke_seal(last, KEY_INFO, &key.0)?,
+        message: aead_seal(&key, &[], message)?,
+    };
+    Ok((body, key))
 }
 
 /// Decrypts a body sealed to this node with [`seal_body`], returning the message.
 pub fn open_body(node: &NodeSecretKey, body: &FafBody) -> Result<Vec<u8>, SealError> {
+    open_body_with_key(node, body).map(|(_, message)| message)
+}
+
+/// Like [`open_body`], but also returns the message key, to answer with [`seal_response`].
+pub fn open_body_with_key(
+    node: &NodeSecretKey,
+    body: &FafBody,
+) -> Result<(MessageKey, Vec<u8>), SealError> {
     let undecryptable = || SealError::new("body can't be decrypted");
-    let key = hpke_open(node, KEY_INFO, &body.key)?;
+    let key: [u8; MESSAGE_KEY_LEN] = hpke_open(node, KEY_INFO, &body.key)?
+        .try_into()
+        .map_err(|_| undecryptable())?;
+    let key = MessageKey(key);
+    let message = aead_open(&key, &[], &body.message).map_err(|_| undecryptable())?;
+    Ok((key, message))
+}
+
+/// Encrypts the last node's `response` under the request's message key, as base64(nonce ||
+/// ciphertext).
+pub fn seal_response(key: &MessageKey, response: &[u8]) -> Result<String, SealError> {
+    aead_seal(key, RESPONSE_AAD, response)
+}
+
+/// Decrypts a response sealed with [`seal_response`] under the request's message key.
+pub fn open_response(key: &MessageKey, sealed: &str) -> Result<Vec<u8>, SealError> {
+    aead_open(key, RESPONSE_AAD, sealed)
+}
+
+/// AES-256-GCM encryption of `plaintext` under `key` and a fresh random nonce, as
+/// base64(nonce || ciphertext).
+fn aead_seal(key: &MessageKey, aad: &[u8], plaintext: &[u8]) -> Result<String, SealError> {
+    let mut nonce = [0u8; NONCE_LEN];
+    SystemRandom::new()
+        .fill(&mut nonce)
+        .map_err(|_| SealError::new("no randomness available"))?;
+    let mut ciphertext = plaintext.to_vec();
+    message_key(&key.0)?
+        .seal_in_place_append_tag(
+            Nonce::assume_unique_for_key(nonce),
+            Aad::from(aad),
+            &mut ciphertext,
+        )
+        .map_err(|_| SealError::new("message encryption failed"))?;
+    let mut sealed = nonce.to_vec();
+    sealed.extend_from_slice(&ciphertext);
+    Ok(STANDARD.encode(sealed))
+}
+
+/// Opens a value sealed by [`aead_seal`].
+fn aead_open(key: &MessageKey, aad: &[u8], sealed: &str) -> Result<Vec<u8>, SealError> {
+    let undecryptable = || SealError::new("message can't be decrypted");
     let mut sealed = STANDARD
-        .decode(body.message.trim())
+        .decode(sealed.trim())
         .map_err(|_| undecryptable())?;
     if sealed.len() < NONCE_LEN {
         return Err(undecryptable());
     }
     let mut ciphertext = sealed.split_off(NONCE_LEN);
     let nonce = Nonce::try_assume_unique_for_key(&sealed).map_err(|_| undecryptable())?;
-    let message = message_key(&key)
+    let plaintext = message_key(&key.0)
         .map_err(|_| undecryptable())?
-        .open_in_place(nonce, Aad::empty(), &mut ciphertext)
+        .open_in_place(nonce, Aad::from(aad), &mut ciphertext)
         .map_err(|_| undecryptable())?;
-    Ok(message.to_vec())
+    Ok(plaintext.to_vec())
 }
 
 /// Builds the AES-256-GCM key for `key` bytes.

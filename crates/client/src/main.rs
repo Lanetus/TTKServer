@@ -11,8 +11,9 @@
 //! evidence, attests the second relay ([`DEFAULT_RELAY_SERVER`]) and the terminal
 //! ([`DEFAULT_TERMINAL_SERVER`]) to learn their RA-TLS keys, and builds an onion-routed
 //! [`FafRequest`]: each hop's address is sealed to the relay that reads it, and the message is
-//! sealed to the terminal. It sends the request to the entry relay's `POST /faf` and prints the
-//! response. The enclave images never include it.
+//! sealed to the terminal. It sends the request to the entry relay's `POST /faf`, prints the
+//! response and decrypts the terminal's reply (`hello:<message>`, sealed under the message key).
+//! The enclave images never include it.
 
 use axum::http::Uri;
 use std::net::SocketAddr;
@@ -200,6 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Each hop's address is sealed to the relay that reads it: the entry relay learns only the
     // second relay, which learns only the terminal. Only the terminal can open the body.
+    let (body, message_key) = seal::seal_body_with_key(&terminal_key, message.as_bytes())?;
     let request = FafRequest {
         relays: vec![
             FafRelay {
@@ -211,7 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 encrypted: true,
             },
         ],
-        body: seal::seal_body(&terminal_key, message.as_bytes())?,
+        body,
     };
 
     println!(
@@ -230,6 +232,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             match resp.text() {
                 Ok(body_str) => println!("<-- Body:\n{}", body_str),
                 Err(_) => println!("<-- Body (binary, {} bytes)", resp.body.len()),
+            }
+            if resp.status == 200 {
+                let reply = resp.text().map_err(|e| e.to_string()).and_then(|sealed| {
+                    seal::open_response(&message_key, &sealed).map_err(|e| e.to_string())
+                });
+                match reply {
+                    Ok(reply) => println!(
+                        "<-- Terminal reply (decrypted):\n{}",
+                        String::from_utf8_lossy(&reply)
+                    ),
+                    Err(e) => {
+                        eprintln!("Failed to decrypt the terminal's reply: {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
         }
         Err(e) => {

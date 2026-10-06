@@ -36,7 +36,7 @@ use ttk_client::faf::{classify_hop_address, connect_to_node_filtered, HopAddress
 use ttk_client::faf::{parse_relay_address, parse_relay_server};
 use ttk_client::faf::{FafRelay, FafRequest, FAF_PATH};
 use ttk_client::seal::{self, NodeSecretKey};
-use ttk_client::{ClientTransport, EnclaveCertVerifier, TtkClient};
+use ttk_client::{ClientResponse, ClientTransport, EnclaveCertVerifier, TtkClient};
 use ttk_core::server::{env_u32, BoxError, Listener, Server, PARENT_CID};
 
 /// Boxed error type that can cross task boundaries.
@@ -280,13 +280,15 @@ impl FafState {
 }
 
 /// `POST /faf`: removes the first relay entry, forwards the rest of the request to the address
-/// it names and answers `200 OK` once that hop has.
+/// it names and answers `200 OK` with that hop's response body once it has: the terminal's
+/// sealed response (see [`seal::seal_response`]) travels back along the route unchanged.
 ///
 /// Answers `400` for a request without relays (only a terminal node is a last hop), with more
 /// than [`MAX_RELAYS`], or with a relay entry that can't be opened or parsed; `503` while
 /// [`MAX_CONCURRENT_FORWARDS`] requests are already being forwarded; and `502 relay failed` if
 /// the next hop has a refused address, can't be reached, fails attestation, answers anything
-/// but `200` or doesn't answer within [`RELAY_TIMEOUT`]. The reason is only logged.
+/// but `200` (or a non-UTF-8 body) or doesn't answer within [`RELAY_TIMEOUT`]. The reason is
+/// only logged.
 async fn faf(
     State(state): State<FafState>,
     Json(request): Json<FafRequest>,
@@ -320,12 +322,20 @@ async fn faf(
     let relayed =
         tokio::time::timeout(RELAY_TIMEOUT, forward_to_hop(&state, &host, port, &forward)).await;
     match relayed {
-        Ok(Ok(StatusCode::OK)) => {
-            info!("/faf: relayed to {host}:{port}");
-            (StatusCode::OK, "relayed".to_string())
+        Ok(Ok(response)) if response.status == StatusCode::OK => {
+            match String::from_utf8(response.body) {
+                Ok(body) => {
+                    info!("/faf: relayed to {host}:{port}");
+                    (StatusCode::OK, body)
+                }
+                Err(_) => {
+                    warn!("/faf: relay {host}:{port} answered a non-UTF-8 body");
+                    (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
+                }
+            }
         }
-        Ok(Ok(status)) => {
-            warn!("/faf: relay {host}:{port} answered {status}");
+        Ok(Ok(response)) => {
+            warn!("/faf: relay {host}:{port} answered {}", response.status);
             (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
         }
         Ok(Err(e)) => {
@@ -349,7 +359,7 @@ fn next_hop(node_key: &NodeSecretKey, relay: &FafRelay) -> Result<(String, u16),
     }
 }
 
-/// Posts `request` to the next hop's `/faf` and returns its status.
+/// Posts `request` to the next hop's `/faf` and returns its response.
 ///
 /// Reuses the pooled connection to the hop if there is one; otherwise resolves the hop,
 /// connects over RA-TLS (verified by a fresh verifier from `state`) to one of its addresses the
@@ -361,10 +371,10 @@ async fn forward_to_hop(
     host: &str,
     port: u16,
     request: &FafRequest,
-) -> Result<StatusCode, SendError> {
+) -> Result<ClientResponse, SendError> {
     if let Some(client) = state.pool.get(host, port) {
         match client.post_json(FAF_PATH, request).await {
-            Ok(response) => return Ok(response.status),
+            Ok(response) => return Ok(response),
             Err(e) => {
                 state.pool.remove(host, port, &client);
                 if !client.is_closed() {
@@ -388,7 +398,7 @@ async fn forward_to_hop(
     } else if response.is_err() {
         state.pool.remove(host, port, &client);
     }
-    Ok(response?.status)
+    response
 }
 
 /// Closes `client` gracefully without delaying the caller: waiting for the QUIC connection to

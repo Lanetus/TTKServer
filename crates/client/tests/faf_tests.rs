@@ -101,6 +101,25 @@ fn sealed_body_opens_only_for_the_last_hop() {
 }
 
 #[test]
+fn response_opens_only_under_the_message_key() {
+    let (secret, public) = key_pair();
+    let (body, client_key) = seal::seal_body_with_key(&public, b"hi").unwrap();
+    let (node_key, message) = seal::open_body_with_key(&secret, &body).unwrap();
+    assert_eq!(message, b"hi");
+
+    let sealed = seal::seal_response(&node_key, b"hello:hi").unwrap();
+    assert_eq!(
+        seal::open_response(&client_key, &sealed).unwrap(),
+        b"hello:hi"
+    );
+
+    let (_, other_key) = seal::seal_body_with_key(&public, b"hi").unwrap();
+    assert!(seal::open_response(&other_key, &sealed).is_err());
+    // A response isn't a request message: the two are domain-separated.
+    assert!(seal::open_response(&client_key, &body.message).is_err());
+}
+
+#[test]
 fn node_public_key_comes_from_the_certificate() {
     let key_pair = KeyPair::generate().unwrap();
     let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])

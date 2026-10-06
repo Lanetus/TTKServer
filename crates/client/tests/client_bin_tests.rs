@@ -69,7 +69,10 @@ async fn client_binary_sends_a_faf_request_through_two_relays() {
         "{stdout}"
     );
     assert!(stdout.contains("Response Status: 200"), "{stdout}");
-    assert!(stdout.contains("relayed"), "{stdout}");
+    assert!(
+        stdout.contains("Terminal reply (decrypted):\nhello:hello"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("Connection closed successfully."),
         "{stdout}"

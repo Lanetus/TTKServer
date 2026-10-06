@@ -5,7 +5,7 @@
 //! |---------------------|-----------------------------------------------------------------|
 //! | `GET /`             | Greeting text (from [`ttk_core`])                               |
 //! | `GET /evidence.eat` | Base64-encoded EAT carrying this node's Evidence (from [`ttk_core`]) |
-//! | `POST /faf`         | Receives a [`FafRequest`] and decrypts its message              |
+//! | `POST /faf`         | Receives a [`FafRequest`], decrypts its message and answers `hello:<message>`, encrypted |
 //!
 //! A terminal never forwards: it accepts only requests with no relays left, and is the only node
 //! that can decrypt their body, which is sealed to its RA-TLS key.
@@ -14,7 +14,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use log::info;
+use log::{info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use ttk_client::faf::{FafRequest, FAF_PATH};
@@ -65,7 +65,9 @@ impl Terminal {
     }
 }
 
-/// `POST /faf`: as the last hop, decrypts the body and answers `200 OK` (`delivered`).
+/// `POST /faf`: as the last hop, decrypts the body and answers `200 OK` with `hello:` followed
+/// by the message, encrypted under the body's message key ([`seal::seal_response`]) so only the
+/// sender can read it.
 ///
 /// Answers `400` for a request with relays left (a terminal never forwards) or a body that
 /// can't be decrypted.
@@ -81,11 +83,22 @@ async fn faf(
     }
 
     // Never log the key or the message itself, only its size.
-    match seal::open_body(&node_key, &request.body) {
-        Ok(message) => {
-            info!("/faf: delivered a {}-byte message", message.len());
-            (StatusCode::OK, "delivered".to_string())
+    let (key, message) = match seal::open_body_with_key(&node_key, &request.body) {
+        Ok(opened) => opened,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid body: {e}")),
+    };
+    info!("/faf: delivered a {}-byte message", message.len());
+
+    let mut response = b"hello:".to_vec();
+    response.extend_from_slice(&message);
+    match seal::seal_response(&key, &response) {
+        Ok(sealed) => (StatusCode::OK, sealed),
+        Err(e) => {
+            warn!("/faf: can't seal the response: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "response sealing failed".to_string(),
+            )
         }
-        Err(e) => (StatusCode::BAD_REQUEST, format!("invalid body: {e}")),
     }
 }
