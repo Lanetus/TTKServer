@@ -15,7 +15,7 @@
 //! Because the next hop comes from the request, a relay also limits where it may send traffic:
 //! never to link-local, multicast, broadcast or unspecified addresses, and to loopback or private
 //! addresses only with [`Relay::allow_private_next_hops`] (see
-//! [`classify_hop_address`](ttk_client::faf::classify_hop_address)). It caps the hops left in a
+//! [`classify_hop_address`]). It caps the hops left in a
 //! request at [`MAX_RELAYS`] and the requests it forwards at once at [`MAX_CONCURRENT_FORWARDS`],
 //! and answers every forwarding failure with the same `502 relay failed`, so a client can't use
 //! it to probe the network.
