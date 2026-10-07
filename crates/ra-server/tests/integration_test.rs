@@ -124,7 +124,6 @@ fn test_ttk_ra_server_nitro_and_eat_integration() {
     use ttk_ra_server::attestation::nitro_doc::{
         create_mock_attestation_document, parse_attestation_document, wrap_as_eat,
     };
-    use ttk_ra_server::generate_identity;
     use ttk_ra_server::AttestationParams;
 
     // 1. Generate RA-TLS identity

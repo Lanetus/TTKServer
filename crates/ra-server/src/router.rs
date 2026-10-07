@@ -15,7 +15,8 @@
 //! Nodes built on the server add their own routes with
 //! [`Server::serve_with`](super::server::Server::serve_with).
 
-use super::server::Attester;
+use crate::attestation::AttestationProvider;
+use crate::AttestationParams;
 use axum::body::Bytes;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -42,7 +43,13 @@ pub struct Evidence {
 }
 
 /// Builds the Axum router serving the greeting and the evidence endpoints, merged with `routes`.
-pub fn build_router(evidence: &Evidence, attester: Arc<Attester>, routes: Router) -> Router {
+///
+/// `POST /evidence` asks `provider` for Evidence carrying only the request's nonce.
+pub fn build_router(
+    evidence: &Evidence,
+    provider: Arc<dyn AttestationProvider>,
+    routes: Router,
+) -> Router {
     let eat_b64 = STANDARD.encode(&evidence.eat);
     let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_ATTESTATIONS));
 
@@ -51,7 +58,7 @@ pub fn build_router(evidence: &Evidence, attester: Arc<Attester>, routes: Router
         .route("/evidence.eat", get(move || async move { eat_b64 }))
         .route(
             "/evidence",
-            post(move |nonce: Bytes| evidence_with_nonce(attester, permits, nonce)),
+            post(move |nonce: Bytes| evidence_with_nonce(provider, permits, nonce)),
         )
         .merge(routes)
 }
@@ -59,7 +66,7 @@ pub fn build_router(evidence: &Evidence, attester: Arc<Attester>, routes: Router
 /// Handles `POST /evidence`: generates fresh Evidence carrying `nonce` and returns it as
 /// base64-encoded EAT.
 async fn evidence_with_nonce(
-    attester: Arc<Attester>,
+    provider: Arc<dyn AttestationProvider>,
     permits: Arc<Semaphore>,
     nonce: Bytes,
 ) -> Response {
@@ -73,7 +80,17 @@ async fn evidence_with_nonce(
     let Ok(_permit) = permits.try_acquire_owned() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "attestation busy").into_response();
     };
-    match tokio::task::spawn_blocking(move || attester.evidence(Some(&nonce))).await {
+    let params = AttestationParams {
+        nonce: Some(nonce.to_vec()),
+        ..AttestationParams::default()
+    };
+    let generate = move || -> Result<Vec<u8>, String> {
+        let eat = provider
+            .generate_document(&params)
+            .map_err(|e| e.to_string())?;
+        eat.to_cbor_bytes().map_err(|e| e.to_string())
+    };
+    match tokio::task::spawn_blocking(generate).await {
         Ok(Ok(eat)) => STANDARD.encode(eat).into_response(),
         Ok(Err(e)) => {
             error!("Evidence generation with nonce failed: {e}");

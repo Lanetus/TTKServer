@@ -1,4 +1,4 @@
-//! Tests for the base routes ([`ttk_ra_server::router`]), `POST /evidence` over a mock Attester.
+//! Tests for the base routes ([`ttk_ra_server::router`]), `POST /evidence` over the mock provider.
 #![cfg(feature = "mock")]
 
 use axum::body::Body;
@@ -6,27 +6,22 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ciborium::Value;
-use sha2::{Digest, Sha256};
-use std::sync::Arc;
 use tower_service::Service;
 use ttk_ra_server::attestation::{self, nitro_doc::parse_attestation_document, submod};
 use ttk_ra_server::router::{build_router, Evidence, MAX_NONCE_LEN};
-use ttk_ra_server::server::Attester;
 use ttk_ra_server::EatClaimsSet;
 
-const PUBLIC_KEY: &[u8] = b"test-public-key";
-
-/// A router over a mock [`Attester`] for [`PUBLIC_KEY`].
+/// A router over the mock provider.
 fn router() -> Router {
-    let attester = Arc::new(Attester::new(
-        attestation::by_name("mock").unwrap(),
-        PUBLIC_KEY,
-    ));
     let evidence = Evidence {
         nitro: Vec::new(),
         eat: Vec::new(),
     };
-    build_router(&evidence, attester, Router::new())
+    build_router(
+        &evidence,
+        attestation::by_name("mock").unwrap().into(),
+        Router::new(),
+    )
 }
 
 /// Sends `POST /evidence` with `body`, returning the status and response body.
@@ -41,7 +36,7 @@ async fn post_evidence(body: Vec<u8>) -> (StatusCode, Vec<u8>) {
 }
 
 #[tokio::test]
-async fn evidence_carries_the_nonce_and_key_binding() {
+async fn evidence_carries_the_nonce() {
     let nonce = b"client-nonce-0123456789".to_vec();
     let (status, body) = post_evidence(nonce.clone()).await;
     assert_eq!(status, StatusCode::OK);
@@ -57,10 +52,7 @@ async fn evidence_carries_the_nonce_and_key_binding() {
         .expect("no Nitro submodule");
     let doc = parse_attestation_document(doc).unwrap();
     assert_eq!(doc.nonce.unwrap().to_vec(), nonce);
-    assert_eq!(
-        doc.user_data.unwrap().to_vec(),
-        Sha256::digest(PUBLIC_KEY).to_vec()
-    );
+    assert!(doc.user_data.is_none());
 }
 
 #[tokio::test]
