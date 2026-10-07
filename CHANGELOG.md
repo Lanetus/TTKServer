@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING:** Evidence is wrapped in a RATS Conceptual Message Wrapper (CMW, `draft-ietf-rats-msg-wrap`, CBOR) instead of an RFC 9711 EAT claims-set, in the RA-TLS certificate extension, `GET /evidence.cmw` and `POST /evidence`. Nitro, TDX and SGX evidence are CMW records typed by `ttk_core::media_type`; SEV-SNP evidence is a collection of the report (Evidence) and the VCEK (Endorsement). The unsigned outer EAT claims (`iat`, `ueid`, `eat_profile`) are gone. Old clients cannot verify new servers and vice versa.
+- **BREAKING:** `GET /evidence.eat` is renamed `GET /evidence.cmw`.
+- **BREAKING:** `AttestationProvider::generate_document` returns a `Cmw`; `nitro_doc::wrap_as_eat`, `tdx::wrap_quote_as_eat` and `sev_snp::wrap_evidence_as_eat` are replaced by `wrap_as_cmw`, `wrap_quote_as_cmw` and `wrap_evidence_as_cmw`. `router::Evidence` has a single `cmw` field (`nitro` and `eat` are removed).
+- **BREAKING:** `ttk_ra_client::verifier::sev_snp::verify` takes the report and VCEK bytes instead of a CBOR map; `TeeKind::from_submod` is replaced by `TeeKind::from_cmw`.
+
+### Removed
+- **BREAKING:** `ttk_core::eat` (`EatClaimsSet`, `EatClaimKey`) and the `submod` labels, with their re-exports from `ttk_ra_server`; use `ttk_core::cmw` and `ttk_core::media_type`.
+
 ## [5.0.0] - 2026-10-07
 
 ### Changed

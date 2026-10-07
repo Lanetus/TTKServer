@@ -1,6 +1,6 @@
 [package]
 name = "ttk-ra-server"
-description = "RA-TLS HTTP/3 (QUIC) attested server library for TEEs (AWS Nitro, AMD SEV-SNP, Intel TDX) with RFC 9711 EAT evidence"
+description = "RA-TLS HTTP/3 (QUIC) attested server library for TEEs (AWS Nitro, AMD SEV-SNP, Intel TDX) with RATS CMW-wrapped evidence"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -3,8 +3,8 @@ use sha2::{Digest as ShaDigest, Sha256};
 use ttk_ra_server::attestation::nitro_doc::{
     create_mock_attestation_document, extract_cose_payload, parse_attestation_document,
 };
-use ttk_ra_server::attestation::{by_name, AttestationError, NsmSession};
-use ttk_ra_server::AttestationParams;
+use ttk_ra_server::attestation::{by_name, cmw, media_type, AttestationError, NsmSession};
+use ttk_ra_server::{AttestationParams, Cmw};
 
 #[test]
 fn test_create_and_parse_mock_attestation_doc() {
@@ -90,11 +90,15 @@ fn test_mock_provider_by_name() {
         user_data: Some(Sha256::digest(b"cert").to_vec()),
         ..Default::default()
     };
-    let claims = provider
+    let cmw = provider
         .generate_document(&params)
-        .expect("mock provider should produce an EAT claims-set");
-    assert!(claims.submods.is_some());
-    assert!(claims.eat_profile.is_some());
+        .expect("mock provider should produce a CMW");
+    let Cmw::Record(record) = cmw else {
+        panic!("mock evidence should be a CMW record");
+    };
+    assert_eq!(record.media_type(), Some(media_type::AWS_NITRO));
+    assert_eq!(record.ind, Some(cmw::ind::EVIDENCE));
+    assert!(parse_attestation_document(&record.value).is_ok());
 }
 
 #[test]
@@ -237,35 +241,10 @@ fn payload_that_is_not_an_attestation_doc_is_rejected() {
 }
 
 #[test]
-fn wrap_as_eat_rejects_payloads_without_module_id_or_timestamp() {
-    use ciborium::Value;
-    use ttk_ra_server::attestation::nitro_doc::wrap_as_eat;
+fn wrap_as_cmw_keeps_the_document_verbatim() {
+    use ttk_ra_server::attestation::nitro_doc::wrap_as_cmw;
 
-    let field = |k: &str, v: Value| (Value::Text(k.into()), v);
-
-    let invalid_cbor = cose_with_payload(vec![0xff]);
-    assert!(decoding_error(wrap_as_eat(&invalid_cbor)).contains("Invalid CBOR payload"));
-
-    let not_a_map = cose_with_payload(cbor(&Value::Array(vec![])));
-    assert!(decoding_error(wrap_as_eat(&not_a_map)).contains("not a CBOR map"));
-
-    let no_module_id = cose_with_payload(cbor(&Value::Map(vec![field(
-        "timestamp",
-        Value::Integer(1.into()),
-    )])));
-    assert!(decoding_error(wrap_as_eat(&no_module_id)).contains("missing module_id"));
-
-    let no_timestamp = cose_with_payload(cbor(&Value::Map(vec![field(
-        "module_id",
-        Value::Text("i-123".into()),
-    )])));
-    assert!(decoding_error(wrap_as_eat(&no_timestamp)).contains("missing timestamp"));
-
-    let minimal = cose_with_payload(cbor(&Value::Map(vec![
-        field("module_id", Value::Text("i-123".into())),
-        field("timestamp", Value::Integer(5_000.into())),
-    ])));
-    let claims = wrap_as_eat(&minimal).unwrap();
-    assert_eq!(claims.iat, Some(5));
-    assert_eq!(claims.ueid.map(|u| u.len()), Some(33));
+    let doc = cose_with_payload(vec![0xff]);
+    let cmw = wrap_as_cmw(doc.clone());
+    assert_eq!(cmw, Cmw::evidence(media_type::AWS_NITRO, doc));
 }

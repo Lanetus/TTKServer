@@ -3,8 +3,8 @@
 //! | Route               | Response                                                        |
 //! |---------------------|-----------------------------------------------------------------|
 //! | `GET /`             | Greeting text                                                   |
-//! | `GET /evidence.eat` | Base64-encoded EAT carrying this server's [`Evidence`]          |
-//! | `POST /evidence`    | Base64-encoded EAT with fresh Evidence carrying the body as nonce |
+//! | `GET /evidence.cmw` | Base64-encoded CBOR CMW carrying this server's [`Evidence`]     |
+//! | `POST /evidence`    | Base64-encoded CBOR CMW with fresh Evidence carrying the body as nonce |
 //!
 //! `POST /evidence` gives a Verifier freshness (RFC 9334 §10): the request body is the raw
 //! nonce (1 to [`MAX_NONCE_LEN`] bytes, else `400`), and the server asks the TEE for new Evidence
@@ -36,10 +36,8 @@ pub const MAX_CONCURRENT_ATTESTATIONS: usize = 4;
 /// Evidence for this instance, in the formats served over HTTP.
 #[derive(Clone, Debug)]
 pub struct Evidence {
-    /// Raw NSM Attestation Document (COSE_Sign1).
-    pub nitro: Vec<u8>,
-    /// The same document, wrapped as an RFC 9711 EAT claims-set.
-    pub eat: Vec<u8>,
+    /// The TEE evidence, wrapped as a CBOR-encoded RATS Conceptual Message Wrapper.
+    pub cmw: Vec<u8>,
 }
 
 /// Builds the Axum router serving the greeting and the evidence endpoints, merged with `routes`.
@@ -50,12 +48,12 @@ pub fn build_router(
     provider: Arc<dyn AttestationProvider>,
     routes: Router,
 ) -> Router {
-    let eat_b64 = STANDARD.encode(&evidence.eat);
+    let cmw_b64 = STANDARD.encode(&evidence.cmw);
     let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_ATTESTATIONS));
 
     Router::new()
         .route("/", get(|| async { "Hello from Enclave over HTTP/3!" }))
-        .route("/evidence.eat", get(move || async move { eat_b64 }))
+        .route("/evidence.cmw", get(move || async move { cmw_b64 }))
         .route(
             "/evidence",
             post(move |nonce: Bytes| evidence_with_nonce(provider, permits, nonce)),
@@ -64,7 +62,7 @@ pub fn build_router(
 }
 
 /// Handles `POST /evidence`: generates fresh Evidence carrying `nonce` and returns it as
-/// base64-encoded EAT.
+/// base64-encoded CBOR CMW.
 async fn evidence_with_nonce(
     provider: Arc<dyn AttestationProvider>,
     permits: Arc<Semaphore>,
@@ -84,14 +82,13 @@ async fn evidence_with_nonce(
         nonce: Some(nonce.to_vec()),
         ..AttestationParams::default()
     };
-    let generate = move || -> Result<Vec<u8>, String> {
-        let eat = provider
+    let generate = move || {
+        provider
             .generate_document(&params)
-            .map_err(|e| e.to_string())?;
-        eat.to_cbor_bytes().map_err(|e| e.to_string())
+            .map(|c| c.to_cbor_bytes())
     };
     match tokio::task::spawn_blocking(generate).await {
-        Ok(Ok(eat)) => STANDARD.encode(eat).into_response(),
+        Ok(Ok(cmw)) => STANDARD.encode(cmw).into_response(),
         Ok(Err(e)) => {
             error!("Evidence generation with nonce failed: {e}");
             (

@@ -5,10 +5,18 @@ use base64::Engine as _;
 use std::net::SocketAddr;
 use ttk_ra_client::verifier::TeeKind;
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient, MAX_RESPONSE_BODY};
-use ttk_ra_server::attestation::eat::EatClaimsSet;
+use ttk_ra_server::attestation::media_type;
 use ttk_ra_server::attestation::nitro_doc::parse_attestation_document;
-use ttk_ra_server::attestation::submod;
 use ttk_ra_server::server::{Server, MAX_REQUEST_HEADERS};
+use ttk_ra_server::Cmw;
+
+/// Decodes the CBOR CMW record `cmw`, returning its media type and value.
+fn nitro_record(cmw: &[u8]) -> (Option<String>, Vec<u8>) {
+    match Cmw::from_cbor_bytes(cmw).unwrap() {
+        Cmw::Record(r) => (r.media_type().map(String::from), r.value),
+        Cmw::Collection(_) => panic!("Nitro evidence should be a CMW record"),
+    }
+}
 
 /// Starts a server on a free local port and returns its address. It serves until the test's
 /// runtime shuts down.
@@ -39,28 +47,28 @@ async fn client_verifies_the_mock_server_and_exchanges_requests() {
     assert_eq!(root.status, 200);
     assert_eq!(root.text().unwrap(), "Hello from Enclave over HTTP/3!");
 
-    // Only `/` and `/evidence.eat` are served over GET; `/evidence` is POST-only.
+    // Only `/` and `/evidence.cmw` are served over GET; `/evidence` is POST-only.
     for removed in ["/hello", "/attestation"] {
         assert_eq!(client.get(removed).await.unwrap().status, 404, "{removed}");
     }
     assert_eq!(client.get("/evidence").await.unwrap().status, 405);
 
-    // The evidence served over HTTP is the EAT embedded in the TLS certificate. Paths without a
+    // The evidence served over HTTP is the CMW embedded in the TLS certificate. Paths without a
     // leading slash are accepted too.
-    let evidence = client.get("evidence.eat").await.unwrap();
-    let eat = base64::engine::general_purpose::STANDARD
+    let evidence = client.get("evidence.cmw").await.unwrap();
+    let cmw = base64::engine::general_purpose::STANDARD
         .decode(evidence.text().unwrap())
         .unwrap();
-    let claims = EatClaimsSet::from_cbor_bytes(&eat).unwrap();
-    assert!(claims.submods.is_some());
+    assert_eq!(nitro_record(&cmw).0, Some(media_type::AWS_NITRO.into()));
+    assert_eq!(client.get("/evidence.eat").await.unwrap().status, 404);
 
     let missing = client.get("/does-not-exist").await.unwrap();
     assert_eq!(missing.status, 404);
 
-    // `/` and `/evidence.eat` are GET-only, so a POST is answered with 405.
+    // `/` and `/evidence.cmw` are GET-only, so a POST is answered with 405.
     let post = client.post("/", b"payload").await.unwrap();
     assert_eq!(post.status, 405);
-    let empty_post = client.post("evidence.eat", b"").await.unwrap();
+    let empty_post = client.post("evidence.cmw", b"").await.unwrap();
     assert_eq!(empty_post.status, 405);
     // The base `ttk-ra-server` server has no `/faf`: relay and terminal nodes add it.
     assert_eq!(client.post("/faf", b"{}").await.unwrap().status, 404);
@@ -82,19 +90,10 @@ async fn evidence_with_nonce_carries_the_nonce() {
     let nonce = b"fresh-client-nonce";
     let response = client.post("/evidence", nonce).await.unwrap();
     assert_eq!(response.status, 200);
-    let eat = base64::engine::general_purpose::STANDARD
+    let cmw = base64::engine::general_purpose::STANDARD
         .decode(response.text().unwrap())
         .unwrap();
-    let claims = EatClaimsSet::from_cbor_bytes(&eat).unwrap();
-    let submods = claims.submods.unwrap();
-    let doc = submods
-        .as_map()
-        .unwrap()
-        .iter()
-        .find(|(k, _)| k.as_text() == Some(submod::AWS_NITRO))
-        .and_then(|(_, v)| v.as_bytes())
-        .expect("no Nitro submodule");
-    let doc = parse_attestation_document(doc).unwrap();
+    let doc = parse_attestation_document(&nitro_record(&cmw).1).unwrap();
     assert_eq!(doc.nonce.unwrap().as_slice(), nonce);
 
     // The nonce is required and bounded.

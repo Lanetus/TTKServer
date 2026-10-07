@@ -1,14 +1,17 @@
-//! Verification of TEE attestation evidence carried in an RFC 9711 EAT.
+//! Verification of TEE attestation evidence carried in a RATS Conceptual Message Wrapper (CMW).
 //!
-//! The server embeds exactly one TEE-specific evidence blob in the EAT `submods` map, under a
-//! label from [`submod`]. [`verify_evidence`] dispatches on that label:
+//! The server wraps exactly one TEE's evidence in a CMW whose type, from [`media_type`], names
+//! the TEE. [`verify_evidence`] dispatches on that type:
 //!
-//! | Label       | TEE            | Evidence                                   | Verified by   |
-//! |-------------|----------------|--------------------------------------------|---------------|
-//! | `aws_nitro` | AWS Nitro      | NSM attestation document (COSE_Sign1)      | [`nitro`]     |
-//! | `sev_snp`   | AMD SEV-SNP    | map `{report, vcek}`: report + VCEK (DER)  | [`sev_snp`]   |
-//! | `tdx`       | Intel TDX      | DCAP quote v4/v5 with PCK chain            | [`dcap`]      |
-//! | `sgx`       | Intel SGX      | DCAP quote v3/v4/v5 with PCK chain         | [`dcap`]      |
+//! | CMW                                         | TEE         | Evidence                              | Verified by |
+//! |---------------------------------------------|-------------|---------------------------------------|-------------|
+//! | record [`media_type::AWS_NITRO`]            | AWS Nitro   | NSM attestation document (COSE_Sign1) | [`nitro`]   |
+//! | collection [`media_type::SEV_SNP_COLLECTION`] | AMD SEV-SNP | `report` record + `vcek` record (DER) | [`sev_snp`] |
+//! | record [`media_type::TDX`]                  | Intel TDX   | DCAP quote v4/v5 with PCK chain       | [`dcap`]    |
+//! | record [`media_type::SGX`]                  | Intel SGX   | DCAP quote v3/v4/v5 with PCK chain    | [`dcap`]    |
+//!
+//! A record whose `ind` is set must mark it as Evidence. The CMW itself is unsigned; trust
+//! comes only from the wrapped evidence.
 //!
 //! Every verifier checks the vendor signature chain up to a root in the [`TrustStore`] and
 //! returns a [`VerifiedEvidence`]; the Nitro verifier also requires the enclave image's PCR0 to
@@ -21,14 +24,13 @@ pub mod dcap;
 pub mod nitro;
 pub mod sev_snp;
 
-use ciborium::Value;
 use rustls_pki_types::{SignatureVerificationAlgorithm, UnixTime};
 use std::collections::BTreeMap;
 use std::fmt;
-use ttk_core::eat::EatClaimsSet;
+use ttk_core::cmw::{ind, Cmw, CmwCollection, CmwRecord};
 
-/// EAT `submods` labels identifying the TEE that produced the nested evidence.
-pub use ttk_core::submod;
+/// CMW types identifying the TEE that produced the wrapped evidence.
+pub use ttk_core::media_type;
 
 /// Trust anchors and accepted images the verifiers check evidence against (defined in
 /// [`crate::trust`]).
@@ -60,16 +62,22 @@ impl fmt::Display for TeeKind {
     }
 }
 
-/// Mapping between TEE kinds and their EAT submodule labels.
+/// Mapping between TEE kinds and their CMW types.
 impl TeeKind {
-    /// Returns the TEE whose evidence is stored under the submodule `label`, if any.
-    pub fn from_submod(label: &str) -> Option<Self> {
-        match label {
-            submod::AWS_NITRO => Some(Self::AwsNitro),
-            submod::SEV_SNP => Some(Self::SevSnp),
-            submod::TDX => Some(Self::Tdx),
-            submod::SGX => Some(Self::Sgx),
-            _ => None,
+    /// Returns the TEE whose evidence `cmw` carries, judged by its type alone: the media type
+    /// of a record, or the collection type of a collection.
+    pub fn from_cmw(cmw: &Cmw) -> Option<Self> {
+        match cmw {
+            Cmw::Record(record) => match record.media_type()? {
+                media_type::AWS_NITRO => Some(Self::AwsNitro),
+                media_type::TDX => Some(Self::Tdx),
+                media_type::SGX => Some(Self::Sgx),
+                _ => None,
+            },
+            Cmw::Collection(collection) => match collection.collection_type.as_deref()? {
+                media_type::SEV_SNP_COLLECTION => Some(Self::SevSnp),
+                _ => None,
+            },
         }
     }
 }
@@ -104,39 +112,37 @@ pub struct Policy {
     pub allow_debug: bool,
 }
 
-/// Verifies the TEE evidence in `eat_bytes` at time `now` and checks that it is bound to
+/// Verifies the TEE evidence in the CBOR CMW `cmw_bytes` at time `now` and checks that it is bound to
 /// `binding`, the SHA-256 of the RA-TLS certificate's public key. Nitro images must be in
 /// `images`.
 pub fn verify_evidence(
-    eat_bytes: &[u8],
+    cmw_bytes: &[u8],
     binding: &[u8],
     now: UnixTime,
     trust: &TrustStore,
     images: &dyn ImageTrustStore,
     policy: Policy,
 ) -> Result<VerifiedEvidence, String> {
-    let claims =
-        EatClaimsSet::from_bytes(eat_bytes).map_err(|e| format!("invalid EAT token: {e}"))?;
-    let submods = claims.submods.ok_or("EAT token has no submods")?;
-    let entries = submods.into_map().map_err(|_| "EAT submods is not a map")?;
+    let cmw = Cmw::from_cbor_bytes(cmw_bytes).map_err(|e| format!("invalid CMW: {e}"))?;
+    let tee = TeeKind::from_cmw(&cmw).ok_or("CMW does not carry supported TEE evidence")?;
 
-    let mut known: Vec<(TeeKind, Value)> = entries
-        .into_iter()
-        .filter_map(|(label, value)| {
-            let tee = TeeKind::from_submod(label.as_text()?)?;
-            Some((tee, value))
-        })
-        .collect();
-    let (tee, value) = match known.len() {
-        0 => return Err("EAT token contains no supported TEE evidence".into()),
-        1 => known.remove(0),
-        _ => return Err("EAT token contains evidence from more than one TEE".into()),
-    };
-
-    let evidence = match tee {
-        TeeKind::AwsNitro => nitro::verify(&bytes_of(value, tee)?, now, trust, images, policy)?,
-        TeeKind::SevSnp => sev_snp::verify(&value, now, trust)?,
-        TeeKind::Tdx | TeeKind::Sgx => dcap::verify(&bytes_of(value, tee)?, tee, now, trust)?,
+    let evidence = match (tee, &cmw) {
+        (TeeKind::AwsNitro, Cmw::Record(r)) => {
+            nitro::verify(evidence_of(r, tee)?, now, trust, images, policy)?
+        }
+        (TeeKind::Tdx | TeeKind::Sgx, Cmw::Record(r)) => {
+            dcap::verify(evidence_of(r, tee)?, tee, now, trust)?
+        }
+        (TeeKind::SevSnp, Cmw::Collection(c)) => {
+            let report = member(
+                c,
+                media_type::SEV_SNP_REPORT_LABEL,
+                media_type::SEV_SNP_REPORT,
+            )?;
+            let vcek = member(c, media_type::SEV_SNP_VCEK_LABEL, media_type::PKIX_CERT)?;
+            sev_snp::verify(evidence_of(report, tee)?, &vcek.value, now, trust)?
+        }
+        _ => return Err(format!("{tee} evidence has the wrong CMW form")),
     };
 
     if evidence.debug && !(policy.allow_debug || policy.allow_mock) {
@@ -150,11 +156,27 @@ pub fn verify_evidence(
     Ok(evidence)
 }
 
-/// Unwraps a CBOR byte string holding `tee` evidence.
-fn bytes_of(value: Value, tee: TeeKind) -> Result<Vec<u8>, String> {
-    value
-        .into_bytes()
-        .map_err(|_| format!("{tee} evidence is not a byte string"))
+/// Returns the `tee` evidence in `record`, which must not be marked as anything but Evidence.
+fn evidence_of(record: &CmwRecord, tee: TeeKind) -> Result<&[u8], String> {
+    match record.ind {
+        Some(bits) if bits & ind::EVIDENCE == 0 => {
+            Err(format!("{tee} CMW record is not marked as Evidence"))
+        }
+        _ => Ok(&record.value),
+    }
+}
+
+/// Returns the record labelled `label` in `collection`, which must be of `media_type`.
+fn member<'a>(
+    collection: &'a CmwCollection,
+    label: &str,
+    media_type: &str,
+) -> Result<&'a CmwRecord, String> {
+    match collection.get(label) {
+        Some(Cmw::Record(r)) if r.media_type() == Some(media_type) => Ok(r),
+        Some(_) => Err(format!("CMW member '{label}' is not a {media_type} record")),
+        None => Err(format!("CMW collection has no '{label}' member")),
+    }
 }
 
 /// Returns `true` if `report_data` equals `binding`, or starts with it and is zero-padded.

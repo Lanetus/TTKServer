@@ -25,12 +25,12 @@ use std::time::Duration;
 use ttk_ra_client::trust::RootSignerTrustStore;
 use ttk_ra_client::verifier::sev_snp::{AmdProduct, AmdRoots};
 use ttk_ra_client::verifier::{
-    dcap, is_bound_to, nitro, sev_snp, submod, verify_evidence, ImageTrustStore, Policy, TeeKind,
-    TrustStore,
+    dcap, is_bound_to, media_type, nitro, sev_snp, verify_evidence, ImageTrustStore, Policy,
+    TeeKind, TrustStore,
 };
 use ttk_ra_client::{EnclaveCertVerifier, RootImageTrustStore};
-use ttk_ra_server::attestation::eat::EatClaimsSet;
 use ttk_ra_server::server::create_cert_with_attestation;
+use ttk_ra_server::{cmw, Cmw, CmwCollection, CmwRecord};
 use x509_parser::prelude::*;
 
 const MILAN_REPORT: &[u8] = include_bytes!("fixtures/sev_snp_milan_report.bin");
@@ -43,25 +43,34 @@ fn fixture_time() -> UnixTime {
     UnixTime::since_unix_epoch(Duration::from_secs(1_767_225_600))
 }
 
-fn snp_evidence(report: &[u8], vcek: &[u8]) -> Value {
-    Value::Map(vec![
-        (Value::Text("report".into()), Value::Bytes(report.to_vec())),
-        (Value::Text("vcek".into()), Value::Bytes(vcek.to_vec())),
-    ])
+/// CBOR CMW Evidence record of `media_type` holding `value`.
+fn record(media_type: &str, value: Vec<u8>) -> Vec<u8> {
+    Cmw::evidence(media_type, value).to_cbor_bytes()
 }
 
-fn eat_with(submods: Vec<(&str, Value)>) -> Vec<u8> {
-    EatClaimsSet {
-        submods: Some(Value::Map(
-            submods
-                .into_iter()
-                .map(|(label, value)| (Value::Text(label.into()), value))
-                .collect(),
-        )),
-        ..EatClaimsSet::default()
+/// SEV-SNP evidence: a CMW collection of the `report` and its `vcek`.
+fn snp_collection(report: &[u8], vcek: &[u8]) -> CmwCollection {
+    CmwCollection {
+        collection_type: Some(media_type::SEV_SNP_COLLECTION.into()),
+        entries: vec![
+            (
+                "report".into(),
+                Cmw::evidence(media_type::SEV_SNP_REPORT, report.to_vec()),
+            ),
+            (
+                "vcek".into(),
+                Cmw::Record(CmwRecord::new(
+                    media_type::PKIX_CERT,
+                    vcek.to_vec(),
+                    cmw::ind::ENDORSEMENTS,
+                )),
+            ),
+        ],
     }
-    .to_cbor_bytes()
-    .unwrap()
+}
+
+fn snp_cmw(report: &[u8], vcek: &[u8]) -> Vec<u8> {
+    Cmw::Collection(snp_collection(report, vcek)).to_cbor_bytes()
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +94,8 @@ fn builtin_amd_ask_certificates_are_signed_by_their_arks() {
 #[test]
 fn real_milan_report_verifies_against_builtin_amd_roots() {
     let evidence = sev_snp::verify(
-        &snp_evidence(MILAN_REPORT, MILAN_VCEK),
+        MILAN_REPORT,
+        MILAN_VCEK,
         fixture_time(),
         &TrustStore::builtin(),
     )
@@ -103,12 +113,8 @@ fn real_milan_report_verifies_against_builtin_amd_roots() {
 fn tampered_milan_report_is_rejected() {
     let mut report = MILAN_REPORT.to_vec();
     report[0x90] ^= 1; // measurement
-    let err = sev_snp::verify(
-        &snp_evidence(&report, MILAN_VCEK),
-        fixture_time(),
-        &TrustStore::builtin(),
-    )
-    .unwrap_err();
+    let err =
+        sev_snp::verify(&report, MILAN_VCEK, fixture_time(), &TrustStore::builtin()).unwrap_err();
     assert!(err.contains("signature is invalid"), "{err}");
 }
 
@@ -116,12 +122,8 @@ fn tampered_milan_report_is_rejected() {
 fn milan_report_with_different_tcb_is_rejected() {
     let mut report = MILAN_REPORT.to_vec();
     report[0x187] ^= 1; // REPORTED_TCB microcode SPL
-    let err = sev_snp::verify(
-        &snp_evidence(&report, MILAN_VCEK),
-        fixture_time(),
-        &TrustStore::builtin(),
-    )
-    .unwrap_err();
+    let err =
+        sev_snp::verify(&report, MILAN_VCEK, fixture_time(), &TrustStore::builtin()).unwrap_err();
     assert!(err.contains("ucodeSPL"), "{err}");
 }
 
@@ -129,12 +131,7 @@ fn milan_report_with_different_tcb_is_rejected() {
 fn milan_report_is_rejected_without_amd_roots() {
     let mut trust = TrustStore::builtin();
     trust.amd.retain(|r| r.product != AmdProduct::Milan);
-    let err = sev_snp::verify(
-        &snp_evidence(MILAN_REPORT, MILAN_VCEK),
-        fixture_time(),
-        &trust,
-    )
-    .unwrap_err();
+    let err = sev_snp::verify(MILAN_REPORT, MILAN_VCEK, fixture_time(), &trust).unwrap_err();
     assert!(err.contains("not signed by a pinned AMD ASK"), "{err}");
 }
 
@@ -401,36 +398,30 @@ fn synthetic_evidence_verifies_for_every_hardware_tee() {
 
     let cases = [
         (
-            submod::TDX,
             TeeKind::Tdx,
-            Value::Bytes(build_quote(
-                TeeKind::Tdx,
-                &td_body(&binding, 7, false),
-                &intel,
-            )),
+            record(
+                media_type::TDX,
+                build_quote(TeeKind::Tdx, &td_body(&binding, 7, false), &intel),
+            ),
             "mrtd",
         ),
         (
-            submod::SGX,
             TeeKind::Sgx,
-            Value::Bytes(build_quote(
-                TeeKind::Sgx,
-                &sgx_body(&binding, 7, false),
-                &intel,
-            )),
+            record(
+                media_type::SGX,
+                build_quote(TeeKind::Sgx, &sgx_body(&binding, 7, false), &intel),
+            ),
             "mrenclave",
         ),
         (
-            submod::SEV_SNP,
             TeeKind::SevSnp,
-            snp_evidence(&build_snp_report(&amd, &binding, 7, false), &amd.vcek),
+            snp_cmw(&build_snp_report(&amd, &binding, 7, false), &amd.vcek),
             "measurement",
         ),
     ];
-    for (label, tee, value, measurement) in cases {
-        let eat = eat_with(vec![(label, value)]);
+    for (tee, cmw, measurement) in cases {
         let evidence = verify_evidence(
-            &eat,
+            &cmw,
             &binding,
             UnixTime::now(),
             &trust,
@@ -453,30 +444,27 @@ fn debug_mode_is_rejected_unless_allowed() {
 
     let cases = [
         (
-            submod::TDX,
-            Value::Bytes(build_quote(
-                TeeKind::Tdx,
-                &td_body(&binding, 0, true),
-                &intel,
-            )),
+            TeeKind::Tdx,
+            record(
+                media_type::TDX,
+                build_quote(TeeKind::Tdx, &td_body(&binding, 0, true), &intel),
+            ),
         ),
         (
-            submod::SGX,
-            Value::Bytes(build_quote(
-                TeeKind::Sgx,
-                &sgx_body(&binding, 0, true),
-                &intel,
-            )),
+            TeeKind::Sgx,
+            record(
+                media_type::SGX,
+                build_quote(TeeKind::Sgx, &sgx_body(&binding, 0, true), &intel),
+            ),
         ),
         (
-            submod::SEV_SNP,
-            snp_evidence(&build_snp_report(&amd, &binding, 0, true), &amd.vcek),
+            TeeKind::SevSnp,
+            snp_cmw(&build_snp_report(&amd, &binding, 0, true), &amd.vcek),
         ),
     ];
-    for (label, value) in cases {
-        let eat = eat_with(vec![(label, value)]);
+    for (tee, cmw) in cases {
         let err = verify_evidence(
-            &eat,
+            &cmw,
             &binding,
             UnixTime::now(),
             &trust,
@@ -484,14 +472,14 @@ fn debug_mode_is_rejected_unless_allowed() {
             Policy::default(),
         )
         .unwrap_err();
-        assert!(err.contains("debug-mode"), "{label}: {err}");
+        assert!(err.contains("debug-mode"), "{tee}: {err}");
 
         let relaxed = Policy {
             allow_debug: true,
             ..Policy::default()
         };
         let evidence = verify_evidence(
-            &eat,
+            &cmw,
             &binding,
             UnixTime::now(),
             &trust,
@@ -499,7 +487,7 @@ fn debug_mode_is_rejected_unless_allowed() {
             relaxed,
         )
         .unwrap();
-        assert!(evidence.debug, "{label}");
+        assert!(evidence.debug, "{tee}");
     }
 }
 
@@ -509,10 +497,10 @@ fn evidence_bound_to_other_data_is_rejected() {
     let amd = amd_pki();
     let trust = test_trust(&intel, &amd);
     let quote = build_quote(TeeKind::Tdx, &td_body(&[0x42; 32], 0, false), &intel);
-    let eat = eat_with(vec![(submod::TDX, Value::Bytes(quote))]);
+    let cmw = record(media_type::TDX, quote);
 
     let err = verify_evidence(
-        &eat,
+        &cmw,
         &[0x43; 32],
         UnixTime::now(),
         &trust,
@@ -524,36 +512,67 @@ fn evidence_bound_to_other_data_is_rejected() {
 }
 
 #[test]
-fn eat_must_carry_exactly_one_supported_tee() {
+fn cmw_must_carry_supported_tee_evidence() {
     let trust = TrustStore::builtin();
-    let now = UnixTime::now();
+    let verify = |cmw: Vec<u8>| {
+        verify_evidence(
+            &cmw,
+            &[0; 32],
+            UnixTime::now(),
+            &trust,
+            &RootImageTrustStore::default(),
+            Policy::default(),
+        )
+        .unwrap_err()
+    };
 
-    let none = eat_with(vec![("other", Value::Bytes(vec![1]))]);
-    let err = verify_evidence(
-        &none,
-        &[0; 32],
-        now,
-        &trust,
-        &RootImageTrustStore::default(),
-        Policy::default(),
-    )
-    .unwrap_err();
-    assert!(err.contains("no supported TEE evidence"), "{err}");
+    let err = verify(vec![0xff]);
+    assert!(err.contains("invalid CMW"), "{err}");
 
-    let two = eat_with(vec![
-        (submod::TDX, Value::Bytes(vec![1])),
-        (submod::SGX, Value::Bytes(vec![1])),
-    ]);
-    let err = verify_evidence(
-        &two,
-        &[0; 32],
-        now,
-        &trust,
-        &RootImageTrustStore::default(),
-        Policy::default(),
-    )
-    .unwrap_err();
-    assert!(err.contains("more than one TEE"), "{err}");
+    let err = verify(record("application/octet-stream", vec![1]));
+    assert!(
+        err.contains("does not carry supported TEE evidence"),
+        "{err}"
+    );
+
+    // A quote marked as an Endorsement rather than Evidence.
+    let endorsement = Cmw::Record(CmwRecord::new(
+        media_type::TDX,
+        vec![1],
+        cmw::ind::ENDORSEMENTS,
+    ));
+    let err = verify(endorsement.to_cbor_bytes());
+    assert!(err.contains("not marked as Evidence"), "{err}");
+
+    // A bare SEV-SNP report record: the VCEK is missing.
+    let err = verify(record(media_type::SEV_SNP_REPORT, vec![1]));
+    assert!(
+        err.contains("does not carry supported TEE evidence"),
+        "{err}"
+    );
+
+    let amd = amd_pki();
+    let report = build_snp_report(&amd, &[0; 32], 0, false);
+    let mut no_vcek = snp_collection(&report, &amd.vcek);
+    no_vcek.entries.retain(|(label, _)| label != "vcek");
+    let err = verify(Cmw::Collection(no_vcek).to_cbor_bytes());
+    assert!(err.contains("no 'vcek' member"), "{err}");
+
+    let mut mistyped = snp_collection(&report, &amd.vcek);
+    mistyped.entries[1].1 = Cmw::evidence(media_type::TDX, amd.vcek.clone());
+    let err = verify(Cmw::Collection(mistyped).to_cbor_bytes());
+    assert!(
+        err.contains("is not a application/pkix-cert record"),
+        "{err}"
+    );
+
+    let mut untyped = snp_collection(&report, &amd.vcek);
+    untyped.collection_type = None;
+    let err = verify(Cmw::Collection(untyped).to_cbor_bytes());
+    assert!(
+        err.contains("does not carry supported TEE evidence"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -759,9 +778,9 @@ fn nitro_debug_evidence_is_left_to_the_debug_policy() {
     .expect("debug images cannot be identified, so the allowlist does not apply");
     assert!(evidence.debug);
 
-    let eat = eat_with(vec![(submod::AWS_NITRO, Value::Bytes(doc))]);
+    let cmw = record(media_type::AWS_NITRO, doc);
     let err = verify_evidence(
-        &eat,
+        &cmw,
         &[7; 32],
         UnixTime::now(),
         &trust,
@@ -816,8 +835,8 @@ fn tdx_ra_tls_cert(
 ) -> CertificateDer<'static> {
     let binding = Sha256::digest(bound_key.public_key_der());
     let quote = build_quote(TeeKind::Tdx, &td_body(&binding, 7, false), intel);
-    let eat = eat_with(vec![(submod::TDX, Value::Bytes(quote))]);
-    let pem = create_cert_with_attestation(key, "enclave.internal", &eat, 1).unwrap();
+    let cmw = record(media_type::TDX, quote);
+    let pem = create_cert_with_attestation(key, "enclave.internal", &cmw, 1).unwrap();
     CertificateDer::from_pem_slice(pem.as_bytes()).unwrap()
 }
 

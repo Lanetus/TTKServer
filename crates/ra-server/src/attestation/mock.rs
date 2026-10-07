@@ -4,9 +4,9 @@
 //! [`create_mock_attestation_document`]). Clients verify them fully, but only accept them when
 //! mock attestation is explicitly allowed.
 
-use super::nitro_doc::{create_mock_attestation_document, wrap_as_eat};
+use super::nitro_doc::{create_mock_attestation_document, wrap_as_cmw};
 use super::{AttestationError, AttestationProvider};
-use crate::{AttestationParams, EatClaimsSet};
+use crate::{AttestationParams, Cmw};
 
 /// Always-available provider producing Nitro-format documents signed through the mock root CA.
 pub struct MockSession;
@@ -23,11 +23,8 @@ impl AttestationProvider for MockSession {
         true
     }
 
-    /// Builds a mock attestation document for `params` and wraps it as an EAT claims-set.
-    fn generate_document(
-        &self,
-        params: &AttestationParams,
-    ) -> Result<EatClaimsSet, AttestationError> {
-        wrap_as_eat(&create_mock_attestation_document(params)?)
+    /// Builds a mock attestation document for `params` and wraps it as a CMW.
+    fn generate_document(&self, params: &AttestationParams) -> Result<Cmw, AttestationError> {
+        Ok(wrap_as_cmw(create_mock_attestation_document(params)?))
     }
 }
