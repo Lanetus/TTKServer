@@ -225,7 +225,10 @@ fn get_evidence_cleans_up_its_entry_on_failure() {
 
 #[test]
 fn report_data_is_user_data_zero_padded() {
-    let params = AttestationParams::new().with_user_data(vec![7; 32]);
+    let params = AttestationParams {
+        user_data: Some(vec![7; 32]),
+        ..Default::default()
+    };
     let data = report_data(&params).unwrap();
     assert_eq!(data[..32], [7; 32]);
     assert_eq!(data[32..], [0; 32]);
@@ -290,11 +293,17 @@ fn session_reports_its_name_and_propagates_errors() {
     assert_eq!(session.name(), "sev-snp");
     let _ = SevSnpSession::is_available();
 
-    let params = AttestationParams::new().with_user_data(vec![1; 32]);
+    let params = AttestationParams {
+        user_data: Some(vec![1; 32]),
+        ..Default::default()
+    };
     let err = session.generate_document(&params).unwrap_err();
     assert!(err.to_string().contains("provider"), "{err}");
 
-    let with_key = params.with_public_key(vec![2; 8]);
+    let with_key = AttestationParams {
+        public_key: Some(vec![2; 8]),
+        ..params
+    };
     assert!(matches!(
         session.generate_document(&with_key),
         Err(AttestationError::InvalidInput(_))

@@ -217,10 +217,11 @@ impl Attester {
     /// Requests Evidence from the provider, carrying `nonce` if given, and returns it as
     /// CBOR-encoded RFC 9711 EAT bytes. Blocks on the TEE driver.
     pub fn evidence(&self, nonce: Option<&[u8]>) -> Result<Vec<u8>, String> {
-        let mut params = AttestationParams::new().with_user_data(self.user_data.clone());
-        if let Some(nonce) = nonce {
-            params = params.with_nonce(nonce);
-        }
+        let params = AttestationParams {
+            user_data: Some(self.user_data.clone()),
+            nonce: nonce.map(<[u8]>::to_vec),
+            public_key: None,
+        };
         let eat = self
             .provider
             .generate_document(&params)

@@ -121,7 +121,10 @@ fn get_quote_cleans_up_its_entry_on_failure() {
 
 #[test]
 fn report_data_is_user_data_zero_padded() {
-    let params = AttestationParams::new().with_user_data(vec![7; 32]);
+    let params = AttestationParams {
+        user_data: Some(vec![7; 32]),
+        ..Default::default()
+    };
     let data = report_data(&params).unwrap();
     assert_eq!(data[..32], [7; 32]);
     assert_eq!(data[32..], [0; 32]);
@@ -129,15 +132,20 @@ fn report_data_is_user_data_zero_padded() {
 
 #[test]
 fn report_data_rejects_oversized_or_unsupported_inputs() {
-    let oversized = AttestationParams::new().with_user_data(vec![1; 65]);
+    let oversized = AttestationParams {
+        user_data: Some(vec![1; 65]),
+        ..Default::default()
+    };
     assert!(matches!(
         report_data(&oversized),
         Err(AttestationError::InvalidInput(_))
     ));
 
-    let with_nonce = AttestationParams::new()
-        .with_user_data(vec![1; 32])
-        .with_nonce(vec![2; 16]);
+    let with_nonce = AttestationParams {
+        user_data: Some(vec![1; 32]),
+        nonce: Some(vec![2; 16]),
+        ..Default::default()
+    };
     assert!(matches!(
         report_data(&with_nonce),
         Err(AttestationError::InvalidInput(_))
@@ -191,11 +199,17 @@ fn session_reports_its_name_and_propagates_errors() {
     assert_eq!(session.name(), "tdx");
     let _ = TdxSession::is_available();
 
-    let params = AttestationParams::new().with_user_data(vec![1; 32]);
+    let params = AttestationParams {
+        user_data: Some(vec![1; 32]),
+        ..Default::default()
+    };
     let err = session.generate_document(&params).unwrap_err();
     assert!(err.to_string().contains("provider"), "{err}");
 
-    let with_nonce = params.with_nonce(vec![2; 8]);
+    let with_nonce = AttestationParams {
+        nonce: Some(vec![2; 8]),
+        ..params
+    };
     assert!(matches!(
         session.generate_document(&with_nonce),
         Err(AttestationError::InvalidInput(_))

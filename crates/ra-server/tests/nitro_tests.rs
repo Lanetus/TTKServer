@@ -7,30 +7,16 @@ use ttk_ra_server::attestation::{by_name, AttestationError, NsmSession};
 use ttk_ra_server::AttestationParams;
 
 #[test]
-fn test_attestation_params_builder() {
-    let cert_data = b"ephemeral-cert-data";
-    let expected_hash = Sha256::digest(cert_data).to_vec();
-
-    let params = AttestationParams::new()
-        .with_user_data_hash(cert_data)
-        .with_nonce(b"random-nonce-123".to_vec())
-        .with_public_key(b"public-key-der".to_vec());
-
-    assert_eq!(params.user_data(), Some(expected_hash.as_slice()));
-    assert_eq!(params.nonce(), Some(b"random-nonce-123".as_slice()));
-    assert_eq!(params.public_key(), Some(b"public-key-der".as_slice()));
-}
-
-#[test]
 fn test_create_and_parse_mock_attestation_doc() {
     let user_data = b"test-user-data".to_vec();
     let nonce = b"test-nonce-123".to_vec();
     let pubkey = b"test-public-key".to_vec();
 
-    let params = AttestationParams::new()
-        .with_user_data(user_data.clone())
-        .with_nonce(nonce.clone())
-        .with_public_key(pubkey.clone());
+    let params = AttestationParams {
+        user_data: Some(user_data.clone()),
+        nonce: Some(nonce.clone()),
+        public_key: Some(pubkey.clone()),
+    };
 
     let raw_cose = create_mock_attestation_document(&params)
         .expect("Mock attestation doc creation should succeed");
@@ -65,7 +51,10 @@ fn test_create_and_parse_mock_attestation_doc() {
 #[test]
 fn test_generate_attestation_or_mock() {
     let cert_data = b"self-signed-ra-tls-cert";
-    let params = AttestationParams::new().with_user_data_hash(cert_data);
+    let params = AttestationParams {
+        user_data: Some(Sha256::digest(cert_data).to_vec()),
+        ..Default::default()
+    };
     let doc = create_mock_attestation_document(&params).expect("Should generate mock attestation");
 
     let parsed = parse_attestation_document(&doc).expect("Must be valid attestation document");
@@ -97,7 +86,10 @@ fn test_mock_provider_by_name() {
     let provider = by_name("mock").expect("mock provider is compiled in by default");
     assert_eq!(provider.name(), "mock");
 
-    let params = AttestationParams::new().with_user_data_hash(b"cert");
+    let params = AttestationParams {
+        user_data: Some(Sha256::digest(b"cert").to_vec()),
+        ..Default::default()
+    };
     let claims = provider
         .generate_document(&params)
         .expect("mock provider should produce an EAT claims-set");
@@ -134,7 +126,10 @@ fn nsm_requests_on_a_non_nsm_device_fail_with_driver_errors() {
     use ttk_ra_server::attestation::AttestationProvider;
 
     let session = session_on_dev_null();
-    let params = AttestationParams::new().with_user_data(vec![1; 32]);
+    let params = AttestationParams {
+        user_data: Some(vec![1; 32]),
+        ..Default::default()
+    };
     let is_driver_error = |e: &AttestationError| matches!(e, AttestationError::Driver(_));
 
     assert!(is_driver_error(

@@ -10,6 +10,7 @@ use crate::EatClaimsSet;
 use aws_nitro_enclaves_nsm_api::api::Digest;
 use aws_nitro_enclaves_nsm_api::api::{Request, Response};
 use aws_nitro_enclaves_nsm_api::driver::{nsm_exit, nsm_init, nsm_process_request};
+use sha2::{Digest as _, Sha256};
 use std::path::Path;
 
 /// Information about the connected Nitro Security Module runtime and configuration.
@@ -120,7 +121,10 @@ impl NsmSession {
         &self,
         cert_der: &[u8],
     ) -> Result<Vec<u8>, AttestationError> {
-        let params = AttestationParams::new().with_user_data_hash(cert_der);
+        let params = AttestationParams {
+            user_data: Some(Sha256::digest(cert_der).to_vec()),
+            ..Default::default()
+        };
         self.create_attestation(&params)
     }
 

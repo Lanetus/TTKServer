@@ -112,12 +112,12 @@ pub fn request_in_entry(
 /// TDX and SEV-SNP bind only 64 bytes of caller data, so `nonce` and `public_key` are rejected;
 /// bind them by hashing them into `user_data` instead.
 pub fn report_data(params: &AttestationParams) -> Result<[u8; REPORT_DATA_LEN], AttestationError> {
-    if params.nonce().is_some() || params.public_key().is_some() {
+    if params.nonce.is_some() || params.public_key.is_some() {
         return Err(AttestationError::InvalidInput(
             "report data can only carry user_data; hash the nonce or public key into it".into(),
         ));
     }
-    let user_data = params.user_data().unwrap_or_default();
+    let user_data = params.user_data.as_deref().unwrap_or_default();
     if user_data.len() > REPORT_DATA_LEN {
         return Err(AttestationError::InvalidInput(format!(
             "user_data is {} bytes, at most {REPORT_DATA_LEN} are supported",
