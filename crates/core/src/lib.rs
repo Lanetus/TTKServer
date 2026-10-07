@@ -8,6 +8,7 @@
 //! - [`attestation`]: hardware-agnostic Attester providers and the EAT data model.
 //! - [`server`]: the HTTP/3 Attester endpoint, serving Evidence from inside the TEE.
 //! - [`router`]: the server's base HTTP routes (`GET /`, `GET /evidence.eat`).
+//! - [`trust`]: the vendor trust anchors and accepted Nitro images ([`TrustStore`]).
 //! - `vsock` (Linux): QUIC datagram sockets over vsock, the enclave's only way out.
 
 extern crate self as ttk_core;
@@ -16,6 +17,7 @@ pub mod attestation;
 mod identity;
 pub mod router;
 pub mod server;
+pub mod trust;
 #[cfg(target_os = "linux")]
 pub mod vsock;
 
@@ -23,3 +25,4 @@ pub mod vsock;
 pub use attestation::eat;
 pub use attestation::eat::{EatClaimKey, EatClaimsSet};
 pub use identity::{generate_identity, AttestationParams};
+pub use trust::TrustStore;

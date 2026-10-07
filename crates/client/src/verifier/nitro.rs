@@ -113,31 +113,8 @@ fn check_image_allowed(doc: &AttestationDocument, trust: &TrustStore) -> Result<
     ))
 }
 
-/// Parses a Nitro image allowlist: one PCR0 (96 hex characters, the SHA-384 of an enclave
-/// image file) per line. Blank lines and text after `#` are ignored.
-pub fn parse_image_allowlist(text: &str) -> Result<Vec<Vec<u8>>, String> {
-    text.lines()
-        .enumerate()
-        .map(|(i, line)| (i + 1, line.split('#').next().unwrap_or_default().trim()))
-        .filter(|(_, entry)| !entry.is_empty())
-        .map(|(n, entry)| {
-            decode_sha384_hex(entry).ok_or(format!(
-                "line {n}: expected a PCR0 of 96 hex characters, got '{entry}'"
-            ))
-        })
-        .collect()
-}
-
-/// Decodes 96 hex characters into a 48-byte SHA-384 digest.
-fn decode_sha384_hex(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() != 96 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-        .collect()
-}
+/// Parser of the Nitro image allowlist format (defined in [`ttk_core::trust`]).
+pub use ttk_core::trust::parse_image_allowlist;
 
 /// `module_id` the server's mock provider puts in its documents.
 const MOCK_MODULE_ID: &str = "aws-nitro-enclaves-mock";

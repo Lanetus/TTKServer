@@ -47,52 +47,8 @@ const OID_UCODE_SPL: &str = "1.3.6.1.4.1.3704.1.3.8";
 const OID_FMC_SPL: &str = "1.3.6.1.4.1.3704.1.3.9";
 const OID_HW_ID: &str = "1.3.6.1.4.1.3704.1.4";
 
-/// AMD EPYC processor families with SEV-SNP support.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AmdProduct {
-    /// 3rd generation EPYC.
-    Milan,
-    /// 4th generation EPYC.
-    Genoa,
-    /// 5th generation EPYC.
-    Turin,
-}
-
-/// Pinned AMD certificates for one processor family.
-#[derive(Debug, Clone)]
-pub struct AmdRoots {
-    /// The processor family these certificates belong to.
-    pub product: AmdProduct,
-    /// DER of the AMD Root Key certificate (self-signed).
-    pub ark: Vec<u8>,
-    /// DER of the AMD SEV Key certificate, signed by the ARK; it signs VCEKs.
-    pub ask: Vec<u8>,
-}
-
-/// Built-in AMD roots.
-impl AmdRoots {
-    /// ARK/ASK pairs for Milan, Genoa and Turin, downloaded from the AMD KDS
-    /// (`https://kdsintf.amd.com/vcek/v1/<product>/cert_chain`).
-    pub fn builtin() -> Vec<Self> {
-        vec![
-            Self {
-                product: AmdProduct::Milan,
-                ark: include_bytes!("certs/amd_milan_ark.der").to_vec(),
-                ask: include_bytes!("certs/amd_milan_ask.der").to_vec(),
-            },
-            Self {
-                product: AmdProduct::Genoa,
-                ark: include_bytes!("certs/amd_genoa_ark.der").to_vec(),
-                ask: include_bytes!("certs/amd_genoa_ask.der").to_vec(),
-            },
-            Self {
-                product: AmdProduct::Turin,
-                ark: include_bytes!("certs/amd_turin_ark.der").to_vec(),
-                ask: include_bytes!("certs/amd_turin_ask.der").to_vec(),
-            },
-        ]
-    }
-}
+/// AMD processor families and their pinned roots (defined in [`ttk_core::trust`]).
+pub use ttk_core::trust::{AmdProduct, AmdRoots};
 
 /// Verifies SEV-SNP `evidence` (a `{report, vcek}` map) at time `now`.
 pub fn verify(

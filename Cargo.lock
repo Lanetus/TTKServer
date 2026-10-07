@@ -2698,11 +2698,16 @@ name = "ttk-root"
 version = "2.7.1"
 dependencies = [
  "axum",
+ "bytes 1.12.1",
  "env_logger",
+ "h3",
+ "h3-quinn",
+ "quinn",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "tokio",
- "ttk-client",
  "ttk-core",
 ]
 
