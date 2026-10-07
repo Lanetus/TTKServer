@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-10-07
+
+### Changed
+- **BREAKING:** `ttk_ra_server::server::Attester` is removed; `Server` and `router::build_router` now take the `AttestationProvider` directly. `POST /evidence` now returns Evidence carrying only the request's nonce (no longer also the RA-TLS key binding in `user_data`); the startup Evidence in the RA-TLS cert and `/evidence.eat` stays bound to the key.
+
+### Removed
+- **BREAKING:** `ttk_ra_server::generate_identity()` (unused) is removed.
+
 ## [4.0.0] - 2026-10-07
 
 ### Changed
@@ -418,7 +426,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v5.0.0...HEAD
+[5.0.0]: https://github.com/Lanetus/TTKServer/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/Lanetus/TTKServer/compare/v3.0.3...v4.0.0
 [3.0.3]: https://github.com/Lanetus/TTKServer/compare/v3.0.2...v3.0.3
 [3.0.2]: https://github.com/Lanetus/TTKServer/compare/v3.0.1...v3.0.2
