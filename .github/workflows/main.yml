@@ -60,20 +60,23 @@ jobs:
         id: version
         run: echo "tag=$(cargo pkgid -p ttk-ra-server | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
 
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Update CHANGELOG.md
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ steps.generate-token.outputs.token }}
-          prompt: |
-            Use the changelog subagent to update CHANGELOG.md, then release-stamp it as
-            version ${{ steps.version.outputs.tag }} (the root Cargo.toml has already been bumped;
-            the v${{ steps.version.outputs.tag }} tag does not exist yet, so the commits in
-            <latest-tag>..HEAD are this release). Edit only CHANGELOG.md. Do not commit.
-          claude_args: >-
-            --model claude-sonnet-5-5
-            --max-turns 30
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          claude -p "Use the changelog subagent to update CHANGELOG.md, then release-stamp it as \
+          version $VERSION (the root Cargo.toml has already been bumped; the v$VERSION tag does \
+          not exist yet, so the commits in <latest-tag>..HEAD are this release). \
+          Edit only CHANGELOG.md. Do not commit." \
+            --model claude-sonnet-5-5 \
+            --max-turns 30 \
             --allowedTools "Task,Read,Edit,Write,Grep,Glob,Bash(git log:*),Bash(git tag:*),Bash(git show:*),Bash(git diff:*),Bash(git remote:*)"
+          git diff --stat CHANGELOG.md
 
       - name: Commit version bump and create tag
         uses: stefanzweifel/git-auto-commit-action@v4
