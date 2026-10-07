@@ -51,6 +51,7 @@ mod attestation_verification {
     use rustls::client::danger::ServerCertVerifier;
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+    use sha2::{Digest, Sha256};
     use ttk_ra_client::EnclaveCertVerifier;
     use ttk_ra_server::attestation::by_name;
     use ttk_ra_server::attestation::nitro_doc::{
@@ -61,7 +62,10 @@ mod attestation_verification {
 
     /// Builds an RA-TLS certificate for `cert_key` carrying mock evidence bound to `bound_key`.
     fn ra_tls_cert(cert_key: &KeyPair, bound_key: &KeyPair) -> CertificateDer<'static> {
-        let params = AttestationParams::new().with_user_data_hash(&bound_key.public_key_der());
+        let params = AttestationParams {
+            user_data: Some(Sha256::digest(bound_key.public_key_der()).to_vec()),
+            ..Default::default()
+        };
         let eat = by_name("mock")
             .unwrap()
             .generate_document(&params)
@@ -110,7 +114,10 @@ mod attestation_verification {
 
     #[test]
     fn mock_evidence_is_signed_through_the_mock_root() {
-        let params = AttestationParams::new().with_user_data(vec![1; 32]);
+        let params = AttestationParams {
+            user_data: Some(vec![1; 32]),
+            ..Default::default()
+        };
         let doc = parse_attestation_document(&create_mock_attestation_document(&params).unwrap())
             .unwrap();
         assert_eq!(doc.cabundle.len(), 1);
@@ -123,7 +130,10 @@ mod attestation_verification {
     #[test]
     fn tampered_mock_evidence_is_rejected_even_when_allowed() {
         let key = KeyPair::generate().unwrap();
-        let params = AttestationParams::new().with_user_data_hash(&key.public_key_der());
+        let params = AttestationParams {
+            user_data: Some(Sha256::digest(key.public_key_der()).to_vec()),
+            ..Default::default()
+        };
         let mut doc = create_mock_attestation_document(&params).unwrap();
         let last = doc.len() - 1;
         doc[last] ^= 1; // last byte of the COSE signature
@@ -242,6 +252,7 @@ mod tls_handshake {
     use rustls::{
         ClientConfig, ClientConnection, ServerConfig, ServerConnection, SupportedProtocolVersion,
     };
+    use sha2::{Digest, Sha256};
     use std::sync::Arc;
     use ttk_ra_client::EnclaveCertVerifier;
     use ttk_ra_server::attestation::by_name;
@@ -250,7 +261,10 @@ mod tls_handshake {
 
     fn server_config(version: &'static SupportedProtocolVersion) -> ServerConfig {
         let key = KeyPair::generate().unwrap();
-        let params = AttestationParams::new().with_user_data_hash(&key.public_key_der());
+        let params = AttestationParams {
+            user_data: Some(Sha256::digest(key.public_key_der()).to_vec()),
+            ..Default::default()
+        };
         let eat = by_name("mock")
             .unwrap()
             .generate_document(&params)

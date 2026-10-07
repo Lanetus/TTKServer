@@ -131,7 +131,10 @@ fn test_ttk_ra_server_nitro_and_eat_integration() {
     let (_certs, _key, cert_der) = generate_identity();
 
     // 2. Generate attestation document bound to certificate
-    let params = AttestationParams::new().with_user_data_hash(&cert_der);
+    let params = AttestationParams {
+        user_data: Some(Sha256::digest(&cert_der).to_vec()),
+        ..Default::default()
+    };
     let nitro_doc = create_mock_attestation_document(&params)
         .expect("Should generate nitro attestation document");
 
