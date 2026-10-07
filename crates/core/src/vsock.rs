@@ -3,7 +3,7 @@
 //! An enclave has no network interface: it reaches the outside world only over vsock to the
 //! parent instance, which is a stream transport, while QUIC needs datagrams. The sockets here
 //! adapt vsock to quinn's datagram socket ([`AsyncUdpSocket`]), relayed on the parent by the
-//! `vsock-proxy` binary (`ttk-relay` crate):
+//! `vsock-proxy` binary (this crate):
 //!
 //! - [`VsockUdpSocket`] (inbound, for the server): listens on a vsock port; each connection from
 //!   the parent carries one client's datagrams and appears to quinn as its own synthetic peer
@@ -125,7 +125,7 @@ pub struct VsockOutboundSocket {
 
 impl VsockOutboundSocket {
     /// Relays datagrams through the parent's `vsock-proxy` at vsock `cid`:`port` (normally
-    /// [`PARENT_CID`](crate::server::PARENT_CID)). Connections open on the first datagram to each destination.
+    /// [`PARENT_CID`](crate::PARENT_CID)). Connections open on the first datagram to each destination.
     ///
     /// Must be used within a Tokio runtime.
     pub fn new(cid: u32, port: u32) -> Self {

@@ -19,7 +19,7 @@ Report them privately through GitHub's [security advisories](https://github.com/
 
 Please include as much of the following as you can:
 
-- The affected crate(s) (`ttk-core`, `ttk-client`, `ttk-relay`, `ttk-terminal`), version or commit, and enabled Cargo features
+- The affected crate(s) (`ttk-core`, `ttk-ra-server`, `ttk-ra-client`, `ttk-relay`, `ttk-terminal`), version or commit, and enabled Cargo features
 - The TEE involved (AWS Nitro, AMD SEV-SNP, Intel TDX / SGX, or none)
 - A description of the issue and its impact: what an attacker can do, and from what position (network, parent instance, malicious host, compromised enclave, ...)
 - Steps to reproduce, or a proof of concept
@@ -31,7 +31,7 @@ We will acknowledge your report, keep you informed as we investigate, and credit
 
 In scope — anything that breaks the attestation, confidentiality or integrity guarantees, for example:
 
-- **Evidence appraisal** (`ttk-client` verifier): accepting forged, tampered, replayed-across-keys or wrongly-chained Nitro, SEV-SNP, TDX or SGX evidence; bypassing measurement, debug or TCB policy checks.
+- **Evidence appraisal** (`ttk-ra-client` verifier): accepting forged, tampered, replayed-across-keys or wrongly-chained Nitro, SEV-SNP, TDX or SGX evidence; bypassing measurement, debug or TCB policy checks.
 - **Key binding**: a TLS connection being accepted whose certificate key is not the one bound in the evidence's report / user data.
 - **RA-TLS and transport**: flaws in certificate generation, `EnclaveCertVerifier`, rustls / QUIC configuration, or the vsock transport and `vsock-proxy`.
 - **Onion routing (`POST /faf`)**: a relay or observer learning a sealed address or message it should not, HPKE misuse, or a relay forwarding to an unattested next hop.

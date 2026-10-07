@@ -12,7 +12,8 @@ Security vulnerabilities: do not open a public PR. See SECURITY.md.
 ## Affected crates
 
 - [ ] `ttk-core`
-- [ ] `ttk-client`
+- [ ] `ttk-ra-server`
+- [ ] `ttk-ra-client`
 - [ ] `ttk-relay`
 - [ ] `ttk-terminal`
 - [ ] Deployment / build (`Dockerfile`, `scripts/`, `deploy/`, workflows)

@@ -1,10 +1,10 @@
-//! TTKServer terminal node: an attested [`ttk_core`] server that is the last hop of
+//! TTKServer terminal node: an attested [`ttk_ra_server`] server that is the last hop of
 //! onion-routed `POST /faf` requests.
 //!
 //! | Route               | Response                                                        |
 //! |---------------------|-----------------------------------------------------------------|
-//! | `GET /`             | Greeting text (from [`ttk_core`])                               |
-//! | `GET /evidence.eat` | Base64-encoded EAT carrying this node's Evidence (from [`ttk_core`]) |
+//! | `GET /`             | Greeting text (from [`ttk_ra_server`])                               |
+//! | `GET /evidence.eat` | Base64-encoded EAT carrying this node's Evidence (from [`ttk_ra_server`]) |
 //! | `POST /faf`         | Receives a [`FafRequest`], decrypts its message and answers `hello:<message>`, encrypted |
 //!
 //! A terminal never forwards: it accepts only requests with no relays left, and is the only node
@@ -17,9 +17,9 @@ use axum::{Json, Router};
 use log::{info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use ttk_client::faf::{FafRequest, FAF_PATH};
-use ttk_client::seal::{self, NodeSecretKey};
-use ttk_core::server::{BoxError, Listener, Server};
+use ttk_ra_client::faf::{FafRequest, FAF_PATH};
+use ttk_ra_client::seal::{self, NodeSecretKey};
+use ttk_ra_server::server::{BoxError, Listener, Server};
 
 /// Runs the terminal node: attests, builds the RA-TLS identity, then serves HTTP/3 until the
 /// endpoint closes. Listens as configured by [`Listener::from_env`].

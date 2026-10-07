@@ -4,33 +4,37 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
 
 ## Context & File Access Rules
 - **Do NOT read or search inside:** `docs/`, `target/`, or `data/raw_datasets/`.
-- Only inspect the crates' `src/`, `tests/` and `benches/` unless explicitly instructed otherwise.
+- Only inspect the crates' `src/` and `tests/` unless explicitly instructed otherwise.
 
 ## Layout (Cargo workspace, members in `crates/`; root `Cargo.toml` holds `[workspace.package]` version/metadata and `[workspace.dependencies]`)
-- `crates/core/` — crate `ttk-core` (lib `ttk_core`), **library only, server only**: no relay/message logic, no client.
-  - `src/lib.rs` — declares `attestation`, `router`, `server`, `trust`, `vsock` (Linux); re-exports `eat`, `EatClaimsSet`, `EatClaimKey`, `generate_identity`, `AttestationParams`, `TrustStore`.
-  - `src/identity.rs` — `generate_identity()` and the `AttestationParams` builder.
-  - `src/attestation/` — providers (`nitro`, `sev_snp`, `tdx`, `mock`, `tsm`), `nitro_doc` (COSE parsing, mock docs), `eat.rs` (RFC 9711 `EatClaimsSet`), `submod` labels.
-  - `src/server.rs` — attestation at startup, RA-TLS cert (`ATTESTATION_OID`, `create_cert_with_attestation`), QUIC/h3 accept loop; `Server::{bind, bind_vsock, listen, serve, serve_with(Router), private_key_der}`; `Listener::from_env()` (vsock `TTK_VSOCK_PORT` default `5000`, or `TTK_USE_UDP=1` UDP `TTK_LISTEN_ADDR` default `0.0.0.0:4433`); `PARENT_CID`, `MAX_REQUEST_BODY` (else 413), `REQUEST_BODY_TIMEOUT` (else 408), `MAX_REQUEST_HEADERS`, `MAX_CONNECTIONS`, `MAX_STREAMS_PER_CONNECTION`, `CONNECTION_RECEIVE_WINDOW`, `env_u32`.
-  - `src/trust/` — `TrustStore` (vendor roots in `certs/`, mock root from `attestation/mock_nitro_root.der`, Nitro PCR0 allowlist `nitro_image_allowlist.txt`), `AmdRoots`/`AmdProduct`, `parse_image_allowlist`. Data only; verification lives in `ttk-client`.
-  - `src/router.rs` — base routes only: `GET /`, `GET /evidence.eat` (base64 EAT); `Evidence`.
+- `crates/core/` — crate `ttk-core` (lib `ttk_core` + bin `vsock-proxy`): what server and client share, so `ttk-ra-client` does not depend on `ttk-ra-server`. Re-exported by `ttk-ra-server` at its old paths (`attestation::{eat, submod, MOCK_NITRO_ROOT_CERT}`, `server::{ATTESTATION_OID, PARENT_CID}`, `egress`, `vsock`).
+  - `src/lib.rs` — `submod` labels, `ATTESTATION_OID`, `PARENT_CID` (3), `MOCK_NITRO_ROOT_CERT` (`mock_nitro_root.der`; its key stays in `ttk-ra-server`); re-exports `EatClaimsSet`, `EatClaimKey`.
+  - `src/eat.rs` — RFC 9711 `EatClaimsSet` / `EatClaimKey`.
+  - `src/egress.rs` — `classify_hop_address` / `HopAddressClass` (Public / Private / Forbidden): egress policy for peer-chosen destinations (relay next hops, `vsock-proxy` outbound); re-exported by `ttk_ra_client::faf`.
   - `src/vsock.rs` (Linux) — quinn `AsyncUdpSocket`s over vsock, datagrams framed `[u16 BE len][payload]`: `VsockUdpSocket` (inbound) and `VsockOutboundSocket` (outbound via parent `3:5001`, `[4|6][ip][u16 port]` destination header); framing helpers reused by `vsock-proxy`.
-- `crates/client/` — crate `ttk-client` (lib `ttk_client` + bin `client`): everything client-side.
+  - `src/bin/vsock-proxy.rs` — bin `vsock-proxy` (Linux, parent instance: public UDP `:443` to enclave vsock `5000`, and outbound vsock `5001` to UDP, egress policy via `egress`, `--allow-private`).
+- `crates/ra-server/` — crate `ttk-ra-server` (lib `ttk_ra_server`), **server only**: no relay/message logic, no client.
+  - `src/lib.rs` — declares `attestation`, `router`, `server`; re-exports `ttk_core::{egress, vsock}`; re-exports `eat`, `EatClaimsSet`, `EatClaimKey`, `generate_identity`, `AttestationParams`.
+  - `src/identity.rs` — `generate_identity()` and the `AttestationParams` builder.
+  - `src/attestation/` — providers (`nitro`, `sev_snp`, `tdx`, `mock`, `tsm`), `nitro_doc` (COSE parsing, mock docs, mock root key `mock_nitro_root_key.pk8`).
+  - `src/server.rs` — attestation at startup, RA-TLS cert (`ATTESTATION_OID`, `create_cert_with_attestation`), QUIC/h3 accept loop; `Server::{bind, bind_vsock, listen, serve, serve_with(Router), private_key_der}`; `Listener::from_env()` (vsock `TTK_VSOCK_PORT` default `5000`, or `TTK_USE_UDP=1` UDP `TTK_LISTEN_ADDR` default `0.0.0.0:4433`); `PARENT_CID`, `MAX_REQUEST_BODY` (else 413), `REQUEST_BODY_TIMEOUT` (else 408), `MAX_REQUEST_HEADERS`, `MAX_CONNECTIONS`, `MAX_STREAMS_PER_CONNECTION`, `CONNECTION_RECEIVE_WINDOW`, `env_u32`.
+  - `src/router.rs` — base routes only: `GET /`, `GET /evidence.eat` (base64 EAT); `Evidence`.
+- `crates/ra-client/` — crate `ttk-ra-client` (lib `ttk_ra_client` + bin `client`): everything client-side.
   - `src/client.rs` (re-exported at the crate root) — `TtkClient`, `ClientTransport` (UDP / vsock), `EnclaveCertVerifier` (accepts self-signed cert, records it), `extract_attestation_doc`, `hex_encode`, `MAX_RESPONSE_BODY` / `MAX_RESPONSE_HEADERS`.
-  - `src/verifier/` — evidence appraisal (`nitro`, `sev_snp`, `dcap`), `Policy`; re-exports `ttk_core::trust::TrustStore` (and `AmdRoots`/`AmdProduct` in `sev_snp`, `parse_image_allowlist` in `nitro`).
+  - `src/verifier/` — evidence appraisal (`nitro`, `sev_snp`, `dcap`), `Policy`; re-exports `crate::trust::TrustStore` (and `AmdRoots`/`AmdProduct` in `sev_snp`, `parse_image_allowlist` in `nitro`).
+  - `src/trust/` — `TrustStore` (also at the crate root; vendor roots in `certs/`, mock root `ttk_ra_server::attestation::MOCK_NITRO_ROOT_CERT`, Nitro PCR0 allowlist `nitro_image_allowlist.txt`), `AmdRoots`/`AmdProduct`, `parse_image_allowlist`. Data only; verification lives in `verifier`.
   - `src/faf.rs` — `FafRequest` JSON `{relays: [{address, encrypted}], body: {key, message}}`, `parse_relay_address` (`"<server> <10-digit salt>"`), `parse_relay_server`, `connect_to_node`, `FAF_PATH`.
   - `src/seal.rs` — onion encryption: RFC 9180 HPKE (DHKEM(P-256), HKDF-SHA256, AES-256-GCM) to a node's RA-TLS cert key (`NodePublicKey` / `NodeSecretKey`); `seal_address`/`open_address`, `seal_body`/`open_body` (`_with_key` variants return the `MessageKey`), `seal_response`/`open_response` (terminal reply under the message key).
   - `src/main.rs` — **test-only** bin `client` (never in enclave images): routes `/faf` through two relays to a terminal: connects to the entry relay (`--addr`), attests the second relay (`--relay`, default `127.0.0.1:4434`) and the terminal (`--terminal`, default `127.0.0.1:4444`), seals each hop address to the relay reading it and the body to the terminal. E2E tests in `tests/client_bin_tests.rs`.
-  - `benches/client.rs` — Criterion benches.
-- `crates/relay/` — crate `ttk-relay` (lib `ttk_relay`): `Relay` (wraps a core `Server`, adds `POST /faf` forwarding with a verified connection pool; empty `relays` = 400), `run()` (env config, `TTK_PARENT_CID`/`TTK_OUTBOUND_VSOCK_PORT`, `TTK_ALLOW_MOCK_ATTESTATION=1` for mock next hops, `TTK_ALLOW_PRIVATE_NEXT_HOPS=1` / `allow_private_next_hops()` for loopback/private next hops — needed locally and in relay tests). Egress policy via `ttk_client::faf::classify_hop_address` (link-local/multicast/broadcast/unspecified always refused), `MAX_RELAYS` (8), `MAX_CONCURRENT_FORWARDS` (256, else 503), every forwarding failure = uniform `502 relay failed`. Bins: `relay` (`src/main.rs`, enclave) and `vsock-proxy` (`src/bin/vsock-proxy.rs`, Linux, parent instance: public UDP `:443` to enclave vsock `5000`, and outbound vsock `5001` to UDP, same egress policy, `--allow-private`).
-- `crates/root/` — crate `ttk-root` (lib `ttk_root`): `Root` (wraps a core `Server`, adds `GET /root-attestation`: JSON `RootAttestation` `{hash_algorithm: "SHA384", pcr0: [hex…]}`, the accepted enclave image checksums from `ttk_core::TrustStore::builtin().nitro_image_allowlist`; `with_trust_store` overrides), `run()`. Bin `root` (enclave). Does not depend on `ttk-client` (not even in tests: `tests/root_tests.rs` has its own minimal h3 client).
-- `crates/terminal/` — crate `ttk-terminal` (lib `ttk_terminal`): `Terminal` (wraps a core `Server`, adds `POST /faf` last hop: non-empty `relays` = 400, must decrypt `body` or 400; answers `hello:<message>` sealed under the body's message key via `seal::seal_response`, which relays pass back unchanged), `run()`. Bin `terminal` (enclave).
+- `crates/relay/` — crate `ttk-relay` (lib `ttk_relay`): `Relay` (wraps a `ttk-ra-server` `Server`, adds `POST /faf` forwarding with a verified connection pool; empty `relays` = 400), `run()` (env config, `TTK_PARENT_CID`/`TTK_OUTBOUND_VSOCK_PORT`, `TTK_ALLOW_MOCK_ATTESTATION=1` for mock next hops, `TTK_ALLOW_PRIVATE_NEXT_HOPS=1` / `allow_private_next_hops()` for loopback/private next hops — needed locally and in relay tests). Egress policy via `ttk_core::egress::classify_hop_address` (link-local/multicast/broadcast/unspecified always refused), `MAX_RELAYS` (8), `MAX_CONCURRENT_FORWARDS` (256, else 503), every forwarding failure = uniform `502 relay failed`. Bin: `relay` (`src/main.rs`, enclave).
+- `crates/root/` — crate `ttk-root` (lib `ttk_root`): `Root` (wraps a `ttk-ra-server` `Server`, adds `GET /root-attestation`: JSON `RootAttestation` `{hash_algorithm: "SHA384", pcr0: [hex…]}`, the accepted enclave image checksums from `ttk_ra_client::TrustStore::builtin().nitro_image_allowlist`; `with_trust_store` overrides), `run()`. Bin `root` (enclave). Depends on `ttk-ra-client` only for `TrustStore` (`tests/root_tests.rs` still has its own minimal h3 client).
+- `crates/terminal/` — crate `ttk-terminal` (lib `ttk_terminal`): `Terminal` (wraps a `ttk-ra-server` `Server`, adds `POST /faf` last hop: non-empty `relays` = 400, must decrypt `body` or 400; answers `hello:<message>` sealed under the body's message key via `seal::seal_response`, which relays pass back unchanged), `run()`. Bin `terminal` (enclave).
 
-## Features (`ttk-core`; `ttk-relay` / `ttk-terminal` forward them)
+## Features (`ttk-ra-server`; `ttk-relay` / `ttk-terminal` forward them)
 - `nitro` and `mock` are default; `sev-snp`, `tdx` optional; all additive. `mock` is the fallback when no TEE hardware is detected.
-- `ttk-client` depends on `ttk-core` with no features (it needs only EAT, the cert OID and vsock); its tests enable `mock`, `sev-snp`, `tdx` via dev-dependencies.
+- `ttk-ra-client` depends on `ttk-core`, not `ttk-ra-server` (only its tests do, dev-dependency with `mock`, `sev-snp`, `tdx`). `ttk-core` has no features.
 - `tokio-vsock` is only pulled in on Linux.
-- `ttk-client` dev-depends on `ttk-relay`/`ttk-terminal` (a dev-dependency cycle): in client tests, don't pass `ttk_client` types into relay/terminal APIs (use `Relay::allow_mock()`, not `with_verifier`).
+- `ttk-ra-client` dev-depends on `ttk-relay`/`ttk-terminal` (a dev-dependency cycle): in client tests, don't pass `ttk_ra_client` types into relay/terminal APIs (use `Relay::allow_mock()`, not `with_verifier`).
 
 ## Commands
 ```bash
@@ -40,9 +44,8 @@ cargo test --workspace --all-features
 TTK_USE_UDP=1 cargo run --bin relay           # relay node on UDP :4433 (TTK_LISTEN_ADDR overrides; RUST_LOG=info for logs)
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --bin terminal
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4455 cargo run --bin root   # GET /root-attestation
-cargo run --bin client -- <args>              # see parse_client_args() in crates/client/src/main.rs
+cargo run --bin client -- <args>              # see parse_client_args() in crates/ra-client/src/main.rs
 cargo run --bin vsock-proxy -- --cid <CID>    # parent-side UDP :443 -> enclave vsock relay (Linux)
-cargo bench -p ttk-client --bench client      # client library benchmarks
 cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo deny check                              # config in deny.toml
 mdbook build docs                             # book -> docs/book; needs `cargo install mdbook-mermaid` (```mermaid blocks)
@@ -56,7 +59,7 @@ deploy/systemd/ttk-{relay,terminal}-enclave.service  # systemd units running the
 - Rust 2021; run `cargo fmt` and clippy before finishing. Keep `//!`/`///` doc comments on public items, in the existing RATS/RFC-referencing style.
 - Logging via `log` + `env_logger` in library/server code; the server accept loop currently uses `eprintln!` for per-connection errors.
 - Crypto: rustls 0.23 with the `ring` provider (installed explicitly when attesting / connecting); quinn 0.11 + h3 0.0.7 / h3-quinn 0.0.9 — versions are tightly coupled, upgrade together.
-- The attestation OID `1.3.6.1.4.1.99999.1` (`ttk_core::server::ATTESTATION_OID`) is a placeholder (not a registered PEN).
+- The attestation OID `1.3.6.1.4.1.99999.1` (`ttk_core::ATTESTATION_OID`) is a placeholder (not a registered PEN).
 - Releases use conventional commits (`feat:`, `fix:`, `chore(release):`) and version bumps of `[workspace.package]` in the root `Cargo.toml`.
 - **STRICT commit message rule:** every commit message MUST start with one of these prefixes, no exceptions:
   - `fix:` — bug fixes

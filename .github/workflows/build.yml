@@ -38,7 +38,7 @@ jobs:
 
       # Production build: the enclave nodes and the parent's vsock-proxy, not the test-only `client`.
       - name: Build release
-        run: cargo build --release --locked -p ttk-relay -p ttk-terminal -p ttk-root
+        run: cargo build --release --locked -p ttk-core -p ttk-relay -p ttk-terminal -p ttk-root
 
       - name: Upload node binaries
         uses: actions/upload-artifact@v4
@@ -97,7 +97,7 @@ jobs:
 
       - name: Get new version
         id: version
-        run: echo "tag=$(cargo pkgid -p ttk-core | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
+        run: echo "tag=$(cargo pkgid -p ttk-ra-server | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
 
       - name: Build and push per-arch image to Amazon ECR
         id: build-image

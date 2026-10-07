@@ -1,6 +1,6 @@
 [package]
 name = "ttk-relay"
-description = "TTKServer relay node: an attested enclave server forwarding onion-routed /faf requests, plus the parent-instance vsock proxy"
+description = "TTKServer relay node: an attested enclave server forwarding onion-routed /faf requests"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,32 +17,23 @@ name = "ttk_relay"
 name = "relay"
 path = "src/main.rs"
 
-# Parent-instance daemon relaying QUIC between public UDP and the enclave's vsock, both ways. Linux only.
-[[bin]]
-name = "vsock-proxy"
-path = "src/bin/vsock-proxy.rs"
-
 [dependencies]
-ttk-core.workspace = true
-ttk-client.workspace = true
+ttk-ra-server.workspace = true
+ttk-ra-client.workspace = true
 axum.workspace = true
 env_logger.workspace = true
 log.workspace = true
 tokio.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
-bytes.workspace = true
-tokio-vsock.workspace = true
-
 [features]
 default = ["nitro", "mock"]
 
-nitro = ["ttk-core/nitro"]
-mock = ["ttk-core/mock"]
-sev-snp = ["ttk-core/sev-snp"]
-tdx = ["ttk-core/tdx"]
+nitro = ["ttk-ra-server/nitro"]
+mock = ["ttk-ra-server/mock"]
+sev-snp = ["ttk-ra-server/sev-snp"]
+tdx = ["ttk-ra-server/tdx"]
 
 [dev-dependencies]
-ttk-core = { workspace = true, features = ["mock"] }
+ttk-ra-server = { workspace = true, features = ["mock"] }
 ttk-terminal.workspace = true
 serde_json.workspace = true

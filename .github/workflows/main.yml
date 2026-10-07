@@ -57,7 +57,7 @@ jobs:
 
       - name: Get new version
         id: version
-        run: echo "tag=$(cargo pkgid -p ttk-core | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
+        run: echo "tag=$(cargo pkgid -p ttk-ra-server | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
 
       - name: Commit version bump and create tag
         uses: stefanzweifel/git-auto-commit-action@v4
