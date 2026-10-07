@@ -22,7 +22,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Router;
 use bytes::{Buf, Bytes, BytesMut};
-use log::info;
+use log::{error, info, warn};
 use quinn::{Endpoint, ServerConfig, TransportConfig, VarInt};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
@@ -289,7 +289,7 @@ impl Server {
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         while let Some(incoming) = self.endpoint.accept().await {
             let Ok(permit) = connections.clone().try_acquire_owned() else {
-                eprintln!("Refusing connection: {MAX_CONNECTIONS} already open");
+                warn!("Refusing connection: {MAX_CONNECTIONS} already open");
                 incoming.refuse();
                 continue;
             };
@@ -378,7 +378,7 @@ fn build_tls_config(
 async fn handle_connection(incoming: quinn::Incoming, app: Router) {
     let conn = match incoming.await {
         Ok(conn) => conn,
-        Err(err) => return eprintln!("Handshake failed: {err}"),
+        Err(err) => return warn!("Handshake failed: {err}"),
     };
 
     let mut h3_conn = match h3::server::builder()
@@ -387,7 +387,7 @@ async fn handle_connection(incoming: quinn::Incoming, app: Router) {
         .await
     {
         Ok(h3) => h3,
-        Err(e) => return eprintln!("H3 setup failed: {e}"),
+        Err(e) => return warn!("H3 setup failed: {e}"),
     };
 
     while let Ok(Some((req, stream))) = h3_conn.accept().await {
@@ -425,10 +425,10 @@ async fn respond(mut app: Router, req: axum::http::Request<()>, mut stream: Serv
         Err(_) => (StatusCode::REQUEST_TIMEOUT, "request body timed out").into_response(),
         Ok(Ok(Some(body))) => match app.call(req.map(|()| axum::body::Body::from(body))).await {
             Ok(response) => response,
-            Err(e) => return eprintln!("App call error: {e}"),
+            Err(e) => return error!("App call error: {e}"),
         },
         Ok(Ok(None)) => (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response(),
-        Ok(Err(e)) => return eprintln!("Failed to read request body: {e}"),
+        Ok(Err(e)) => return warn!("Failed to read request body: {e}"),
     };
 
     let (parts, body) = response.into_parts();
@@ -436,18 +436,18 @@ async fn respond(mut app: Router, req: axum::http::Request<()>, mut stream: Serv
         .send_response(axum::http::Response::from_parts(parts, ()))
         .await
     {
-        return eprintln!("Failed to send response headers: {e}");
+        return warn!("Failed to send response headers: {e}");
     }
     match axum::body::to_bytes(body, usize::MAX).await {
         Ok(bytes) if !bytes.is_empty() => {
             if let Err(e) = stream.send_data(bytes).await {
-                return eprintln!("Failed to send response body: {e}");
+                return warn!("Failed to send response body: {e}");
             }
         }
         Ok(_) => {}
-        Err(e) => eprintln!("Failed to read response body: {e}"),
+        Err(e) => error!("Failed to read response body: {e}"),
     }
     if let Err(e) = stream.finish().await {
-        eprintln!("Failed to finish stream: {e}");
+        warn!("Failed to finish stream: {e}");
     }
 }
