@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-10-07
+
+### Added
+- `POST /evidence` route on `ttk-ra-server` nodes: the body is a raw nonce (1 to 512 bytes) and the response is fresh base64 EAT evidence carrying that nonce in the Nitro attestation document. Requests beyond the concurrent-attestation limit get 503; TDX and SEV-SNP nodes answer 500.
+
+## [3.0.1] - 2026-10-07
+
+No user-facing changes.
+
+## [3.0.0] - 2026-10-07
+
+### Changed
+- **BREAKING:** `ImageTrustStore` is now a trait (`builtin()`, `nitro_image_allowlist()`, `nitro_pcr_index()`) in `ttk-core`, and `verify_evidence`/`nitro::verify` take `&dyn ImageTrustStore`. Clients (`RootImageTrustStore` in `ttk-ra-client`) now fetch accepted enclave images from the root servers (`a.ttk-server.net:443`, `b.ttk-server.net:443`), each attested by its pinned PCR8 (`RootSignerTrustStore`), and fail closed when none can be reached.
+- The `root` node's accepted-image list moved to `crates/root/src/nitro_image_allowlist.txt` (`FileImageTrustStore`).
+
+## [2.9.0] - 2026-10-07
+
+### Changed
+- **BREAKING:** The crates are renamed and split: shared code (`EatClaimsSet`, `ATTESTATION_OID`, `PARENT_CID`, egress policy, vsock sockets, the `vsock-proxy` binary) now lives in `ttk-core`; the server library is `ttk-ra-server` (`ttk_ra_server`) and the client library and `client` binary are `ttk-ra-client` (`ttk_ra_client`). `ttk-ra-server` re-exports the shared items at their old paths. `vsock-proxy` is now built from `ttk-core`.
+
+## [2.8.0] - 2026-10-07
+
+### Changed
+- Moved `TrustStore` and the vendor root certificates out of the `client` verifier, and `ttk-root` no longer depends on the client crate.
+
+## [2.7.1] - 2026-10-07
+
+### Fixed
+- The `client` binary prints its usage text to stdout again.
+
+## [2.7.0] - 2026-10-07
+
+### Changed
+- Server, client and `vsock-proxy` log through `log` macros (`RUST_LOG`) instead of printing directly.
+
+## [2.6.0] - 2026-10-06
+
+### Changed
+- The terminal's `POST /faf` reply (`hello:<message>`) is now sealed under the message key and passed back unchanged through the relays; the `client` binary opens it.
+
+## [2.5.0] - 2026-10-06
+
+### Added
+- Per-node enclave systemd units (`ttk-relay-enclave.service`, `ttk-terminal-enclave.service`), debug EIF builds, and an updated EC2 user data script.
+
+### Changed
+- The parent-instance unit is renamed to `vsock-proxy.service`; the old `ttkserver-enclave.service` is replaced by the per-node units.
+
+## [2.4.3] - 2026-10-06
+
+No user-facing changes.
+
+## [2.4.2] - 2026-10-05
+
+### Security
+- Hardened relay egress (next-hop and `vsock-proxy` outbound destination policy, limits on relays per request and concurrent forwards), server and client resource limits (connections, streams, headers, request and response bodies), and terminal logging.
+
+## [2.4.1] - 2026-10-05
+
+### Added
+- `ttk-root` crate and `root` node binary serving the accepted enclave image checksums (`GET /root-attestation`), with EIF build support (`scripts/build-eif.sh ... root`).
+
 ## [2.4.0] - 2026-10-05
 
 ### Added
@@ -347,7 +409,19 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v3.0.2...HEAD
+[3.0.2]: https://github.com/Lanetus/TTKServer/compare/v3.0.1...v3.0.2
+[3.0.1]: https://github.com/Lanetus/TTKServer/compare/v3.0.0...v3.0.1
+[3.0.0]: https://github.com/Lanetus/TTKServer/compare/v2.9.0...v3.0.0
+[2.9.0]: https://github.com/Lanetus/TTKServer/compare/v2.8.0...v2.9.0
+[2.8.0]: https://github.com/Lanetus/TTKServer/compare/v2.7.1...v2.8.0
+[2.7.1]: https://github.com/Lanetus/TTKServer/compare/v2.7.0...v2.7.1
+[2.7.0]: https://github.com/Lanetus/TTKServer/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/Lanetus/TTKServer/compare/v2.5.0...v2.6.0
+[2.5.0]: https://github.com/Lanetus/TTKServer/compare/v2.4.3...v2.5.0
+[2.4.3]: https://github.com/Lanetus/TTKServer/compare/v2.4.2...v2.4.3
+[2.4.2]: https://github.com/Lanetus/TTKServer/compare/v2.4.1...v2.4.2
+[2.4.1]: https://github.com/Lanetus/TTKServer/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/Lanetus/TTKServer/compare/v2.3.5...v2.4.0
 [2.3.5]: https://github.com/Lanetus/TTKServer/compare/v2.3.4...v2.3.5
 [2.3.4]: https://github.com/Lanetus/TTKServer/compare/v2.3.3...v2.3.4
