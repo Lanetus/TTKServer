@@ -196,45 +196,11 @@ fn bind_vsock(_port: u32) -> Result<Server, BoxError> {
     Err(format!("vsock is only available on Linux; set {USE_UDP_ENV}=1 to listen on UDP").into())
 }
 
-/// Generates Evidence bound to the RA-TLS key: once at startup, and again for each
-/// `POST /evidence` so the client's nonce is included.
-pub struct Attester {
-    provider: Box<dyn AttestationProvider>,
-    /// SHA-256 of the RA-TLS key's SubjectPublicKeyInfo, bound as `user_data`.
-    user_data: Vec<u8>,
-}
-
-/// Evidence generation.
-impl Attester {
-    /// Wraps `provider`, binding its Evidence to the public key `public_key_der`.
-    pub fn new(provider: Box<dyn AttestationProvider>, public_key_der: &[u8]) -> Self {
-        Self {
-            provider,
-            user_data: Sha256::digest(public_key_der).to_vec(),
-        }
-    }
-
-    /// Requests Evidence from the provider, carrying `nonce` if given, and returns it as
-    /// CBOR-encoded RFC 9711 EAT bytes. Blocks on the TEE driver.
-    pub fn evidence(&self, nonce: Option<&[u8]>) -> Result<Vec<u8>, String> {
-        let params = AttestationParams {
-            user_data: Some(self.user_data.clone()),
-            nonce: nonce.map(<[u8]>::to_vec),
-            public_key: None,
-        };
-        let eat = self
-            .provider
-            .generate_document(&params)
-            .map_err(|e| e.to_string())?;
-        eat.to_cbor_bytes().map_err(|e| e.to_string())
-    }
-}
-
 /// An attested HTTP/3 server bound to a QUIC endpoint.
 pub struct Server {
     endpoint: Endpoint,
     evidence: Arc<Evidence>,
-    attester: Arc<Attester>,
+    provider: Arc<dyn AttestationProvider>,
     private_key: Vec<u8>,
 }
 
@@ -291,7 +257,7 @@ impl Server {
         Self {
             endpoint,
             evidence: identity.evidence,
-            attester: identity.attester,
+            provider: identity.provider,
             private_key: identity.private_key,
         }
     }
@@ -322,7 +288,7 @@ impl Server {
     /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections, new ones are
     /// refused.
     pub async fn serve_with(self, routes: Router) {
-        let app = build_router(&self.evidence, self.attester.clone(), routes);
+        let app = build_router(&self.evidence, self.provider.clone(), routes);
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         while let Some(incoming) = self.endpoint.accept().await {
             let Ok(permit) = connections.clone().try_acquire_owned() else {
@@ -343,8 +309,8 @@ impl Server {
 struct Identity {
     /// Evidence bound to the key, generated at startup.
     evidence: Arc<Evidence>,
-    /// Produces fresh Evidence bound to the key.
-    attester: Arc<Attester>,
+    /// Produces fresh Evidence for `POST /evidence`.
+    provider: Arc<dyn AttestationProvider>,
     /// The key pair's private key (PKCS#8 DER).
     private_key: Vec<u8>,
 }
@@ -361,10 +327,12 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
     let private_key = key_pair.serialize_der();
     info!("Generated ephemeral TLS certificate.");
 
-    let provider = attestation::detect()?;
+    let provider: Arc<dyn AttestationProvider> = attestation::detect()?.into();
     info!("Using attestation provider: {}", provider.name());
-    let attester = Arc::new(Attester::new(provider, &key_pair.public_key_der()));
-    let eat_bytes = attester.evidence(None)?;
+    let eat_bytes = provider
+        .generate_document(&key_binding(&key_pair.public_key_der()))?
+        .to_cbor_bytes()
+        .map_err(|e| e.to_string())?;
     info!(
         "Wrapped Attestation Document as RFC 9711 EAT token ({} bytes).",
         eat_bytes.len()
@@ -384,10 +352,19 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
         quic_config,
         Identity {
             evidence,
-            attester,
+            provider,
             private_key,
         },
     ))
+}
+
+/// Attestation parameters binding Evidence to the RA-TLS key: `user_data` is the SHA-256 of
+/// its SubjectPublicKeyInfo `public_key_der`.
+fn key_binding(public_key_der: &[u8]) -> AttestationParams {
+    AttestationParams {
+        user_data: Some(Sha256::digest(public_key_der).to_vec()),
+        ..Default::default()
+    }
 }
 
 /// QUIC limits for each connection: [`MAX_STREAMS_PER_CONNECTION`] concurrent requests sharing

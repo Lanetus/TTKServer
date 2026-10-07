@@ -16,8 +16,6 @@ extern crate self as ttk_ra_server;
 
 pub mod attestation;
 
-use rcgen::generate_simple_self_signed;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 pub use ttk_core::egress;
 pub mod router;
 pub mod server;
@@ -27,27 +25,6 @@ pub use ttk_core::vsock;
 // Re-export common types and functions for convenience
 pub use attestation::eat;
 pub use attestation::eat::{EatClaimKey, EatClaimsSet};
-
-
-/// Generates a self-signed ephemeral TLS certificate and private key for Remote Attestation TLS (RA-TLS).
-///
-/// Returns `(certificates, private_key, certificate_der_bytes)`.
-pub fn generate_identity() -> (
-    Vec<CertificateDer<'static>>,
-    PrivateKeyDer<'static>,
-    Vec<u8>,
-) {
-    let subject_alt_names = vec!["localhost".to_string(), "enclave.local".to_string()];
-    let certified_key = generate_simple_self_signed(subject_alt_names).unwrap();
-
-    let cert_der = certified_key.cert.der().to_vec();
-    let rustls_cert = certified_key.cert.der().clone();
-    let rustls_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
-        certified_key.key_pair.serialize_der(),
-    ));
-
-    (vec![rustls_cert], rustls_key, cert_der)
-}
 
 /// Parameters for requesting an attestation document from the Nitro Security Module.
 #[derive(Debug, Clone, Default, PartialEq)]
