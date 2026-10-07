@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-07
+
+### Changed
+- **BREAKING:** `ttk_ra_server::AttestationParams` is now a plain struct with public fields and `Default`; the builder methods (`new`, `with_user_data`, `with_user_data_hash`, `with_nonce`, `with_public_key`) and the accessors (`user_data()`, `nonce()`, `public_key()`) are removed.
+
 ## [3.0.3] - 2026-10-07
 
 No user-facing changes.
@@ -413,7 +418,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v3.0.3...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/Lanetus/TTKServer/compare/v3.0.3...v4.0.0
 [3.0.3]: https://github.com/Lanetus/TTKServer/compare/v3.0.2...v3.0.3
 [3.0.2]: https://github.com/Lanetus/TTKServer/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/Lanetus/TTKServer/compare/v3.0.0...v3.0.1
