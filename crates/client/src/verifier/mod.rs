@@ -29,15 +29,8 @@ use ttk_core::eat::EatClaimsSet;
 /// EAT `submods` labels identifying the TEE that produced the nested evidence.
 pub use ttk_core::attestation::submod;
 
-/// AWS Nitro Enclaves root certificate (G1), from the AWS Nitro Enclaves documentation.
-const AWS_NITRO_ROOT: &[u8] = include_bytes!("certs/aws_nitro_root_g1.der");
-/// Mock root CA used by the server's `mock` provider. Its private key is public, so it is
-/// trusted only when [`Policy::allow_mock`] is set.
-const MOCK_NITRO_ROOT: &[u8] = include_bytes!("certs/mock_nitro_root.der");
-/// Intel SGX Root CA, which also roots TDX PCK certificate chains.
-const INTEL_SGX_ROOT: &[u8] = include_bytes!("certs/intel_sgx_root_ca.der");
-/// PCR0 values (enclave image checksums) of the verified Nitro enclave images.
-const NITRO_IMAGE_ALLOWLIST: &str = include_str!("nitro_image_allowlist.txt");
+/// Trust anchors the verifiers check evidence against (defined in [`ttk_core::trust`]).
+pub use ttk_core::trust::TrustStore;
 
 /// The trusted execution environment that produced a piece of evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,46 +89,6 @@ pub struct VerifiedEvidence {
     pub debug: bool,
     /// The decoded Nitro attestation document, for Nitro evidence.
     pub nitro: Option<nitro::AttestationDocument>,
-}
-
-/// Trust anchors for each vendor's attestation signing chain.
-#[derive(Debug, Clone)]
-pub struct TrustStore {
-    /// DER of the AWS Nitro Enclaves root certificate.
-    pub aws_nitro_root: Vec<u8>,
-    /// DER of the TTKServer mock root CA, trusted only when [`Policy::allow_mock`] is set.
-    pub mock_nitro_root: Vec<u8>,
-    /// DER of the Intel SGX Root CA (roots both SGX and TDX PCK chains).
-    pub intel_sgx_root: Vec<u8>,
-    /// AMD root (ARK) and signing (ASK) certificates per processor family.
-    pub amd: Vec<sev_snp::AmdRoots>,
-    /// PCR0 values (SHA-384 of the enclave image file) of the verified Nitro enclave images.
-    /// Evidence from a non-debug Nitro enclave running any other image is rejected.
-    pub nitro_image_allowlist: Vec<Vec<u8>>,
-}
-
-/// Construction of the trust store.
-impl TrustStore {
-    /// The vendor roots embedded in this crate, downloaded from AWS, Intel and AMD KDS, and the
-    /// Nitro image allowlist in `nitro_image_allowlist.txt`.
-    pub fn builtin() -> Self {
-        Self {
-            aws_nitro_root: AWS_NITRO_ROOT.to_vec(),
-            mock_nitro_root: MOCK_NITRO_ROOT.to_vec(),
-            intel_sgx_root: INTEL_SGX_ROOT.to_vec(),
-            amd: sev_snp::AmdRoots::builtin(),
-            nitro_image_allowlist: nitro::parse_image_allowlist(NITRO_IMAGE_ALLOWLIST)
-                .expect("built-in nitro_image_allowlist.txt is invalid"),
-        }
-    }
-}
-
-/// Defaults to [`TrustStore::builtin`].
-impl Default for TrustStore {
-    /// Returns the built-in vendor roots.
-    fn default() -> Self {
-        Self::builtin()
-    }
 }
 
 /// Relaxations of the default (strict) verification policy.

@@ -19,7 +19,6 @@ path = "src/main.rs"
 
 [dependencies]
 ttk-core.workspace = true
-ttk-client.workspace = true
 axum.workspace = true
 env_logger.workspace = true
 serde.workspace = true
@@ -35,4 +34,10 @@ tdx = ["ttk-core/tdx"]
 
 [dev-dependencies]
 ttk-core = { workspace = true, features = ["mock"] }
+bytes.workspace = true
+h3.workspace = true
+h3-quinn.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
 serde_json.workspace = true

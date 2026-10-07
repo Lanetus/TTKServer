@@ -8,9 +8,9 @@
 //! | `GET /evidence.eat`      | Base64-encoded EAT carrying this node's Evidence (from [`ttk_core`]) |
 //! | `GET /root-attestation`  | JSON [`RootAttestation`]: the accepted enclave image checksums  |
 //!
-//! The checksums are the built-in Nitro image allowlist of [`ttk_client::verifier`]
-//! ([`TrustStore::nitro_image_allowlist`]), so the root node serves exactly the images the
-//! client verifier accepts. Clients reach it over RA-TLS, so the list is bound to an attested
+//! The checksums are the built-in Nitro image allowlist of [`ttk_core::trust`]
+//! ([`TrustStore::nitro_image_allowlist`]), the same trust store the client verifier checks
+//! Evidence against, so the root node serves exactly the images the client accepts. Clients reach it over RA-TLS, so the list is bound to an attested
 //! enclave.
 
 use axum::routing::get;
@@ -18,9 +18,8 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use ttk_client::hex_encode;
-use ttk_client::verifier::TrustStore;
 use ttk_core::server::{BoxError, Listener, Server};
+use ttk_core::TrustStore;
 
 /// Path of the accepted-images endpoint.
 pub const ROOT_ATTESTATION_PATH: &str = "/root-attestation";
@@ -114,4 +113,9 @@ async fn root_attestation(
     axum::extract::State(attestation): axum::extract::State<Arc<RootAttestation>>,
 ) -> Json<RootAttestation> {
     Json(attestation.as_ref().clone())
+}
+
+/// Formats `bytes` as lowercase hex.
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

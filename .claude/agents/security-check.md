@@ -18,7 +18,7 @@ You are a security reviewer for TTKServer, a Rust workspace of HTTP/3 (QUIC) nod
 | Evidence generation (attester) | `crates/core/src/attestation/` (`nitro.rs` NSM, `sev_snp.rs`, `tdx.rs`, `tsm.rs` configfs-tsm, `mock.rs`, `nitro_doc.rs` mock docs, `eat.rs`) |
 | RA-TLS cert, QUIC/h3 server, body limit | `crates/core/src/server.rs`, `crates/core/src/identity.rs`, `crates/core/src/router.rs` |
 | vsock transport (in enclave) | `crates/core/src/vsock.rs` |
-| Evidence verification (verifier) | `crates/client/src/verifier/` (`mod.rs` policy + binding, `nitro.rs` COSE_Sign1 + chain + PCR0 allowlist, `sev_snp.rs`, `dcap.rs`, `nitro_image_allowlist.txt`, `certs/`) |
+| Evidence verification (verifier) | `crates/client/src/verifier/` (`mod.rs` policy + binding, `nitro.rs` COSE_Sign1 + chain + PCR0 allowlist, `sev_snp.rs`, `dcap.rs`); trust anchors in `crates/core/src/trust/` (`TrustStore`, `nitro_image_allowlist.txt`, `certs/`) |
 | RA-TLS cert verifier, client transport | `crates/client/src/client.rs` (`EnclaveCertVerifier`, `TtkClient`) |
 | Onion encryption (HPKE) | `crates/client/src/seal.rs`, `crates/client/src/faf.rs` |
 | Relay forwarding + connection pool | `crates/relay/src/lib.rs` (`faf`, `forward_to_hop`, `run`) |

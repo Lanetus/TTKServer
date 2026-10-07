@@ -74,7 +74,7 @@ TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --release --bin terminal
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4455 cargo run --release --bin root
 ```
 
-The `root` node (crate `ttk-root`) serves `GET /root-attestation`, a JSON list of the accepted enclave image checksums (PCR0, the SHA-384 of each EIF), taken from the client verifier's built-in allowlist (`crates/client/src/verifier/nitro_image_allowlist.txt`):
+The `root` node (crate `ttk-root`) serves `GET /root-attestation`, a JSON list of the accepted enclave image checksums (PCR0, the SHA-384 of each EIF), taken from the built-in `TrustStore` of `ttk-core` (`crates/core/src/trust/nitro_image_allowlist.txt`), the same one the client verifier uses:
 
 ```json
 { "hash_algorithm": "SHA384", "pcr0": ["7807833a90cc86f5…"] }
