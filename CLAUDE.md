@@ -13,6 +13,7 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
   - `src/image_trust.rs` — trait `ImageTrustStore` (also at the crate root): `builtin()`, `nitro_image_allowlist()`, `nitro_pcr_index()` (default 0; 8 pins the EIF signing cert). Implemented by `ttk_root::FileImageTrustStore` (txt file) and `ttk_ra_client::RootImageTrustStore` (fetched from the root servers). Also `parse_image_allowlist` and the `/root-attestation` wire format (`RootAttestation`, `ROOT_ATTESTATION_PATH`). Re-exported by `ttk_ra_client::trust` (and the `ttk_ra_client` root).
   - `src/egress.rs` — `classify_hop_address` / `HopAddressClass` (Public / Private / Forbidden): egress policy for peer-chosen destinations (relay next hops, `vsock-proxy` outbound); re-exported by `ttk_ra_client::faf`.
   - `src/vsock.rs` (Linux) — quinn `AsyncUdpSocket`s over vsock, datagrams framed `[u16 BE len][payload]`: `VsockUdpSocket` (inbound) and `VsockOutboundSocket` (outbound via parent `3:5001`, `[4|6][ip][u16 port]` destination header); framing helpers reused by `vsock-proxy`.
+  - `src/vsock_proxy.rs` — `vsock-proxy` config: `RELAY_USAGE`, defaults, `RelayConfig`, `parse_relay_args` (in the lib so `tests/` can reach it).
   - `src/bin/vsock-proxy.rs` — bin `vsock-proxy` (Linux, parent instance: public UDP `:443` to enclave vsock `5000`, and outbound vsock `5001` to UDP, egress policy via `egress`, `--allow-private`).
 - `crates/ra-server/` — crate `ttk-ra-server` (lib `ttk_ra_server`), **server only**: no relay/message logic, no client.
   - `src/lib.rs` — declares `attestation`, `router`, `server`; re-exports `ttk_core::{egress, vsock}`; re-exports `eat`, `EatClaimsSet`, `EatClaimKey`, `generate_identity`, `AttestationParams`.
@@ -58,6 +59,7 @@ deploy/systemd/ttk-{relay,terminal}-enclave.service  # systemd units running the
 ```
 
 ## Conventions
+- Tests live in each crate's `tests/` (no inline `#[cfg(test)]` modules); items they need must be `pub`.
 - Rust 2021; run `cargo fmt` and clippy before finishing. Keep `//!`/`///` doc comments on public items, in the existing RATS/RFC-referencing style.
 - Logging via `log` + `env_logger` in library/server code; the server accept loop currently uses `eprintln!` for per-connection errors.
 - Crypto: rustls 0.23 with the `ring` provider (installed explicitly when attesting / connecting); quinn 0.11 + h3 0.0.7 / h3-quinn 0.0.9 — versions are tightly coupled, upgrade together.
