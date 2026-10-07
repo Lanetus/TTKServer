@@ -7,6 +7,7 @@
 //!   `GET /root-attestation` format.
 //! - [`egress`]: the egress policy for peer-chosen destinations ([`egress::classify_hop_address`]).
 //! - `vsock` (Linux): QUIC datagram sockets over vsock, the enclave's only way out.
+//! - [`vsock_proxy`]: configuration of the parent-instance `vsock-proxy` binary.
 //! - The RA-TLS certificate extension OID ([`ATTESTATION_OID`]), the parent instance's vsock CID
 //!   ([`PARENT_CID`]) and the mock root CA ([`MOCK_NITRO_ROOT_CERT`]).
 
@@ -15,6 +16,7 @@ pub mod egress;
 pub mod image_trust;
 #[cfg(target_os = "linux")]
 pub mod vsock;
+pub mod vsock_proxy;
 
 pub use eat::{EatClaimKey, EatClaimsSet};
 pub use image_trust::ImageTrustStore;

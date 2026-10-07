@@ -198,7 +198,7 @@ fn bind_vsock(_port: u32) -> Result<Server, BoxError> {
 
 /// Generates Evidence bound to the RA-TLS key: once at startup, and again for each
 /// `POST /evidence` so the client's nonce is included.
-pub(crate) struct Attester {
+pub struct Attester {
     provider: Box<dyn AttestationProvider>,
     /// SHA-256 of the RA-TLS key's SubjectPublicKeyInfo, bound as `user_data`.
     user_data: Vec<u8>,
@@ -207,7 +207,7 @@ pub(crate) struct Attester {
 /// Evidence generation.
 impl Attester {
     /// Wraps `provider`, binding its Evidence to the public key `public_key_der`.
-    pub(crate) fn new(provider: Box<dyn AttestationProvider>, public_key_der: &[u8]) -> Self {
+    pub fn new(provider: Box<dyn AttestationProvider>, public_key_der: &[u8]) -> Self {
         Self {
             provider,
             user_data: Sha256::digest(public_key_der).to_vec(),
@@ -216,7 +216,7 @@ impl Attester {
 
     /// Requests Evidence from the provider, carrying `nonce` if given, and returns it as
     /// CBOR-encoded RFC 9711 EAT bytes. Blocks on the TEE driver.
-    pub(crate) fn evidence(&self, nonce: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    pub fn evidence(&self, nonce: Option<&[u8]>) -> Result<Vec<u8>, String> {
         let mut params = AttestationParams::new().with_user_data(self.user_data.clone());
         if let Some(nonce) = nonce {
             params = params.with_nonce(nonce);
