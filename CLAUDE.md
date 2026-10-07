@@ -19,7 +19,7 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
   - `src/identity.rs` — `generate_identity()` and the `AttestationParams` builder.
   - `src/attestation/` — providers (`nitro`, `sev_snp`, `tdx`, `mock`, `tsm`), `nitro_doc` (COSE parsing, mock docs, mock root key `mock_nitro_root_key.pk8`).
   - `src/server.rs` — attestation at startup, RA-TLS cert (`ATTESTATION_OID`, `create_cert_with_attestation`), QUIC/h3 accept loop; `Server::{bind, bind_vsock, listen, serve, serve_with(Router), private_key_der}`; `Listener::from_env()` (vsock `TTK_VSOCK_PORT` default `5000`, or `TTK_USE_UDP=1` UDP `TTK_LISTEN_ADDR` default `0.0.0.0:4433`); `PARENT_CID`, `MAX_REQUEST_BODY` (else 413), `REQUEST_BODY_TIMEOUT` (else 408), `MAX_REQUEST_HEADERS`, `MAX_CONNECTIONS`, `MAX_STREAMS_PER_CONNECTION`, `CONNECTION_RECEIVE_WINDOW`, `env_u32`.
-  - `src/router.rs` — base routes only: `GET /`, `GET /evidence.eat` (base64 EAT); `Evidence`.
+  - `src/router.rs` — base routes only: `GET /`, `GET /evidence.eat` (base64 EAT, generated at startup), `POST /evidence` (body = raw nonce, 1..=`MAX_NONCE_LEN` 512 bytes; fresh base64 EAT with the nonce in the Nitro doc, via `server::Attester`; `MAX_CONCURRENT_ATTESTATIONS` else 503; TDX/SEV-SNP answer 500); `Evidence`.
 - `crates/ra-client/` — crate `ttk-ra-client` (lib `ttk_ra_client` + bin `client`): everything client-side.
   - `src/client.rs` (re-exported at the crate root) — `TtkClient`, `ClientTransport` (UDP / vsock), `EnclaveCertVerifier` (accepts self-signed cert, records it), `extract_attestation_doc`, `hex_encode`, `MAX_RESPONSE_BODY` / `MAX_RESPONSE_HEADERS`.
   - `src/verifier/` — evidence appraisal (`nitro`, `sev_snp`, `dcap`), `Policy`; `verify_evidence`/`nitro::verify` take `&dyn ImageTrustStore`; re-exports `crate::trust::{TrustStore, ImageTrustStore}` (and `AmdRoots`/`AmdProduct` in `sev_snp`, `parse_image_allowlist` in `nitro`).
@@ -73,4 +73,4 @@ deploy/systemd/ttk-{relay,terminal}-enclave.service  # systemd units running the
 ## Gotchas
 - `EnclaveCertVerifier` intentionally skips CA validation; trust comes from checking the attestation doc and that its `user_data` matches the cert/key hash. Don't reuse it outside RA-TLS flows.
 - `Evidence.nitro` and `Evidence.eat` hold the same EAT-wrapped bytes; only `eat` is served (`/evidence.eat`).
-- Server has no nonce/freshness input: evidence is generated once at startup.
+- The RA-TLS cert and `/evidence.eat` carry evidence generated once at startup (no nonce); freshness only via `POST /evidence`.

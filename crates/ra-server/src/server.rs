@@ -8,7 +8,8 @@
 //! - **Endorsements**: the AWS Nitro certificate chain embedded in the Attestation
 //!   Document, rooted at the AWS Nitro Enclaves root certificate.
 //! - **Verifier** / **Relying Party**: the external client fetching Evidence as an
-//!   RFC 9711 EAT over `/evidence.eat` (or from the RA-TLS certificate). Appraisal against
+//!   RFC 9711 EAT over `/evidence.eat` (or from the RA-TLS certificate), or fresh Evidence
+//!   carrying its nonce over `POST /evidence`. Appraisal against
 //!   Reference Values (expected PCR measurements) and issuance of an Attestation Result
 //!   happen outside this server.
 //!
@@ -17,7 +18,8 @@
 //! [`Server::serve_with`].
 
 use super::router::build_router;
-use crate::{attestation, AttestationParams};
+use crate::attestation::{self, AttestationProvider};
+use crate::AttestationParams;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Router;
@@ -26,6 +28,7 @@ use log::{error, info, warn};
 use quinn::{Endpoint, ServerConfig, TransportConfig, VarInt};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
@@ -193,10 +196,44 @@ fn bind_vsock(_port: u32) -> Result<Server, BoxError> {
     Err(format!("vsock is only available on Linux; set {USE_UDP_ENV}=1 to listen on UDP").into())
 }
 
+/// Generates Evidence bound to the RA-TLS key: once at startup, and again for each
+/// `POST /evidence` so the client's nonce is included.
+pub(crate) struct Attester {
+    provider: Box<dyn AttestationProvider>,
+    /// SHA-256 of the RA-TLS key's SubjectPublicKeyInfo, bound as `user_data`.
+    user_data: Vec<u8>,
+}
+
+/// Evidence generation.
+impl Attester {
+    /// Wraps `provider`, binding its Evidence to the public key `public_key_der`.
+    pub(crate) fn new(provider: Box<dyn AttestationProvider>, public_key_der: &[u8]) -> Self {
+        Self {
+            provider,
+            user_data: Sha256::digest(public_key_der).to_vec(),
+        }
+    }
+
+    /// Requests Evidence from the provider, carrying `nonce` if given, and returns it as
+    /// CBOR-encoded RFC 9711 EAT bytes. Blocks on the TEE driver.
+    pub(crate) fn evidence(&self, nonce: Option<&[u8]>) -> Result<Vec<u8>, String> {
+        let mut params = AttestationParams::new().with_user_data(self.user_data.clone());
+        if let Some(nonce) = nonce {
+            params = params.with_nonce(nonce);
+        }
+        let eat = self
+            .provider
+            .generate_document(&params)
+            .map_err(|e| e.to_string())?;
+        eat.to_cbor_bytes().map_err(|e| e.to_string())
+    }
+}
+
 /// An attested HTTP/3 server bound to a QUIC endpoint.
 pub struct Server {
     endpoint: Endpoint,
     evidence: Arc<Evidence>,
+    attester: Arc<Attester>,
     private_key: Vec<u8>,
 }
 
@@ -207,9 +244,9 @@ impl Server {
     /// Must be called within a Tokio runtime. Binding port 0 picks a free port; see
     /// [`local_addr`](Self::local_addr).
     pub fn bind(addr: SocketAddr) -> Result<Self, BoxError> {
-        let (quic_config, evidence, private_key) = attest()?;
+        let (quic_config, identity) = attest()?;
         let endpoint = Endpoint::server(quic_config, addr)?;
-        Ok(Self::new(endpoint, evidence, private_key))
+        Ok(Self::new(endpoint, identity))
     }
 
     /// Attests, builds the RA-TLS identity and listens on `listener`, logging where.
@@ -236,7 +273,7 @@ impl Server {
     /// Must be called within a Tokio runtime.
     #[cfg(target_os = "linux")]
     pub fn bind_vsock(port: u32) -> Result<Self, BoxError> {
-        let (quic_config, evidence, private_key) = attest()?;
+        let (quic_config, identity) = attest()?;
         let socket = super::vsock::VsockUdpSocket::bind(port)?;
         let runtime = quinn::default_runtime().ok_or("no async runtime found")?;
         let endpoint = Endpoint::new_with_abstract_socket(
@@ -245,15 +282,16 @@ impl Server {
             Arc::new(socket),
             runtime,
         )?;
-        Ok(Self::new(endpoint, evidence, private_key))
+        Ok(Self::new(endpoint, identity))
     }
 
     /// Wraps a bound endpoint.
-    fn new(endpoint: Endpoint, evidence: Arc<Evidence>, private_key: Vec<u8>) -> Self {
+    fn new(endpoint: Endpoint, identity: Identity) -> Self {
         Self {
             endpoint,
-            evidence,
-            private_key,
+            evidence: identity.evidence,
+            attester: identity.attester,
+            private_key: identity.private_key,
         }
     }
 
@@ -283,7 +321,7 @@ impl Server {
     /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections, new ones are
     /// refused.
     pub async fn serve_with(self, routes: Router) {
-        let app = build_router(&self.evidence, routes);
+        let app = build_router(&self.evidence, self.attester.clone(), routes);
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         while let Some(incoming) = self.endpoint.accept().await {
             let Ok(permit) = connections.clone().try_acquire_owned() else {
@@ -300,10 +338,19 @@ impl Server {
     }
 }
 
-/// Attests and builds the RA-TLS identity: an ephemeral key pair, Evidence bound to it, the
-/// QUIC server config presenting the certificate that embeds the Evidence, and the key pair's
-/// private key (PKCS#8 DER).
-fn attest() -> Result<(ServerConfig, Arc<Evidence>, Vec<u8>), BoxError> {
+/// The attested RA-TLS identity built by [`attest`].
+struct Identity {
+    /// Evidence bound to the key, generated at startup.
+    evidence: Arc<Evidence>,
+    /// Produces fresh Evidence bound to the key.
+    attester: Arc<Attester>,
+    /// The key pair's private key (PKCS#8 DER).
+    private_key: Vec<u8>,
+}
+
+/// Attests and builds the RA-TLS identity: an ephemeral key pair and Evidence bound to it,
+/// with the QUIC server config presenting the certificate that embeds the Evidence.
+fn attest() -> Result<(ServerConfig, Identity), BoxError> {
     info!("Initializing Nitro Enclave HTTP/3 Server...");
 
     // Install the default cryptographic provider for rustls 0.23
@@ -313,7 +360,15 @@ fn attest() -> Result<(ServerConfig, Arc<Evidence>, Vec<u8>), BoxError> {
     let private_key = key_pair.serialize_der();
     info!("Generated ephemeral TLS certificate.");
 
-    let eat_bytes = generate_evidence(&key_pair)?;
+    let provider = attestation::detect()?;
+    info!("Using attestation provider: {}", provider.name());
+    let attester = Arc::new(Attester::new(provider, &key_pair.public_key_der()));
+    let eat_bytes = attester.evidence(None)?;
+    info!(
+        "Wrapped Attestation Document as RFC 9711 EAT token ({} bytes).",
+        eat_bytes.len()
+    );
+
     let tls_config = build_tls_config(&key_pair, &eat_bytes)?;
     let evidence = Arc::new(Evidence {
         nitro: eat_bytes.clone(),
@@ -324,7 +379,14 @@ fn attest() -> Result<(ServerConfig, Arc<Evidence>, Vec<u8>), BoxError> {
         quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?,
     ));
     quic_config.transport_config(Arc::new(transport_config()));
-    Ok((quic_config, evidence, private_key))
+    Ok((
+        quic_config,
+        Identity {
+            evidence,
+            attester,
+            private_key,
+        },
+    ))
 }
 
 /// QUIC limits for each connection: [`MAX_STREAMS_PER_CONNECTION`] concurrent requests sharing
@@ -335,21 +397,6 @@ fn transport_config() -> TransportConfig {
         .max_concurrent_bidi_streams(VarInt::from_u32(MAX_STREAMS_PER_CONNECTION))
         .receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW));
     transport
-}
-
-/// Requests evidence from the detected attestation provider, bound to the TLS public key,
-/// and returns it as CBOR-encoded RFC 9711 EAT bytes.
-fn generate_evidence(key_pair: &KeyPair) -> Result<Vec<u8>, BoxError> {
-    let params = AttestationParams::new().with_user_data_hash(&key_pair.public_key_der());
-
-    let provider = attestation::detect()?;
-    info!("Using attestation provider: {}", provider.name());
-    let eat_bytes = provider.generate_document(&params)?.to_cbor_bytes()?;
-    info!(
-        "Wrapped Attestation Document as RFC 9711 EAT token ({} bytes).",
-        eat_bytes.len()
-    );
-    Ok(eat_bytes)
 }
 
 /// Builds the rustls config using a self-signed RA-TLS certificate carrying `eat_bytes`.
