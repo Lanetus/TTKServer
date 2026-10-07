@@ -18,7 +18,7 @@ You are a security reviewer for TTKServer, a Rust workspace of HTTP/3 (QUIC) nod
 | Evidence generation (attester) | `crates/ra-server/src/attestation/` (`nitro.rs` NSM, `sev_snp.rs`, `tdx.rs`, `tsm.rs` configfs-tsm, `mock.rs`, `nitro_doc.rs` mock docs); EAT model in `crates/core/src/eat.rs` |
 | RA-TLS cert, QUIC/h3 server, body limit | `crates/ra-server/src/server.rs`, `crates/ra-server/src/identity.rs`, `crates/ra-server/src/router.rs` |
 | vsock transport (in enclave) | `crates/core/src/vsock.rs` |
-| Evidence verification (verifier) | `crates/ra-client/src/verifier/` (`mod.rs` policy + binding, `nitro.rs` COSE_Sign1 + chain + PCR0 allowlist, `sev_snp.rs`, `dcap.rs`); trust anchors in `crates/ra-client/src/trust/` (`TrustStore`, `nitro_image_allowlist.txt`, `certs/`) |
+| Evidence verification (verifier) | `crates/ra-client/src/verifier/` (`mod.rs` policy + binding, `nitro.rs` COSE_Sign1 + chain + PCR0 allowlist, `sev_snp.rs`, `dcap.rs`); trust anchors in `crates/ra-client/src/trust/` (`TrustStore`, `certs/`, `RootSignerTrustStore` + `root_signer_pcr8.txt`); accepted images fetched from the root servers in `crates/ra-client/src/images.rs` (`RootImageTrustStore`), trait in `crates/core/src/image_trust.rs`, served from `crates/root/src/nitro_image_allowlist.txt` |
 | RA-TLS cert verifier, client transport | `crates/ra-client/src/client.rs` (`EnclaveCertVerifier`, `TtkClient`) |
 | Onion encryption (HPKE) | `crates/ra-client/src/seal.rs`, `crates/ra-client/src/faf.rs` |
 | Relay forwarding + connection pool | `crates/relay/src/lib.rs` (`faf`, `forward_to_hop`, `run`) |
@@ -42,7 +42,7 @@ You are a security reviewer for TTKServer, a Rust workspace of HTTP/3 (QUIC) nod
 ## Checklist
 **Attestation binding and evidence verification (highest priority)**
 - Report data (`user_data` / `REPORT_DATA`) must equal the SHA-256 of the RA-TLS cert's SubjectPublicKeyInfo (`is_bound_to`: exact prefix, zero padding only). Flag any path where evidence is accepted unbound or compared loosely.
-- Nitro (`verifier/nitro.rs`): COSE_Sign1 ES384 signature, chain to the pinned AWS Nitro root at the document timestamp, timestamp/clock-skew handling, PCR0 checked against `nitro_image_allowlist.txt` for non-debug enclaves. Flag ways to bypass the allowlist (e.g. debug/mock detection that a real image could trigger) and allowlist entries that do not correspond to deployed images.
+- Nitro (`verifier/nitro.rs`): COSE_Sign1 ES384 signature, chain to the pinned AWS Nitro root at the document timestamp, timestamp/clock-skew handling, PCR0 checked against the list fetched from the root servers for non-debug enclaves (root servers themselves: PCR8 against `root_signer_pcr8.txt`). Flag ways to bypass the allowlist (e.g. debug/mock detection that a real image could trigger) and allowlist entries that do not correspond to deployed images.
 - SEV-SNP (`verifier/sev_snp.rs`) and DCAP (`verifier/dcap.rs`): fixed-offset parsing of untrusted reports/quotes (length checks before slicing, panics), ARK→ASK→VCEK and PCK chains to pinned roots, VCEK `hwID`/TCB matching, QE report and attestation-key binding, debug-bit handling.
 - Policy (`verifier/mod.rs`): exactly one TEE submod accepted, debug TEEs rejected unless `allow_debug`/`allow_mock`, mock root trusted only with `allow_mock`.
 - Mock: `TTK_ALLOW_MOCK_ATTESTATION=1` / `allow_mock()` must never be on by default in the `relay`, `terminal` or deployment files, and the `mock` provider fallback must not let a production node silently serve mock evidence that a strict verifier would accept.

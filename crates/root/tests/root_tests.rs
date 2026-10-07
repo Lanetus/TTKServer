@@ -10,9 +10,9 @@ use rustls::DigitallySignedStruct;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use ttk_ra_client::trust::{parse_image_allowlist, TrustStore};
+use ttk_core::image_trust::ImageTrustStore;
 use ttk_ra_server::server::Server;
-use ttk_root::{Root, RootAttestation, ROOT_ATTESTATION_PATH};
+use ttk_root::{FileImageTrustStore, Root, RootAttestation, ROOT_ATTESTATION_PATH};
 
 const PCR0_A: &str = "7807833a90cc86f5a853a1f49043a568f3428f6b03eb983aed99899fbfa77d6b86b34fa934e318dd3741debca32c0aba";
 const PCR0_B: &str = "1de927770d7a1c250ba364440947226ed9af7250ae25fdad391c3cd87d0044b1e4a4e96810bc8f2dfc9160fcf0742c8d";
@@ -139,8 +139,8 @@ fn hex_encode(bytes: &[u8]) -> String {
 async fn root_attestation_serves_the_builtin_accepted_images() {
     let addr = start(Root::bind("127.0.0.1:0".parse().unwrap()).unwrap());
 
-    let expected: Vec<String> = TrustStore::builtin()
-        .nitro_image_allowlist
+    let expected: Vec<String> = FileImageTrustStore::builtin()
+        .nitro_image_allowlist()
         .iter()
         .map(|pcr0| hex_encode(pcr0))
         .collect();
@@ -151,13 +151,10 @@ async fn root_attestation_serves_the_builtin_accepted_images() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn root_attestation_serves_a_custom_trust_store() {
-    let trust = TrustStore {
-        nitro_image_allowlist: parse_image_allowlist(&format!("{PCR0_A}\n{PCR0_B}")).unwrap(),
-        ..TrustStore::builtin()
-    };
+async fn root_attestation_serves_a_custom_image_trust_store() {
+    let images = FileImageTrustStore::parse(&format!("{PCR0_A}\n{PCR0_B}")).unwrap();
     let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let addr = start(Root::with_trust_store(server, &trust));
+    let addr = start(Root::with_image_trust_store(server, &images));
 
     let body = fetch(addr).await;
     assert_eq!(body.pcr0, vec![PCR0_A, PCR0_B]);
@@ -168,4 +165,11 @@ async fn base_routes_are_still_served() {
     let addr = start(Root::bind("127.0.0.1:0".parse().unwrap()).unwrap());
     assert_eq!(get(addr, "/evidence.eat").await.status, 200);
     assert_eq!(get(addr, "/").await.status, 200);
+}
+
+#[test]
+fn builtin_nitro_image_allowlist_is_valid_and_not_empty() {
+    assert!(!FileImageTrustStore::builtin()
+        .nitro_image_allowlist()
+        .is_empty());
 }

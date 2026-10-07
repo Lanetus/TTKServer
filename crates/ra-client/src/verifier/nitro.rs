@@ -2,7 +2,8 @@
 //! certificate chains to the AWS Nitro Enclaves root.
 
 use super::{
-    chain_algorithms, verify_ecdsa, AnyKeyUsage, Policy, TeeKind, TrustStore, VerifiedEvidence,
+    chain_algorithms, verify_ecdsa, AnyKeyUsage, ImageTrustStore, Policy, TeeKind, TrustStore,
+    VerifiedEvidence,
 };
 use ciborium::Value;
 use rustls_pki_types::{CertificateDer, UnixTime};
@@ -57,11 +58,13 @@ impl AttestationDocument {
     }
 }
 
-/// Verifies the Nitro attestation document `doc_bytes` at time `now`.
+/// Verifies the Nitro attestation document `doc_bytes` at time `now`; a non-debug enclave's
+/// image must be in `images`.
 pub fn verify(
     doc_bytes: &[u8],
     now: UnixTime,
     trust: &TrustStore,
+    images: &dyn ImageTrustStore,
     policy: Policy,
 ) -> Result<VerifiedEvidence, String> {
     let cose = CoseSign1Parts::parse(doc_bytes)?;
@@ -81,7 +84,7 @@ pub fn verify(
     let debug = doc.pcrs.get(&0).is_some_and(|p| p.iter().all(|b| *b == 0));
     // A debug enclave's image cannot be identified; `verify_evidence` rejects it by policy.
     if !debug {
-        check_image_allowed(&doc, trust)?;
+        check_image_allowed(&doc, images)?;
     }
     let measurements = doc
         .pcrs
@@ -98,18 +101,23 @@ pub fn verify(
     })
 }
 
-/// Checks that PCR0, the SHA-384 of the enclave image file, is a verified image checksum.
-fn check_image_allowed(doc: &AttestationDocument, trust: &TrustStore) -> Result<(), String> {
-    let pcr0 = doc
+/// Checks that the image's PCR (by default PCR0, the SHA-384 of the enclave image file) is in
+/// the allowlist of `images`.
+fn check_image_allowed(
+    doc: &AttestationDocument,
+    images: &dyn ImageTrustStore,
+) -> Result<(), String> {
+    let index = images.nitro_pcr_index();
+    let pcr = doc
         .pcrs
-        .get(&0)
-        .ok_or("attestation document has no PCR0 (enclave image measurement)")?;
-    if trust.nitro_image_allowlist.iter().any(|p| p == pcr0) {
+        .get(&index)
+        .ok_or(format!("attestation document has no PCR{index}"))?;
+    if images.nitro_image_allowlist().iter().any(|p| p == pcr) {
         return Ok(());
     }
     Err(format!(
-        "enclave image checksum (PCR0) {} is not in the list of verified images",
-        crate::hex_encode(pcr0)
+        "enclave image PCR{index} {} is not in the list of verified images",
+        crate::hex_encode(pcr)
     ))
 }
 

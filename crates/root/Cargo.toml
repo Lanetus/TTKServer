@@ -19,10 +19,9 @@ path = "src/main.rs"
 
 [dependencies]
 ttk-ra-server.workspace = true
-ttk-ra-client.workspace = true
+ttk-core.workspace = true
 axum.workspace = true
 env_logger.workspace = true
-serde.workspace = true
 tokio.workspace = true
 
 [features]

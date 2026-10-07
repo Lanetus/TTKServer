@@ -1,0 +1,9 @@
+# PCR8 values pinned for the root servers (ROOT_SERVERS in src/images.rs).
+#
+# PCR8 is the SHA-384 of the certificate that signed the root node's EIF
+# (`nitro-cli build-enclave --signing-certificate ... --private-key ...`). The client
+# checks a root server's attestation against these values instead of the PCR0 image
+# allowlist, which it is fetching from that very server.
+#
+# One PCR8 (96 hex characters) per line; blank lines and text after `#` are ignored.
+# While this list is empty, no genuine (non-debug) root server is accepted.

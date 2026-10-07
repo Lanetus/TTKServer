@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use ttk_ra_client::verifier::{verify_evidence, Policy, TeeKind, TrustStore};
+use ttk_ra_client::RootImageTrustStore;
 use ttk_ra_server::attestation::tdx::{
     quote_from_entry, report_data, wrap_quote_as_eat, TdxSession, REPORT_DATA_LEN,
 };
@@ -153,8 +154,15 @@ fn provider_eat_is_accepted_by_the_client_verifier() {
     // 2026-01-01: inside the validity of the sample quote's PCK chain.
     let now = UnixTime::since_unix_epoch(Duration::from_secs(1_767_225_600));
 
-    let evidence = verify_evidence(&eat, &quote_report_data(), now, &trust, Policy::default())
-        .expect("the verifier should accept the provider's EAT");
+    let evidence = verify_evidence(
+        &eat,
+        &quote_report_data(),
+        now,
+        &trust,
+        &RootImageTrustStore::default(),
+        Policy::default(),
+    )
+    .expect("the verifier should accept the provider's EAT");
     assert_eq!(evidence.tee, TeeKind::Tdx);
 }
 

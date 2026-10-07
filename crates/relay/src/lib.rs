@@ -32,6 +32,7 @@ use tokio::sync::Semaphore;
 use ttk_ra_client::faf::{classify_hop_address, connect_to_node_filtered, HopAddressClass};
 use ttk_ra_client::faf::{parse_relay_address, parse_relay_server};
 use ttk_ra_client::faf::{FafRelay, FafRequest, FAF_PATH};
+use ttk_ra_client::images::set_root_transport;
 use ttk_ra_client::seal::{self, NodeSecretKey};
 use ttk_ra_client::{ClientResponse, ClientTransport, EnclaveCertVerifier, TtkClient};
 use ttk_ra_server::server::{env_u32, BoxError, Listener, Server, PARENT_CID};
@@ -86,7 +87,9 @@ pub const MAX_POOLED_RELAYS: usize = 64;
 /// through the parent's `vsock-proxy` at vsock `TTK_PARENT_CID`:`TTK_OUTBOUND_VSOCK_PORT`
 /// (default `3:5001`); on UDP (`TTK_USE_UDP=1`) it forwards over UDP.
 ///
-/// Next hops must present genuine TEE attestation unless `TTK_ALLOW_MOCK_ATTESTATION=1`, and
+/// Next hops must present genuine TEE attestation, from an enclave image published by the root
+/// servers ([`ttk_ra_client::RootImageTrustStore`], fetched over the same transport), unless
+/// `TTK_ALLOW_MOCK_ATTESTATION=1`, and
 /// must have public addresses unless `TTK_ALLOW_PRIVATE_NEXT_HOPS=1`.
 pub async fn run() -> Result<(), BoxError> {
     let listener = Listener::from_env()?;
@@ -96,6 +99,8 @@ pub async fn run() -> Result<(), BoxError> {
         let port = env_u32(OUTBOUND_VSOCK_PORT_ENV, OUTBOUND_VSOCK_PORT)?;
         info!("Relaying out via vsock {cid}:{port}");
         relay = relay.with_transport(ClientTransport::Vsock { cid, port });
+        // The accepted next-hop images are fetched from the root servers the same way.
+        set_root_transport(ClientTransport::Vsock { cid, port });
     }
     if std::env::var(ALLOW_MOCK_RELAY_ENV).is_ok_and(|v| v == "1") {
         warn!("Accepting MOCK attestation from next hops ({ALLOW_MOCK_RELAY_ENV}=1)");

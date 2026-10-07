@@ -12,7 +12,8 @@
 //!
 //! Every verifier checks the vendor signature chain up to a root in the [`TrustStore`] and
 //! returns a [`VerifiedEvidence`]; the Nitro verifier also requires the enclave image's PCR0 to
-//! be in [`TrustStore::nitro_image_allowlist`]. [`verify_evidence`] then enforces the [`Policy`] and checks
+//! be in the [`ImageTrustStore::nitro_image_allowlist`]. [`verify_evidence`] then enforces the
+//! [`Policy`] and checks
 //! that the evidence's report data is bound to the expected hash (the SHA-256 of the RA-TLS
 //! certificate's public key).
 
@@ -29,8 +30,9 @@ use ttk_core::eat::EatClaimsSet;
 /// EAT `submods` labels identifying the TEE that produced the nested evidence.
 pub use ttk_core::submod;
 
-/// Trust anchors the verifiers check evidence against (defined in [`crate::trust`]).
-pub use crate::trust::TrustStore;
+/// Trust anchors and accepted images the verifiers check evidence against (defined in
+/// [`crate::trust`]).
+pub use crate::trust::{ImageTrustStore, TrustStore};
 
 /// The trusted execution environment that produced a piece of evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -103,12 +105,14 @@ pub struct Policy {
 }
 
 /// Verifies the TEE evidence in `eat_bytes` at time `now` and checks that it is bound to
-/// `binding`, the SHA-256 of the RA-TLS certificate's public key.
+/// `binding`, the SHA-256 of the RA-TLS certificate's public key. Nitro images must be in
+/// `images`.
 pub fn verify_evidence(
     eat_bytes: &[u8],
     binding: &[u8],
     now: UnixTime,
     trust: &TrustStore,
+    images: &dyn ImageTrustStore,
     policy: Policy,
 ) -> Result<VerifiedEvidence, String> {
     let claims =
@@ -130,7 +134,7 @@ pub fn verify_evidence(
     };
 
     let evidence = match tee {
-        TeeKind::AwsNitro => nitro::verify(&bytes_of(value, tee)?, now, trust, policy)?,
+        TeeKind::AwsNitro => nitro::verify(&bytes_of(value, tee)?, now, trust, images, policy)?,
         TeeKind::SevSnp => sev_snp::verify(&value, now, trust)?,
         TeeKind::Tdx | TeeKind::Sgx => dcap::verify(&bytes_of(value, tee)?, tee, now, trust)?,
     };

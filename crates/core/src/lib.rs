@@ -3,6 +3,8 @@
 //!
 //! - [`eat`]: the RFC 9711 Entity Attestation Token data model carrying the Evidence.
 //! - [`submod`]: EAT `submods` labels naming the TEE behind nested Evidence.
+//! - [`image_trust`]: the accepted enclave images ([`ImageTrustStore`]) and the root node's
+//!   `GET /root-attestation` format.
 //! - [`egress`]: the egress policy for peer-chosen destinations ([`egress::classify_hop_address`]).
 //! - `vsock` (Linux): QUIC datagram sockets over vsock, the enclave's only way out.
 //! - The RA-TLS certificate extension OID ([`ATTESTATION_OID`]), the parent instance's vsock CID
@@ -10,10 +12,12 @@
 
 pub mod eat;
 pub mod egress;
+pub mod image_trust;
 #[cfg(target_os = "linux")]
 pub mod vsock;
 
 pub use eat::{EatClaimKey, EatClaimsSet};
+pub use image_trust::ImageTrustStore;
 
 /// EAT `submods` labels identifying the TEE that produced the nested evidence.
 pub mod submod {
