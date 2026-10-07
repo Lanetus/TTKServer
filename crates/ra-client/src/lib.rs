@@ -7,14 +7,18 @@
 //! - the crate root ([`TtkClient`], [`EnclaveCertVerifier`]): the RA-TLS HTTP/3 client.
 //! - [`verifier`]: appraisal of TEE Evidence against vendor roots and policy.
 //! - [`faf`]: the `POST /faf` request format shared by clients, relays and terminals.
-//! - [`trust`]: the vendor trust anchors and accepted Nitro images ([`TrustStore`]).
+//! - [`trust`]: the vendor trust anchors ([`TrustStore`]) and the root servers' pinned images.
+//! - [`images`]: the accepted enclave images, fetched from the root servers
+//!   ([`RootImageTrustStore`]).
 //! - [`seal`]: onion encryption of `POST /faf` requests to the nodes' RA-TLS keys (RFC 9180 HPKE).
 
 mod client;
 pub mod faf;
+pub mod images;
 pub mod seal;
 pub mod trust;
 pub mod verifier;
 
 pub use client::*;
-pub use trust::TrustStore;
+pub use images::RootImageTrustStore;
+pub use trust::{ImageTrustStore, TrustStore};

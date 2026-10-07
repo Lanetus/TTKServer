@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use ttk_ra_client::verifier::{verify_evidence, Policy, TeeKind, TrustStore};
+use ttk_ra_client::RootImageTrustStore;
 use ttk_ra_server::attestation::sev_snp::{
     evidence_from_entry, report_data, vcek_from_cert_table, wrap_evidence_as_eat, SevSnpSession,
     REPORT_DATA_LEN,
@@ -244,6 +245,7 @@ fn provider_eat_is_accepted_by_the_client_verifier() {
         &milan_report_data(),
         now,
         &TrustStore::builtin(),
+        &RootImageTrustStore::default(),
         Policy::default(),
     )
     .expect("the verifier should accept the provider's EAT with the real AMD roots");

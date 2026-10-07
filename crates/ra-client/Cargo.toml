@@ -47,5 +47,6 @@ x509-parser.workspace = true
 ttk-ra-server = { workspace = true, features = ["mock", "sev-snp", "tdx"] }
 ttk-relay.workspace = true
 ttk-terminal.workspace = true
+ttk-root.workspace = true
 aws-nitro-enclaves-nsm-api.workspace = true
 rcgen.workspace = true

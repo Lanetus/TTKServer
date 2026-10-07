@@ -8,50 +8,49 @@
 //! | `GET /evidence.eat`      | Base64-encoded EAT carrying this node's Evidence (from [`ttk_ra_server`]) |
 //! | `GET /root-attestation`  | JSON [`RootAttestation`]: the accepted enclave image checksums  |
 //!
-//! The checksums are the built-in Nitro image allowlist of [`ttk_ra_client::trust`]
-//! ([`TrustStore::nitro_image_allowlist`]), the same trust store the client verifier checks
-//! Evidence against, so the root node serves exactly the images the client accepts. Clients reach it over RA-TLS, so the list is bound to an attested
-//! enclave.
+//! The checksums are the Nitro image allowlist built into this crate
+//! (`nitro_image_allowlist.txt`, served by [`FileImageTrustStore`]); clients fetch them into
+//! their own [`ImageTrustStore`] and check Evidence against them. Clients reach the root node
+//! over RA-TLS, so the list is bound to an attested enclave.
 
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use ttk_ra_client::TrustStore;
+use ttk_core::image_trust::{parse_image_allowlist, ImageTrustStore};
+pub use ttk_core::image_trust::{RootAttestation, ROOT_ATTESTATION_PATH};
 use ttk_ra_server::server::{BoxError, Listener, Server};
 
-/// Path of the accepted-images endpoint.
-pub const ROOT_ATTESTATION_PATH: &str = "/root-attestation";
+/// PCR0 values (enclave image checksums) of the verified Nitro enclave images.
+const NITRO_IMAGE_ALLOWLIST: &str = include_str!("nitro_image_allowlist.txt");
 
-/// Body of `GET /root-attestation`.
-///
-/// ```json
-/// {
-///   "hash_algorithm": "SHA384",
-///   "pcr0": ["7807833a90cc86f5…"]
-/// }
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RootAttestation {
-    /// Hash algorithm of the checksums: always `SHA384` (Nitro PCRs).
-    pub hash_algorithm: String,
-    /// PCR0 of each accepted enclave image (the SHA-384 of its EIF), as lowercase hex.
-    pub pcr0: Vec<String>,
+/// The accepted enclave images, read from an allowlist file (see [`parse_image_allowlist`]).
+#[derive(Debug, Clone)]
+pub struct FileImageTrustStore {
+    /// PCR0 values (SHA-384 of the enclave image file) of the verified Nitro enclave images.
+    pub nitro_image_allowlist: Vec<Vec<u8>>,
 }
 
-/// Construction from a trust store.
-impl RootAttestation {
-    /// The accepted enclave images of `trust`.
-    pub fn from_trust_store(trust: &TrustStore) -> Self {
-        Self {
-            hash_algorithm: "SHA384".to_string(),
-            pcr0: trust
-                .nitro_image_allowlist
-                .iter()
-                .map(|pcr0| hex_encode(pcr0))
-                .collect(),
-        }
+/// Construction from allowlist text.
+impl FileImageTrustStore {
+    /// Parses allowlist `text` (one PCR0 per line).
+    pub fn parse(text: &str) -> Result<Self, String> {
+        Ok(Self {
+            nitro_image_allowlist: parse_image_allowlist(text)?,
+        })
+    }
+}
+
+/// The allowlist file built into this crate.
+impl ImageTrustStore for FileImageTrustStore {
+    /// The images of the built-in `nitro_image_allowlist.txt`.
+    fn builtin() -> Self {
+        Self::parse(NITRO_IMAGE_ALLOWLIST).expect("built-in nitro_image_allowlist.txt is invalid")
+    }
+
+    /// The parsed PCR0 values.
+    fn nitro_image_allowlist(&self) -> &[Vec<u8>] {
+        &self.nitro_image_allowlist
     }
 }
 
@@ -71,16 +70,16 @@ pub struct Root {
 
 /// Setup and serving.
 impl Root {
-    /// Wraps `server`, serving the built-in accepted images ([`TrustStore::builtin`]).
+    /// Wraps `server`, serving the built-in accepted images ([`FileImageTrustStore`]).
     pub fn new(server: Server) -> Self {
-        Self::with_trust_store(server, &TrustStore::builtin())
+        Self::with_image_trust_store(server, &FileImageTrustStore::builtin())
     }
 
-    /// Wraps `server`, serving the accepted images of `trust`.
-    pub fn with_trust_store(server: Server, trust: &TrustStore) -> Self {
+    /// Wraps `server`, serving the accepted images of `images`.
+    pub fn with_image_trust_store(server: Server, images: &dyn ImageTrustStore) -> Self {
         Self {
             server,
-            attestation: RootAttestation::from_trust_store(trust),
+            attestation: RootAttestation::from_image_trust_store(images),
         }
     }
 
@@ -113,9 +112,4 @@ async fn root_attestation(
     axum::extract::State(attestation): axum::extract::State<Arc<RootAttestation>>,
 ) -> Json<RootAttestation> {
     Json(attestation.as_ref().clone())
-}
-
-/// Formats `bytes` as lowercase hex.
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

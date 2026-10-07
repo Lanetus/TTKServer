@@ -10,8 +10,9 @@
 //!   root and must bind to the SHA-256 of the certificate's public key
 //! - Sending HTTP/3 requests and receiving responses using `h3` and `h3-quinn`
 
+use crate::images::LazyRootImages;
 pub use crate::verifier::nitro::AttestationDocument;
-use crate::verifier::{self, Policy, TrustStore, VerifiedEvidence};
+use crate::verifier::{self, ImageTrustStore, Policy, TrustStore, VerifiedEvidence};
 use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
 use bytes::Buf;
 use log::{debug, info};
@@ -40,7 +41,7 @@ use x509_parser::prelude::*;
 /// 1. the certificate itself: well-formed, within its validity period, correctly self-signed;
 /// 2. the evidence: vendor signature chain up to a root in the [`TrustStore`] (see
 ///    [`crate::verifier`]), that the TEE is not in debug mode, and for Nitro that the enclave
-///    image's PCR0 is in [`TrustStore::nitro_image_allowlist`];
+///    image's PCR0 is in [`ImageTrustStore::nitro_image_allowlist`];
 /// 3. the binding: the evidence's report data equals the SHA-256 of the certificate's
 ///    SubjectPublicKeyInfo;
 /// 4. any expected measurements configured with
@@ -56,13 +57,16 @@ pub struct EnclaveCertVerifier {
     expected_measurements: BTreeMap<String, Vec<u8>>,
     policy: Policy,
     trust: Arc<TrustStore>,
+    images: Option<Arc<dyn ImageTrustStore>>,
     algorithms: WebPkiSupportedAlgorithms,
 }
 
 /// Construction, policy configuration and inspection of the verifier.
 impl EnclaveCertVerifier {
     /// Creates a strict verifier: only genuine, vendor-signed evidence from a non-debug TEE is
-    /// accepted, checked against the built-in vendor roots.
+    /// accepted, checked against the built-in vendor roots and the accepted images published by
+    /// the root servers ([`RootImageTrustStore`](crate::RootImageTrustStore), fetched on first
+    /// need).
     pub fn new() -> Self {
         Self {
             received_cert: Arc::new(Mutex::new(None)),
@@ -70,6 +74,7 @@ impl EnclaveCertVerifier {
             expected_measurements: BTreeMap::new(),
             policy: Policy::default(),
             trust: Arc::new(TrustStore::builtin()),
+            images: None,
             algorithms: rustls::crypto::ring::default_provider().signature_verification_algorithms,
         }
     }
@@ -96,6 +101,19 @@ impl EnclaveCertVerifier {
     /// Replaces the built-in vendor roots, e.g. for testing or private deployments.
     pub fn with_trust_store(mut self, trust: TrustStore) -> Self {
         self.trust = Arc::new(trust);
+        self
+    }
+
+    /// Replaces the accepted enclave images fetched from the root servers, e.g. with a list
+    /// fetched once at startup, for testing or for private deployments.
+    pub fn with_image_trust_store(mut self, images: impl ImageTrustStore + 'static) -> Self {
+        self.images = Some(Arc::new(images));
+        self
+    }
+
+    /// Like [`with_image_trust_store`](Self::with_image_trust_store), sharing `images`.
+    pub fn with_shared_image_trust_store(mut self, images: Arc<dyn ImageTrustStore>) -> Self {
+        self.images = Some(images);
         self
     }
 
@@ -159,8 +177,13 @@ impl EnclaveCertVerifier {
         let eat_bytes = extract_attestation_doc(end_entity.as_ref())
             .map_err(|e| format!("missing attestation extension: {e}"))?;
         let binding = Sha256::digest(cert.public_key().raw);
+        let lazy_images = LazyRootImages::default();
+        let images: &dyn ImageTrustStore = match &self.images {
+            Some(images) => images.as_ref(),
+            None => &lazy_images,
+        };
         let evidence =
-            verifier::verify_evidence(&eat_bytes, &binding, now, &self.trust, self.policy)?;
+            verifier::verify_evidence(&eat_bytes, &binding, now, &self.trust, images, self.policy)?;
 
         // 4. Reference values
         for (name, expected) in &self.expected_measurements {

@@ -17,6 +17,7 @@ ttk-ra-server = { path = "crates/ra-server", version = "2.9.0", default-features
 ttk-ra-client = { path = "crates/ra-client", version = "2.9.0" }
 ttk-relay = { path = "crates/relay", version = "2.9.0" }
 ttk-terminal = { path = "crates/terminal", version = "2.9.0" }
+ttk-root = { path = "crates/root", version = "2.9.0" }
 
 aws-nitro-enclaves-nsm-api = "0.4"
 axum = "0.8.9"

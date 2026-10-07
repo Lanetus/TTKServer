@@ -22,11 +22,13 @@ use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::time::Duration;
+use ttk_ra_client::trust::RootSignerTrustStore;
 use ttk_ra_client::verifier::sev_snp::{AmdProduct, AmdRoots};
 use ttk_ra_client::verifier::{
-    dcap, is_bound_to, nitro, sev_snp, submod, verify_evidence, Policy, TeeKind, TrustStore,
+    dcap, is_bound_to, nitro, sev_snp, submod, verify_evidence, ImageTrustStore, Policy, TeeKind,
+    TrustStore,
 };
-use ttk_ra_client::EnclaveCertVerifier;
+use ttk_ra_client::{EnclaveCertVerifier, RootImageTrustStore};
 use ttk_ra_server::attestation::eat::EatClaimsSet;
 use ttk_ra_server::server::create_cert_with_attestation;
 use x509_parser::prelude::*;
@@ -427,8 +429,15 @@ fn synthetic_evidence_verifies_for_every_hardware_tee() {
     ];
     for (label, tee, value, measurement) in cases {
         let eat = eat_with(vec![(label, value)]);
-        let evidence = verify_evidence(&eat, &binding, UnixTime::now(), &trust, Policy::default())
-            .unwrap_or_else(|e| panic!("{tee}: {e}"));
+        let evidence = verify_evidence(
+            &eat,
+            &binding,
+            UnixTime::now(),
+            &trust,
+            &RootImageTrustStore::default(),
+            Policy::default(),
+        )
+        .unwrap_or_else(|e| panic!("{tee}: {e}"));
         assert_eq!(evidence.tee, tee);
         assert!(evidence.measurements[measurement].iter().all(|b| *b == 7));
         assert!(!evidence.debug);
@@ -466,15 +475,30 @@ fn debug_mode_is_rejected_unless_allowed() {
     ];
     for (label, value) in cases {
         let eat = eat_with(vec![(label, value)]);
-        let err = verify_evidence(&eat, &binding, UnixTime::now(), &trust, Policy::default())
-            .unwrap_err();
+        let err = verify_evidence(
+            &eat,
+            &binding,
+            UnixTime::now(),
+            &trust,
+            &RootImageTrustStore::default(),
+            Policy::default(),
+        )
+        .unwrap_err();
         assert!(err.contains("debug-mode"), "{label}: {err}");
 
         let relaxed = Policy {
             allow_debug: true,
             ..Policy::default()
         };
-        let evidence = verify_evidence(&eat, &binding, UnixTime::now(), &trust, relaxed).unwrap();
+        let evidence = verify_evidence(
+            &eat,
+            &binding,
+            UnixTime::now(),
+            &trust,
+            &RootImageTrustStore::default(),
+            relaxed,
+        )
+        .unwrap();
         assert!(evidence.debug, "{label}");
     }
 }
@@ -492,6 +516,7 @@ fn evidence_bound_to_other_data_is_rejected() {
         &[0x43; 32],
         UnixTime::now(),
         &trust,
+        &RootImageTrustStore::default(),
         Policy::default(),
     )
     .unwrap_err();
@@ -504,14 +529,30 @@ fn eat_must_carry_exactly_one_supported_tee() {
     let now = UnixTime::now();
 
     let none = eat_with(vec![("other", Value::Bytes(vec![1]))]);
-    let err = verify_evidence(&none, &[0; 32], now, &trust, Policy::default()).unwrap_err();
+    let err = verify_evidence(
+        &none,
+        &[0; 32],
+        now,
+        &trust,
+        &RootImageTrustStore::default(),
+        Policy::default(),
+    )
+    .unwrap_err();
     assert!(err.contains("no supported TEE evidence"), "{err}");
 
     let two = eat_with(vec![
         (submod::TDX, Value::Bytes(vec![1])),
         (submod::SGX, Value::Bytes(vec![1])),
     ]);
-    let err = verify_evidence(&two, &[0; 32], now, &trust, Policy::default()).unwrap_err();
+    let err = verify_evidence(
+        &two,
+        &[0; 32],
+        now,
+        &trust,
+        &RootImageTrustStore::default(),
+        Policy::default(),
+    )
+    .unwrap_err();
     assert!(err.contains("more than one TEE"), "{err}");
 }
 
@@ -622,12 +663,18 @@ fn build_nitro_doc(pki: &NitroPki, pcr0: Vec<u8>) -> Vec<u8> {
     out
 }
 
-/// A trust store rooted at the test Nitro PKI, allowing only [`LISTED_PCR0`].
+/// A trust store rooted at the test Nitro PKI.
 fn nitro_trust(pki: &NitroPki) -> TrustStore {
     TrustStore {
         aws_nitro_root: pki.root.clone(),
-        nitro_image_allowlist: nitro::parse_image_allowlist(LISTED_PCR0).unwrap(),
         ..TrustStore::builtin()
+    }
+}
+
+/// An image trust store allowing only [`LISTED_PCR0`].
+fn nitro_images() -> RootImageTrustStore {
+    RootImageTrustStore {
+        nitro_image_allowlist: nitro::parse_image_allowlist(LISTED_PCR0).unwrap(),
     }
 }
 
@@ -636,8 +683,10 @@ fn listed_pcr0() -> Vec<u8> {
 }
 
 #[test]
-fn builtin_nitro_image_allowlist_is_valid_and_not_empty() {
-    assert!(!TrustStore::builtin().nitro_image_allowlist.is_empty());
+fn builtin_root_signer_pcr8_allowlist_is_valid() {
+    let store = RootSignerTrustStore::builtin();
+    assert_eq!(store.nitro_pcr_index(), 8);
+    assert_eq!(store.nitro_image_allowlist(), store.pcr8_allowlist);
 }
 
 #[test]
@@ -665,8 +714,14 @@ fn nitro_image_allowlist_rejects_malformed_entries() {
 fn nitro_evidence_from_a_listed_image_is_accepted() {
     let pki = nitro_pki();
     let doc = build_nitro_doc(&pki, listed_pcr0());
-    let evidence = nitro::verify(&doc, UnixTime::now(), &nitro_trust(&pki), Policy::default())
-        .expect("a listed image should verify");
+    let evidence = nitro::verify(
+        &doc,
+        UnixTime::now(),
+        &nitro_trust(&pki),
+        &nitro_images(),
+        Policy::default(),
+    )
+    .expect("a listed image should verify");
     assert_eq!(evidence.tee, TeeKind::AwsNitro);
     assert_eq!(evidence.measurements["pcr0"], listed_pcr0());
     assert!(!evidence.debug);
@@ -678,8 +733,14 @@ fn nitro_evidence_from_an_unlisted_image_is_rejected() {
     let mut pcr0 = listed_pcr0();
     pcr0[0] ^= 1;
     let doc = build_nitro_doc(&pki, pcr0);
-    let err =
-        nitro::verify(&doc, UnixTime::now(), &nitro_trust(&pki), Policy::default()).unwrap_err();
+    let err = nitro::verify(
+        &doc,
+        UnixTime::now(),
+        &nitro_trust(&pki),
+        &nitro_images(),
+        Policy::default(),
+    )
+    .unwrap_err();
     assert!(err.contains("not in the list of verified images"), "{err}");
 }
 
@@ -688,14 +749,59 @@ fn nitro_debug_evidence_is_left_to_the_debug_policy() {
     let pki = nitro_pki();
     let doc = build_nitro_doc(&pki, vec![0; 48]);
     let trust = nitro_trust(&pki);
-    let evidence = nitro::verify(&doc, UnixTime::now(), &trust, Policy::default())
-        .expect("debug images cannot be identified, so the allowlist does not apply");
+    let evidence = nitro::verify(
+        &doc,
+        UnixTime::now(),
+        &trust,
+        &nitro_images(),
+        Policy::default(),
+    )
+    .expect("debug images cannot be identified, so the allowlist does not apply");
     assert!(evidence.debug);
 
     let eat = eat_with(vec![(submod::AWS_NITRO, Value::Bytes(doc))]);
-    let err =
-        verify_evidence(&eat, &[7; 32], UnixTime::now(), &trust, Policy::default()).unwrap_err();
+    let err = verify_evidence(
+        &eat,
+        &[7; 32],
+        UnixTime::now(),
+        &trust,
+        &nitro_images(),
+        Policy::default(),
+    )
+    .unwrap_err();
     assert!(err.contains("debug-mode TEE"), "{err}");
+}
+
+#[test]
+fn root_signer_store_checks_pcr8_instead_of_pcr0() {
+    let pki = nitro_pki();
+    let mut pcr0 = listed_pcr0();
+    pcr0[0] ^= 1;
+    // `build_nitro_doc` sets PCR8 to 48 bytes of 8.
+    let doc = build_nitro_doc(&pki, pcr0);
+    let signer = |pcr8: Vec<u8>| RootSignerTrustStore {
+        pcr8_allowlist: vec![pcr8],
+    };
+
+    let trust = nitro_trust(&pki);
+    nitro::verify(
+        &doc,
+        UnixTime::now(),
+        &trust,
+        &signer(vec![8; 48]),
+        Policy::default(),
+    )
+    .expect("a pinned PCR8 should verify whatever the PCR0");
+    let err = nitro::verify(
+        &doc,
+        UnixTime::now(),
+        &trust,
+        &signer(vec![9; 48]),
+        Policy::default(),
+    )
+    .unwrap_err();
+    assert!(err.contains("PCR8"), "{err}");
+    assert!(err.contains("not in the list of verified images"), "{err}");
 }
 
 // ---------------------------------------------------------------------------

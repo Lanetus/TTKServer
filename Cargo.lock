@@ -2432,6 +2432,7 @@ dependencies = [
  "env_logger",
  "log",
  "quinn",
+ "serde",
  "tokio",
  "tokio-vsock",
 ]
@@ -2466,6 +2467,7 @@ dependencies = [
  "ttk-core",
  "ttk-ra-server",
  "ttk-relay",
+ "ttk-root",
  "ttk-terminal",
  "x509-parser",
 ]
@@ -2521,10 +2523,9 @@ dependencies = [
  "quinn",
  "rustls",
  "rustls-pki-types",
- "serde",
  "serde_json",
  "tokio",
- "ttk-ra-client",
+ "ttk-core",
  "ttk-ra-server",
 ]
 
