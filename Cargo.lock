@@ -2620,7 +2620,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-client"
-version = "2.7.0"
+version = "2.7.1"
 dependencies = [
  "aws-nitro-enclaves-nsm-api",
  "axum",
@@ -2654,7 +2654,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-core"
-version = "2.7.0"
+version = "2.7.1"
 dependencies = [
  "aws-nitro-enclaves-nsm-api",
  "axum",
@@ -2679,7 +2679,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-relay"
-version = "2.7.0"
+version = "2.7.1"
 dependencies = [
  "axum",
  "bytes 1.12.1",
@@ -2695,7 +2695,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-root"
-version = "2.7.0"
+version = "2.7.1"
 dependencies = [
  "axum",
  "env_logger",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-terminal"
-version = "2.7.0"
+version = "2.7.1"
 dependencies = [
  "axum",
  "env_logger",
