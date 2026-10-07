@@ -1,6 +1,6 @@
 [package]
 name = "ttk-core"
-description = "TTKServer core: the EAT data model, RA-TLS constants, egress policy and vsock transport shared by the attested server and its client, plus the parent-instance vsock proxy"
+description = "TTKServer core: the CMW evidence wrapper, RA-TLS constants, egress policy and vsock transport shared by the attested server and its client, plus the parent-instance vsock proxy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

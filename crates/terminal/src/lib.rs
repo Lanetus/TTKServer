@@ -4,7 +4,7 @@
 //! | Route               | Response                                                        |
 //! |---------------------|-----------------------------------------------------------------|
 //! | `GET /`             | Greeting text (from [`ttk_ra_server`])                               |
-//! | `GET /evidence.eat` | Base64-encoded EAT carrying this node's Evidence (from [`ttk_ra_server`]) |
+//! | `GET /evidence.cmw` | Base64-encoded CMW carrying this node's Evidence (from [`ttk_ra_server`]) |
 //! | `POST /faf`         | Receives a [`FafRequest`], decrypts its message and answers `hello:<message>`, encrypted |
 //!
 //! A terminal never forwards: it accepts only requests with no relays left, and is the only node

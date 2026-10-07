@@ -8,7 +8,7 @@
 //! - **Endorsements**: the AWS Nitro certificate chain embedded in the Attestation
 //!   Document, rooted at the AWS Nitro Enclaves root certificate.
 //! - **Verifier** / **Relying Party**: the external client fetching Evidence as an
-//!   RFC 9711 EAT over `/evidence.eat` (or from the RA-TLS certificate), or fresh Evidence
+//!   CMW over `/evidence.cmw` (or from the RA-TLS certificate), or fresh Evidence
 //!   carrying its nonce over `POST /evidence`. Appraisal against
 //!   Reference Values (expected PCR measurements) and issuance of an Attestation Result
 //!   happen outside this server.
@@ -329,20 +329,13 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
 
     let provider: Arc<dyn AttestationProvider> = attestation::detect()?.into();
     info!("Using attestation provider: {}", provider.name());
-    let eat_bytes = provider
+    let cmw_bytes = provider
         .generate_document(&key_binding(&key_pair.public_key_der()))?
-        .to_cbor_bytes()
-        .map_err(|e| e.to_string())?;
-    info!(
-        "Wrapped Attestation Document as RFC 9711 EAT token ({} bytes).",
-        eat_bytes.len()
-    );
+        .to_cbor_bytes();
+    info!("Wrapped Evidence as a CMW ({} bytes).", cmw_bytes.len());
 
-    let tls_config = build_tls_config(&key_pair, &eat_bytes)?;
-    let evidence = Arc::new(Evidence {
-        nitro: eat_bytes.clone(),
-        eat: eat_bytes,
-    });
+    let tls_config = build_tls_config(&key_pair, &cmw_bytes)?;
+    let evidence = Arc::new(Evidence { cmw: cmw_bytes });
 
     let mut quic_config = ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?,
@@ -377,12 +370,12 @@ fn transport_config() -> TransportConfig {
     transport
 }
 
-/// Builds the rustls config using a self-signed RA-TLS certificate carrying `eat_bytes`.
+/// Builds the rustls config using a self-signed RA-TLS certificate carrying `cmw_bytes`.
 fn build_tls_config(
     key_pair: &KeyPair,
-    eat_bytes: &[u8],
+    cmw_bytes: &[u8],
 ) -> Result<rustls::ServerConfig, BoxError> {
-    let cert_pem = create_cert_with_attestation(key_pair, "enclave.internal", eat_bytes, 30)?;
+    let cert_pem = create_cert_with_attestation(key_pair, "enclave.internal", cmw_bytes, 30)?;
     let key_pem = key_pair.serialize_pem();
 
     let certs =

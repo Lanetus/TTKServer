@@ -55,7 +55,7 @@ mod attestation_verification {
     use ttk_ra_client::EnclaveCertVerifier;
     use ttk_ra_server::attestation::by_name;
     use ttk_ra_server::attestation::nitro_doc::{
-        create_mock_attestation_document, parse_attestation_document, wrap_as_eat,
+        create_mock_attestation_document, parse_attestation_document, wrap_as_cmw,
     };
     use ttk_ra_server::server::create_cert_with_attestation;
     use ttk_ra_server::AttestationParams;
@@ -66,13 +66,12 @@ mod attestation_verification {
             user_data: Some(Sha256::digest(bound_key.public_key_der()).to_vec()),
             ..Default::default()
         };
-        let eat = by_name("mock")
+        let cmw = by_name("mock")
             .unwrap()
             .generate_document(&params)
             .unwrap()
-            .to_cbor_bytes()
-            .unwrap();
-        let pem = create_cert_with_attestation(cert_key, "enclave.internal", &eat, 1).unwrap();
+            .to_cbor_bytes();
+        let pem = create_cert_with_attestation(cert_key, "enclave.internal", &cmw, 1).unwrap();
         CertificateDer::from_pem_slice(pem.as_bytes()).unwrap()
     }
 
@@ -137,8 +136,8 @@ mod attestation_verification {
         let mut doc = create_mock_attestation_document(&params).unwrap();
         let last = doc.len() - 1;
         doc[last] ^= 1; // last byte of the COSE signature
-        let eat = wrap_as_eat(&doc).unwrap().to_cbor_bytes().unwrap();
-        let pem = create_cert_with_attestation(&key, "enclave.internal", &eat, 1).unwrap();
+        let cmw = wrap_as_cmw(doc).to_cbor_bytes();
+        let pem = create_cert_with_attestation(&key, "enclave.internal", &cmw, 1).unwrap();
         let cert = CertificateDer::from_pem_slice(pem.as_bytes()).unwrap();
 
         let err = verify(&EnclaveCertVerifier::new().allow_mock(), &cert).unwrap_err();
@@ -265,13 +264,12 @@ mod tls_handshake {
             user_data: Some(Sha256::digest(key.public_key_der()).to_vec()),
             ..Default::default()
         };
-        let eat = by_name("mock")
+        let cmw = by_name("mock")
             .unwrap()
             .generate_document(&params)
             .unwrap()
-            .to_cbor_bytes()
-            .unwrap();
-        let pem = create_cert_with_attestation(&key, "enclave.internal", &eat, 1).unwrap();
+            .to_cbor_bytes();
+        let pem = create_cert_with_attestation(&key, "enclave.internal", &cmw, 1).unwrap();
         let cert = CertificateDer::from_pem_slice(pem.as_bytes()).unwrap();
         let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
 

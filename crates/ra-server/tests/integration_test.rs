@@ -119,10 +119,10 @@ async fn test_handle_request_not_found() {
 }
 
 #[test]
-fn test_ttk_ra_server_nitro_and_eat_integration() {
+fn test_ttk_ra_server_nitro_and_cmw_integration() {
     use sha2::{Digest as ShaDigest, Sha256};
     use ttk_ra_server::attestation::nitro_doc::{
-        create_mock_attestation_document, parse_attestation_document, wrap_as_eat,
+        create_mock_attestation_document, parse_attestation_document, wrap_as_cmw,
     };
     use ttk_ra_server::AttestationParams;
 
@@ -147,17 +147,13 @@ fn test_ttk_ra_server_nitro_and_eat_integration() {
         Some(expected_cert_hash.as_slice())
     );
 
-    // 4. Wrap as RFC 9711 EAT token
-    let eat_claims = wrap_as_eat(&nitro_doc).expect("Should wrap nitro document as EAT claims");
-    let eat_token = eat_claims
-        .to_cbor_bytes()
-        .expect("Should wrap nitro document as EAT token");
-    assert!(!eat_token.is_empty());
+    // 4. Wrap as a CMW record
+    let cmw = wrap_as_cmw(nitro_doc);
+    let cmw_bytes = cmw.to_cbor_bytes();
+    assert!(!cmw_bytes.is_empty());
 
-    // 5. Test round-trip deserialization from bytes to EatClaimsSet
-    let deserialized = ttk_ra_server::attestation::eat::EatClaimsSet::from_cbor_bytes(&eat_token)
-        .expect("Should deserialize EatClaimsSet from CBOR bytes");
-    assert_eq!(deserialized.iat, eat_claims.iat);
-    assert_eq!(deserialized.ueid, eat_claims.ueid);
-    assert_eq!(deserialized.eat_profile, eat_claims.eat_profile);
+    // 5. Round-trip from CBOR bytes
+    let deserialized = ttk_ra_server::Cmw::from_cbor_bytes(&cmw_bytes)
+        .expect("Should deserialize the CMW from CBOR bytes");
+    assert_eq!(deserialized, cmw);
 }

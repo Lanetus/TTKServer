@@ -10,19 +10,19 @@
 //! `TTK_SEV_SNP_VCEK` to a VCEK certificate (DER or PEM) fetched from the AMD Key Distribution
 //! Service for this chip and TCB.
 //!
-//! The report and VCEK are embedded in the EAT under the `sev_snp` submodule as
-//! `{"report": bstr, "vcek": bstr}`, where the client's
+//! The report and VCEK are wrapped as a CMW collection of type
+//! `media_type::SEV_SNP_COLLECTION` (`{"report": Evidence record, "vcek": Endorsement record}`),
+//! which the client's
 //! `ttk_ra_client::verifier::sev_snp` verifies them.
 
-use super::submod;
+use super::cmw::{self, CmwCollection, CmwRecord};
+use super::media_type;
 use super::tsm::{self, TsmRoot};
 use super::{AttestationError, AttestationProvider};
-use crate::{AttestationParams, EatClaimsSet};
-use ciborium::Value;
+use crate::{AttestationParams, Cmw};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::CertificateDer;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use super::tsm::{report_data, CONFIGFS_TSM_REPORT, REPORT_DATA_LEN};
 
@@ -34,10 +34,6 @@ const TSM_PROVIDER_SEV: &str = "sev_guest";
 
 /// Environment variable naming a VCEK certificate file, used when the host supplies none.
 pub const VCEK_ENV: &str = "TTK_SEV_SNP_VCEK";
-
-/// Private EAT profile identifier (RFC 4151 tag URI) for an SEV-SNP report nested in an EAT.
-/// Not IANA-registered.
-const EAT_PROFILE: &str = "tag:lanetus.github.io,2026:sev-snp-nested-eat";
 
 /// `ATTESTATION_REPORT` layout (SEV-SNP ABI specification).
 const REPORT_LEN: usize = 0x4A0;
@@ -130,13 +126,10 @@ impl AttestationProvider for SevSnpSession {
     }
 
     /// Obtains an SEV-SNP report binding `params.user_data` and wraps it with its VCEK as an
-    /// EAT claims-set.
-    fn generate_document(
-        &self,
-        params: &AttestationParams,
-    ) -> Result<EatClaimsSet, AttestationError> {
+    /// CMW.
+    fn generate_document(&self, params: &AttestationParams) -> Result<Cmw, AttestationError> {
         let evidence = self.get_evidence(&report_data(params)?)?;
-        Ok(wrap_evidence_as_eat(&evidence))
+        Ok(wrap_evidence_as_cmw(evidence))
     }
 }
 
@@ -267,31 +260,24 @@ fn parse_certificate(bytes: &[u8]) -> Result<Vec<u8>, AttestationError> {
     Ok(der)
 }
 
-/// Wraps SEV-SNP `evidence` as an RFC 9711 EAT claims-set, nested under the `sev_snp` submodule
-/// as `{"report": bstr, "vcek": bstr}`.
-///
-/// Trust comes from the nested report; `iat` is the local time the report was obtained.
-pub fn wrap_evidence_as_eat(evidence: &SevSnpEvidence) -> EatClaimsSet {
-    let iat = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or_default();
-    EatClaimsSet {
-        iat: Some(iat),
-        eat_profile: Some(EAT_PROFILE.to_string()),
-        submods: Some(Value::Map(vec![(
-            Value::Text(submod::SEV_SNP.to_string()),
-            Value::Map(vec![
-                (
-                    Value::Text("report".into()),
-                    Value::Bytes(evidence.report.clone()),
-                ),
-                (
-                    Value::Text("vcek".into()),
-                    Value::Bytes(evidence.vcek.clone()),
-                ),
-            ]),
-        )])),
-        ..EatClaimsSet::default()
-    }
+/// Wraps SEV-SNP `evidence` as a CMW collection of type [`media_type::SEV_SNP_COLLECTION`]:
+/// the report as an Evidence record, the VCEK as an Endorsement record.
+pub fn wrap_evidence_as_cmw(evidence: SevSnpEvidence) -> Cmw {
+    Cmw::Collection(CmwCollection {
+        collection_type: Some(media_type::SEV_SNP_COLLECTION.to_string()),
+        entries: vec![
+            (
+                media_type::SEV_SNP_REPORT_LABEL.to_string(),
+                Cmw::evidence(media_type::SEV_SNP_REPORT, evidence.report),
+            ),
+            (
+                media_type::SEV_SNP_VCEK_LABEL.to_string(),
+                Cmw::Record(CmwRecord::new(
+                    media_type::PKIX_CERT,
+                    evidence.vcek,
+                    cmw::ind::ENDORSEMENTS,
+                )),
+            ),
+        ],
+    })
 }

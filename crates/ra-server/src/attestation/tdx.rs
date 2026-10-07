@@ -5,16 +5,14 @@
 //! signed by the platform's Quoting Enclave; the kernel fetches it from the host's Quote
 //! Generation Service.
 //!
-//! The quote is embedded in the EAT under the `tdx` submodule, where the client's
+//! The quote is wrapped as a CMW record of type `media_type::TDX`, which the client's
 //! `ttk_ra_client::verifier::dcap` verifies it.
 
-use super::submod;
+use super::media_type;
 use super::tsm::{self, TsmRoot};
 use super::{AttestationError, AttestationProvider};
-use crate::{AttestationParams, EatClaimsSet};
-use ciborium::Value;
+use crate::{AttestationParams, Cmw};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use super::tsm::{report_data, CONFIGFS_TSM_REPORT, REPORT_DATA_LEN};
 
@@ -23,10 +21,6 @@ const DEVICE: &str = "/dev/tdx_guest";
 
 /// Value of an entry's `provider` attribute when the TDX guest driver serves it.
 const TSM_PROVIDER_TDX: &str = "tdx_guest";
-
-/// Private EAT profile identifier (RFC 4151 tag URI) for a TDX quote nested in an EAT.
-/// Not IANA-registered.
-const EAT_PROFILE: &str = "tag:lanetus.github.io,2026:tdx-nested-eat";
 
 /// Quote layout offsets (Intel TDX DCAP Quoting Library API, quote v4/v5).
 const QUOTE_HEADER_LEN: usize = 48;
@@ -79,13 +73,10 @@ impl AttestationProvider for TdxSession {
         Path::new(DEVICE).exists()
     }
 
-    /// Obtains a TDX quote binding `params.user_data` and wraps it as an EAT claims-set.
-    fn generate_document(
-        &self,
-        params: &AttestationParams,
-    ) -> Result<EatClaimsSet, AttestationError> {
+    /// Obtains a TDX quote binding `params.user_data` and wraps it as a CMW.
+    fn generate_document(&self, params: &AttestationParams) -> Result<Cmw, AttestationError> {
         let quote = self.get_quote(&report_data(params)?)?;
-        Ok(wrap_quote_as_eat(&quote))
+        Ok(wrap_quote_as_cmw(quote))
     }
 }
 
@@ -134,25 +125,8 @@ fn check_quote(quote: &[u8], report_data: &[u8; REPORT_DATA_LEN]) -> Result<(), 
     Ok(())
 }
 
-/// Wraps a raw TDX `quote` as an RFC 9711 EAT claims-set, nested under the `tdx` submodule.
-///
-/// Trust comes from the nested quote; `iat` is the local time the quote was obtained.
-pub fn wrap_quote_as_eat(quote: &[u8]) -> EatClaimsSet {
-    EatClaimsSet {
-        iat: Some(unix_now()),
-        eat_profile: Some(EAT_PROFILE.to_string()),
-        submods: Some(Value::Map(vec![(
-            Value::Text(submod::TDX.to_string()),
-            Value::Bytes(quote.to_vec()),
-        )])),
-        ..EatClaimsSet::default()
-    }
-}
-
-/// Current Unix time in seconds.
-fn unix_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or_default()
+/// Wraps a raw TDX `quote` verbatim as a CMW Evidence record of type
+/// [`media_type::TDX`].
+pub fn wrap_quote_as_cmw(quote: Vec<u8>) -> Cmw {
+    Cmw::evidence(media_type::TDX, quote)
 }

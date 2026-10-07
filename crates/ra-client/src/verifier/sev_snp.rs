@@ -1,16 +1,15 @@
 //! AMD SEV-SNP evidence: an attestation report signed by the chip's VCEK, whose certificate
 //! chains through the ASK to the AMD Root Key (ARK) of the processor family.
 //!
-//! The evidence is a CBOR map `{"report": bstr, "vcek": bstr}` holding the raw 1184-byte
-//! report (SEV-SNP ABI spec, `ATTESTATION_REPORT`) and the DER-encoded VCEK certificate as
-//! served by the AMD Key Distribution Service. The ARK and ASK are pinned in the trust store.
+//! The evidence is the raw 1184-byte report (SEV-SNP ABI spec, `ATTESTATION_REPORT`) and the
+//! DER-encoded VCEK certificate as served by the AMD Key Distribution Service, carried as the
+//! `report` and `vcek` records of a CMW collection (see [`super::media_type`]). The ARK and ASK are pinned in the trust store.
 //!
 //! Checks: ARK → ASK → VCEK chain (RSA-PSS), VCEK validity period, VCEK `hwID` and TCB
 //! extensions match the report, and the report's ECDSA P-384 signature. VLEK-signed reports
 //! and VCEK revocation (CRL) checks are not supported.
 
 use super::{field, le_u64, verify_ecdsa, TeeKind, TrustStore, VerifiedEvidence};
-use ciborium::Value;
 use rustls_pki_types::UnixTime;
 use std::collections::BTreeMap;
 use x509_parser::prelude::*;
@@ -50,15 +49,13 @@ const OID_HW_ID: &str = "1.3.6.1.4.1.3704.1.4";
 /// AMD processor families and their pinned roots (defined in [`crate::trust`]).
 pub use crate::trust::{AmdProduct, AmdRoots};
 
-/// Verifies SEV-SNP `evidence` (a `{report, vcek}` map) at time `now`.
+/// Verifies the SEV-SNP `report` and its DER `vcek_der` certificate at time `now`.
 pub fn verify(
-    evidence: &Value,
+    report: &[u8],
+    vcek_der: &[u8],
     now: UnixTime,
     trust: &TrustStore,
 ) -> Result<VerifiedEvidence, String> {
-    let report = map_bytes(evidence, "report")?;
-    let vcek_der = map_bytes(evidence, "vcek")?;
-
     if report.len() != REPORT_LEN {
         return Err(format!(
             "SEV-SNP report is {} bytes, expected {REPORT_LEN}",
@@ -107,18 +104,6 @@ pub fn verify(
         debug: le_u64(report, OFFSET_POLICY) & POLICY_DEBUG != 0,
         nitro: None,
     })
-}
-
-/// Returns the byte string stored under `key` in the evidence map.
-fn map_bytes<'a>(evidence: &'a Value, key: &str) -> Result<&'a [u8], String> {
-    evidence
-        .as_map()
-        .ok_or("SEV-SNP evidence is not a map")?
-        .iter()
-        .find(|(k, _)| k.as_text() == Some(key))
-        .and_then(|(_, v)| v.as_bytes())
-        .map(Vec::as_slice)
-        .ok_or_else(|| format!("SEV-SNP evidence has no '{key}' byte string"))
 }
 
 /// Reads a little-endian `u32` at `offset`. Callers check the buffer length.

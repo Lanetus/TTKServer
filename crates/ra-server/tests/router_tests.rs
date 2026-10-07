@@ -5,18 +5,14 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ciborium::Value;
 use tower_service::Service;
-use ttk_ra_server::attestation::{self, nitro_doc::parse_attestation_document, submod};
+use ttk_ra_server::attestation::{self, media_type, nitro_doc::parse_attestation_document};
 use ttk_ra_server::router::{build_router, Evidence, MAX_NONCE_LEN};
-use ttk_ra_server::EatClaimsSet;
+use ttk_ra_server::Cmw;
 
 /// A router over the mock provider.
 fn router() -> Router {
-    let evidence = Evidence {
-        nitro: Vec::new(),
-        eat: Vec::new(),
-    };
+    let evidence = Evidence { cmw: Vec::new() };
     build_router(
         &evidence,
         attestation::by_name("mock").unwrap().into(),
@@ -41,16 +37,12 @@ async fn evidence_carries_the_nonce() {
     let (status, body) = post_evidence(nonce.clone()).await;
     assert_eq!(status, StatusCode::OK);
 
-    let eat = EatClaimsSet::from_cbor_bytes(&STANDARD.decode(body).unwrap()).unwrap();
-    let Some(Value::Map(submods)) = eat.submods else {
-        panic!("EAT has no submods map");
+    let cmw = Cmw::from_cbor_bytes(&STANDARD.decode(body).unwrap()).unwrap();
+    let Cmw::Record(record) = cmw else {
+        panic!("Nitro evidence should be a CMW record");
     };
-    let doc = submods
-        .iter()
-        .find(|(k, _)| k.as_text() == Some(submod::AWS_NITRO))
-        .and_then(|(_, v)| v.as_bytes())
-        .expect("no Nitro submodule");
-    let doc = parse_attestation_document(doc).unwrap();
+    assert_eq!(record.media_type(), Some(media_type::AWS_NITRO));
+    let doc = parse_attestation_document(&record.value).unwrap();
     assert_eq!(doc.nonce.unwrap().to_vec(), nonce);
     assert!(doc.user_data.is_none());
 }

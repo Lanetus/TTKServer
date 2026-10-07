@@ -12,7 +12,7 @@ use std::time::Duration;
 use ttk_ra_client::verifier::{verify_evidence, Policy, TeeKind, TrustStore};
 use ttk_ra_client::RootImageTrustStore;
 use ttk_ra_server::attestation::sev_snp::{
-    evidence_from_entry, report_data, vcek_from_cert_table, wrap_evidence_as_eat, SevSnpSession,
+    evidence_from_entry, report_data, vcek_from_cert_table, wrap_evidence_as_cmw, SevSnpSession,
     REPORT_DATA_LEN,
 };
 use ttk_ra_server::attestation::AttestationError;
@@ -235,23 +235,23 @@ fn report_data_is_user_data_zero_padded() {
 }
 
 #[test]
-fn provider_eat_is_accepted_by_the_client_verifier() {
+fn provider_cmw_is_accepted_by_the_client_verifier() {
     let table = cert_table(&[(le(VCEK_GUID), MILAN_VCEK)]);
     let entry = fake_entry("sev_guest", MILAN_REPORT, &table);
     let evidence = evidence_from_entry(&entry.0, &milan_report_data(), None).unwrap();
-    let eat = wrap_evidence_as_eat(&evidence).to_cbor_bytes().unwrap();
+    let cmw = wrap_evidence_as_cmw(evidence).to_cbor_bytes();
 
     // 2026-01-01: inside the VCEK's validity period.
     let now = UnixTime::since_unix_epoch(Duration::from_secs(1_767_225_600));
     let verified = verify_evidence(
-        &eat,
+        &cmw,
         &milan_report_data(),
         now,
         &TrustStore::builtin(),
         &RootImageTrustStore::default(),
         Policy::default(),
     )
-    .expect("the verifier should accept the provider's EAT with the real AMD roots");
+    .expect("the verifier should accept the provider's CMW with the real AMD roots");
     assert_eq!(verified.tee, TeeKind::SevSnp);
 }
 

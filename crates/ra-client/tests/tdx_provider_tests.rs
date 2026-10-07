@@ -11,7 +11,7 @@ use std::time::Duration;
 use ttk_ra_client::verifier::{verify_evidence, Policy, TeeKind, TrustStore};
 use ttk_ra_client::RootImageTrustStore;
 use ttk_ra_server::attestation::tdx::{
-    quote_from_entry, report_data, wrap_quote_as_eat, TdxSession, REPORT_DATA_LEN,
+    quote_from_entry, report_data, wrap_quote_as_cmw, TdxSession, REPORT_DATA_LEN,
 };
 use ttk_ra_server::attestation::AttestationError;
 use ttk_ra_server::AttestationParams;
@@ -153,8 +153,8 @@ fn report_data_rejects_oversized_or_unsupported_inputs() {
 }
 
 #[test]
-fn provider_eat_is_accepted_by_the_client_verifier() {
-    let eat = wrap_quote_as_eat(TDX_QUOTE).to_cbor_bytes().unwrap();
+fn provider_cmw_is_accepted_by_the_client_verifier() {
+    let cmw = wrap_quote_as_cmw(TDX_QUOTE.to_vec()).to_cbor_bytes();
     let trust = TrustStore {
         intel_sgx_root: TDX_QUOTE_ROOT.to_vec(),
         ..TrustStore::builtin()
@@ -163,14 +163,14 @@ fn provider_eat_is_accepted_by_the_client_verifier() {
     let now = UnixTime::since_unix_epoch(Duration::from_secs(1_767_225_600));
 
     let evidence = verify_evidence(
-        &eat,
+        &cmw,
         &quote_report_data(),
         now,
         &trust,
         &RootImageTrustStore::default(),
         Policy::default(),
     )
-    .expect("the verifier should accept the provider's EAT");
+    .expect("the verifier should accept the provider's CMW");
     assert_eq!(evidence.tee, TeeKind::Tdx);
 }
 

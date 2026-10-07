@@ -1,8 +1,8 @@
 //! TTKServer core library: what the attested server (`ttk-ra-server`) and the RA-TLS client
 //! (`ttk-ra-client`) share, so neither depends on the other.
 //!
-//! - [`eat`]: the RFC 9711 Entity Attestation Token data model carrying the Evidence.
-//! - [`submod`]: EAT `submods` labels naming the TEE behind nested Evidence.
+//! - [`cmw`]: the RATS Conceptual Message Wrapper carrying the Evidence.
+//! - [`media_type`]: the CMW types naming the TEE behind the wrapped Evidence.
 //! - [`image_trust`]: the accepted enclave images ([`ImageTrustStore`]) and the root node's
 //!   `GET /root-attestation` format.
 //! - [`egress`]: the egress policy for peer-chosen destinations ([`egress::classify_hop_address`]).
@@ -11,26 +11,40 @@
 //! - The RA-TLS certificate extension OID ([`ATTESTATION_OID`]), the parent instance's vsock CID
 //!   ([`PARENT_CID`]) and the mock root CA ([`MOCK_NITRO_ROOT_CERT`]).
 
-pub mod eat;
+pub mod cmw;
 pub mod egress;
 pub mod image_trust;
 #[cfg(target_os = "linux")]
 pub mod vsock;
 pub mod vsock_proxy;
 
-pub use eat::{EatClaimKey, EatClaimsSet};
+pub use cmw::{Cmw, CmwCollection, CmwRecord, CmwType};
 pub use image_trust::ImageTrustStore;
 
-/// EAT `submods` labels identifying the TEE that produced the nested evidence.
-pub mod submod {
-    /// AWS Nitro Enclaves attestation document.
-    pub const AWS_NITRO: &str = "aws_nitro";
-    /// AMD SEV-SNP attestation report and VCEK certificate.
-    pub const SEV_SNP: &str = "sev_snp";
-    /// Intel TDX DCAP quote.
-    pub const TDX: &str = "tdx";
-    /// Intel SGX DCAP quote.
-    pub const SGX: &str = "sgx";
+/// CMW types of the TEE Evidence carried in the RA-TLS certificate and served over HTTP.
+///
+/// The vendor media types (`vnd.ttk.*`) are this project's own and not IANA-registered: no
+/// registered types exist for these formats.
+pub mod media_type {
+    /// AWS Nitro Enclaves attestation document (COSE_Sign1), a record.
+    pub const AWS_NITRO: &str = "application/vnd.ttk.aws-nitro-attestation-document";
+    /// Intel TDX DCAP quote, a record.
+    pub const TDX: &str = "application/vnd.ttk.intel-tdx-quote";
+    /// Intel SGX DCAP quote, a record.
+    pub const SGX: &str = "application/vnd.ttk.intel-sgx-quote";
+    /// AMD SEV-SNP attestation report, the [`SEV_SNP_REPORT_LABEL`] member of an
+    /// [`SEV_SNP_COLLECTION`].
+    pub const SEV_SNP_REPORT: &str = "application/vnd.ttk.amd-sev-snp-report";
+    /// DER X.509 certificate (RFC 2585): the VCEK, the [`SEV_SNP_VCEK_LABEL`] member of an
+    /// [`SEV_SNP_COLLECTION`].
+    pub const PKIX_CERT: &str = "application/pkix-cert";
+    /// Collection type (RFC 4151 tag URI, not registered) of AMD SEV-SNP evidence: the report
+    /// (Evidence) and the chip's VCEK certificate (Endorsement).
+    pub const SEV_SNP_COLLECTION: &str = "tag:lanetus.github.io,2026:sev-snp-evidence";
+    /// Label of the report in an [`SEV_SNP_COLLECTION`].
+    pub const SEV_SNP_REPORT_LABEL: &str = "report";
+    /// Label of the VCEK in an [`SEV_SNP_COLLECTION`].
+    pub const SEV_SNP_VCEK_LABEL: &str = "vcek";
 }
 
 /// OID of the X.509 extension carrying the attestation document (placeholder, not a registered PEN).

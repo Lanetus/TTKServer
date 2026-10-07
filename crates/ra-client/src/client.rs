@@ -33,7 +33,7 @@ use x509_parser::prelude::*;
 
 /// Custom certificate verifier for Remote Attestation TLS (RA-TLS).
 ///
-/// The server presents an ephemeral self-signed certificate that carries an EAT with nested
+/// The server presents an ephemeral self-signed certificate that carries a CMW wrapping
 /// TEE evidence (AWS Nitro, AMD SEV-SNP, Intel TDX or Intel SGX) in a custom X.509 extension.
 /// Instead of a Web PKI CA chain, [`verify_server_cert`](ServerCertVerifier::verify_server_cert)
 /// checks:
@@ -174,7 +174,7 @@ impl EnclaveCertVerifier {
             .map_err(|e| format!("certificate is not correctly self-signed: {e}"))?;
 
         // 2 & 3. The embedded evidence, bound to this certificate's public key
-        let eat_bytes = extract_attestation_doc(end_entity.as_ref())
+        let cmw_bytes = extract_attestation_doc(end_entity.as_ref())
             .map_err(|e| format!("missing attestation extension: {e}"))?;
         let binding = Sha256::digest(cert.public_key().raw);
         let lazy_images = LazyRootImages::default();
@@ -183,7 +183,7 @@ impl EnclaveCertVerifier {
             None => &lazy_images,
         };
         let evidence =
-            verifier::verify_evidence(&eat_bytes, &binding, now, &self.trust, images, self.policy)?;
+            verifier::verify_evidence(&cmw_bytes, &binding, now, &self.trust, images, self.policy)?;
 
         // 4. Reference values
         for (name, expected) in &self.expected_measurements {

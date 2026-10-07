@@ -11,7 +11,7 @@ An HTTP/3 (QUIC) **RA-TLS** server in Rust, meant to run inside a Trusted Execut
 
 1. At startup it generates an ephemeral TLS key pair.
 2. It asks the TEE hardware for attestation Evidence whose report data is bound to the SHA-256 of that key.
-3. It wraps the Evidence as an [RFC 9711](https://www.rfc-editor.org/rfc/rfc9711) Entity Attestation Token (EAT) and embeds it in a self-signed X.509 certificate (custom extension, OID `1.3.6.1.4.1.99999.1`, placeholder).
+3. It wraps the Evidence in a RATS [Conceptual Message Wrapper](https://datatracker.ietf.org/doc/draft-ietf-rats-msg-wrap/) (CMW) and embeds it in a self-signed X.509 certificate (custom extension, OID `1.3.6.1.4.1.99999.1`, placeholder).
 4. It serves HTTP/3 over QUIC with that certificate on `0.0.0.0:4433` (UDP), and also exposes the Evidence over HTTP.
 
 A client can verify the TLS certificate's embedded Evidence during the handshake, so the connection itself is bound to the attested TEE.
@@ -20,8 +20,8 @@ The project is a Cargo workspace of these crates:
 
 | Crate (directory)         | Kind        | Contents                                                                                 |
 |---------------------------|-------------|------------------------------------------------------------------------------------------|
-| `ttk-core` (`crates/core/`)      | lib + `vsock-proxy` bin | What the server and client share: the EAT data model, `submods` labels, the RA-TLS extension OID, the mock root CA, the egress policy and the vsock transport; and the parent-instance UDP <-> vsock proxy |
-| `ttk-ra-server` (`crates/ra-server/`)      | library     | The attested server: TEE attestation providers, RA-TLS identity and certificate, QUIC / HTTP/3 serving (`GET /`, `GET /evidence.eat`) |
+| `ttk-core` (`crates/core/`)      | lib + `vsock-proxy` bin | What the server and client share: the CMW evidence wrapper and its media types, the RA-TLS extension OID, the mock root CA, the egress policy and the vsock transport; and the parent-instance UDP <-> vsock proxy |
+| `ttk-ra-server` (`crates/ra-server/`)      | library     | The attested server: TEE attestation providers, RA-TLS identity and certificate, QUIC / HTTP/3 serving (`GET /`, `GET /evidence.cmw`, `POST /evidence`) |
 | `ttk-ra-client` (`crates/ra-client/`)  | lib + `client` bin | The RA-TLS client (`TtkClient`, `EnclaveCertVerifier`), the Evidence verifier for all supported TEEs, the `POST /faf` request format and its HPKE sealing; the test `client` binary |
 | `ttk-relay` (`crates/relay/`)    | lib + `relay` bin | The **relay node** (enclave): forwards `POST /faf` to the next hop |
 | `ttk-terminal` (`crates/terminal/`) | lib + `terminal` bin | The **terminal node** (enclave): the last hop of `POST /faf`, decrypting the message |
@@ -96,7 +96,7 @@ RUST_LOG=info cargo run --release --bin terminal
 | Route            | Response                                                             |
 |------------------|----------------------------------------------------------------------|
 | `GET /`          | Greeting text                                                        |
-| `GET /evidence.eat` | Base64-encoded EAT carrying the Evidence                          |
+| `GET /evidence.cmw` | Base64-encoded CBOR CMW carrying the Evidence                     |
 | `POST /faf`      | Relay: forwards a sealed message to its next hop. Terminal: receives it (see below) |
 
 ### `POST /faf`: onion-routing a sealed message
@@ -187,7 +187,7 @@ use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 let verifier = EnclaveCertVerifier::new()
     .with_expected_pcr(0, expected_pcr0); // reference values for your enclave image
 let mut client = TtkClient::connect_with_verifier(addr, "localhost", verifier).await?;
-let resp = client.get("/evidence.eat").await?;
+let resp = client.get("/evidence.cmw").await?;
 ```
 
 To build another kind of attested node, use `ttk_ra_server` and add routes to the base server:
@@ -204,8 +204,8 @@ server.serve_with(axum::Router::new().route("/ping", axum::routing::get(|| async
 ```
 Cargo.toml              workspace manifest (shared package metadata and dependency versions)
 crates/core/src/
-  lib.rs                crate root of `ttk_core`: submods labels, ATTESTATION_OID, PARENT_CID, mock root CA
-  eat.rs                the RFC 9711 EAT data model
+  lib.rs                crate root of `ttk_core`: CMW media types, ATTESTATION_OID, PARENT_CID, mock root CA
+  cmw.rs                the RATS Conceptual Message Wrapper (CBOR)
   egress.rs             egress policy for peer-chosen destinations
   vsock.rs              QUIC datagram sockets over vsock (Linux)
   bin/vsock-proxy.rs    parent-instance UDP <-> vsock proxy (Linux)
@@ -214,7 +214,7 @@ crates/ra-server/src/
   attestation/          TEE providers (nitro, sev_snp, tdx, mock)
   identity.rs           generate_identity() / AttestationParams
   server.rs             attestation, RA-TLS certificate, QUIC / HTTP/3 serving, Listener
-  router.rs             base routes (GET /, GET /evidence.eat)
+  router.rs             base routes (GET /, GET /evidence.cmw, POST /evidence)
 crates/ra-client/src/
   lib.rs, client.rs     `ttk_ra_client`: TtkClient, EnclaveCertVerifier
   verifier/             Evidence verification for Nitro, SEV-SNP and TDX/SGX (DCAP)
@@ -252,35 +252,27 @@ This server implements the **Attester** role from [RFC 9334](https://www.rfc-edi
 | RATS concept       | Concrete artifact in this server                                                               |
 |---------------------|--------------------------------------------------------------------------------------------------|
 | Attester            | This process, running inside the TEE (e.g. a Nitro Enclave)                                     |
-| Evidence            | The NSM Attestation Document, with `user_data` bound to the SHA-256 of the server's ephemeral TLS key, carried in an EAT in the TLS certificate and served over `GET /evidence.eat` |
+| Evidence            | The NSM Attestation Document, with `user_data` bound to the SHA-256 of the server's ephemeral TLS key, carried in a CMW in the TLS certificate and served over `GET /evidence.cmw` |
 | Endorsements        | The AWS Nitro certificate chain embedded in the Attestation Document, rooted at the AWS Nitro Enclaves root CA |
 | Reference Values    | Expected PCR measurements for this enclave image, held out-of-band by whoever verifies the Evidence |
 | Verifier / Relying Party | A client (such as `ttk_server::client`) that checks the Evidence against Endorsements and Reference Values and, if it trusts the result, proceeds with the TLS session bound to that Evidence |
 
 The server only produces and serves Evidence. Appraisal against Reference Values and issuance of an Attestation Result happen on the client side.
 
-### EAT export (RFC 9711)
+### Evidence wrapping (CMW)
 
-`GET /evidence.eat` serves the Evidence as a base64-encoded [RFC 9711](https://www.rfc-editor.org/rfc/rfc9711) Entity Attestation Token claims-set (CBOR). The same bytes are embedded in the TLS certificate.
+`GET /evidence.cmw` serves the Evidence as a base64-encoded, CBOR-serialised RATS [Conceptual Message Wrapper](https://datatracker.ietf.org/doc/draft-ietf-rats-msg-wrap/) (CMW). The same bytes are embedded in the TLS certificate, and `POST /evidence` returns fresh Evidence in the same form.
 
-The TEE Evidence is already signed by a hardware-rooted key, and this server holds no other key a Relying Party would trust more. So rather than minting a new signature, the claims-set nests the original signed Evidence verbatim under the `submods` claim (key `266`), the nested-token form defined in RFC 9711. Trust comes from that nested Evidence, not from the outer claims-set, which is unsigned.
+The TEE Evidence is already signed by a hardware-rooted key, and this server holds no other key a Relying Party would trust more. So the CMW wraps the original signed Evidence verbatim and only adds its type; it carries no claims of its own. Trust comes from the wrapped Evidence, not from the wrapper, which is unsigned.
 
-| TEE         | `submods` label | Nested Evidence                   | `eat_profile`                                       |
-|-------------|-----------------|-----------------------------------|-----------------------------------------------------|
-| AWS Nitro   | `aws_nitro`     | Raw NSM Attestation Document      | `tag:aws.amazon.com,2024:nitro-enclave-nested-eat`  |
-| AMD SEV-SNP | `sev_snp`       | `{ "report": bstr, "vcek": bstr }` | `tag:lanetus.github.io,2026:sev-snp-nested-eat`     |
-| Intel TDX   | `tdx`           | Raw DCAP quote                    | `tag:lanetus.github.io,2026:tdx-nested-eat`         |
+| TEE         | CMW                                                                          | Contents                                                                                        |
+|-------------|------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| AWS Nitro   | record `application/vnd.ttk.aws-nitro-attestation-document`, `ind` Evidence  | Raw NSM Attestation Document (COSE_Sign1)                                                       |
+| AMD SEV-SNP | collection `tag:lanetus.github.io,2026:sev-snp-evidence`                     | `report`: record `application/vnd.ttk.amd-sev-snp-report` (Evidence); `vcek`: record `application/pkix-cert` (Endorsement) |
+| Intel TDX   | record `application/vnd.ttk.intel-tdx-quote`, `ind` Evidence                 | Raw DCAP quote                                                                                  |
+| Intel SGX   | record `application/vnd.ttk.intel-sgx-quote`, `ind` Evidence (verified only) | Raw DCAP quote                                                                                  |
 
-The profiles are private tag URIs, not registered values. For Nitro, the outer claims-set also carries a best-effort standard mapping:
-
-| EAT claim      | Key   | Value                                                              |
-|-----------------|-------|---------------------------------------------------------------------|
-| `iat`           | 6     | The Nitro document's `timestamp`, in seconds                       |
-| `ueid`          | 256   | Type `0x01` (RAND) + SHA-256 of the Nitro document's `module_id`    |
-| `eat_profile`   | 265   | `tag:aws.amazon.com,2024:nitro-enclave-nested-eat`                  |
-| `submods`       | 266   | `{ "aws_nitro": <raw NSM Attestation Document bytes> }`             |
-
-Claim keys are from the IANA ["CBOR Web Token (CWT) Claims"](https://www.iana.org/assignments/cwt) registry, as registered by RFC 9711. See `crates/core/src/eat.rs`.
+A record is the CBOR array `[type, value, ind]`; a collection is a map from labels to CMWs, with its type under `"__cmwc_t"`. The `vnd.ttk.*` media types and the collection tag URI are this project's own, not registered values. See `crates/core/src/cmw.rs` and `ttk_core::media_type`.
 
 ## Docker
 

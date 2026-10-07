@@ -1,12 +1,12 @@
 //! AWS Nitro Security Module (NSM) provider.
 //!
 //! Opens `/dev/nsm` with RAII ([`NsmSession`]) and produces hardware-rooted Nitro Attestation
-//! Documents, wrapped as EAT claims-sets. Document parsing helpers live in [`super::nitro_doc`].
+//! Documents, wrapped as CMWs. Document parsing helpers live in [`super::nitro_doc`].
 
-use super::nitro_doc::wrap_as_eat;
+use super::nitro_doc::wrap_as_cmw;
 use super::{AttestationError, AttestationProvider};
 pub use crate::AttestationParams;
-use crate::EatClaimsSet;
+use crate::Cmw;
 use aws_nitro_enclaves_nsm_api::api::Digest;
 use aws_nitro_enclaves_nsm_api::api::{Request, Response};
 use aws_nitro_enclaves_nsm_api::driver::{nsm_exit, nsm_init, nsm_process_request};
@@ -53,12 +53,9 @@ impl AttestationProvider for NsmSession {
         Path::new("/dev/nsm").exists()
     }
 
-    /// Requests a real attestation document from the NSM for `params` and wraps it as an EAT claims-set.
-    fn generate_document(
-        &self,
-        params: &AttestationParams,
-    ) -> Result<EatClaimsSet, AttestationError> {
-        wrap_as_eat(&self.create_attestation(params)?)
+    /// Requests a real attestation document from the NSM for `params` and wraps it as a CMW.
+    fn generate_document(&self, params: &AttestationParams) -> Result<Cmw, AttestationError> {
+        Ok(wrap_as_cmw(self.create_attestation(params)?))
     }
 }
 

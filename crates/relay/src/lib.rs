@@ -4,7 +4,7 @@
 //! | Route               | Response                                                        |
 //! |---------------------|-----------------------------------------------------------------|
 //! | `GET /`             | Greeting text (from [`ttk_ra_server`])                               |
-//! | `GET /evidence.eat` | Base64-encoded EAT carrying this node's Evidence (from [`ttk_ra_server`]) |
+//! | `GET /evidence.cmw` | Base64-encoded CMW carrying this node's Evidence (from [`ttk_ra_server`]) |
 //! | `POST /faf`         | Forwards a [`FafRequest`] to its next hop                       |
 //!
 //! When forwarding a [`FafRequest`], the relay is itself a RATS (RFC 9334) Relying Party: it

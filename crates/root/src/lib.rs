@@ -5,7 +5,7 @@
 //! | Route                    | Response                                                        |
 //! |--------------------------|-----------------------------------------------------------------|
 //! | `GET /`                  | Greeting text (from [`ttk_ra_server`])                               |
-//! | `GET /evidence.eat`      | Base64-encoded EAT carrying this node's Evidence (from [`ttk_ra_server`]) |
+//! | `GET /evidence.cmw`      | Base64-encoded CMW carrying this node's Evidence (from [`ttk_ra_server`]) |
 //! | `GET /root-attestation`  | JSON [`RootAttestation`]: the accepted enclave image checksums  |
 //!
 //! The checksums are the Nitro image allowlist built into this crate

@@ -7,11 +7,11 @@
 //! Backends are gated by additive Cargo features (`nitro`, `sev-snp`, `tdx`, `mock`), so a single
 //! binary can support several of them.
 
-use crate::{AttestationParams, EatClaimsSet};
+use crate::{AttestationParams, Cmw};
 use std::fmt;
 
-pub use ttk_core::eat;
-pub use ttk_core::submod;
+pub use ttk_core::cmw;
+pub use ttk_core::media_type;
 pub use ttk_core::MOCK_NITRO_ROOT_CERT;
 
 #[cfg(any(feature = "nitro", feature = "mock"))]
@@ -100,11 +100,8 @@ pub trait AttestationProvider: Send + Sync {
     where
         Self: Sized;
 
-    /// Produces an EAT claims-set carrying this TEE's evidence for `params`.
-    fn generate_document(
-        &self,
-        params: &AttestationParams,
-    ) -> Result<EatClaimsSet, AttestationError>;
+    /// Produces a CMW carrying this TEE's evidence for `params`.
+    fn generate_document(&self, params: &AttestationParams) -> Result<Cmw, AttestationError>;
 }
 
 /// Picks the provider matching the current hardware.

@@ -163,7 +163,7 @@ async fn root_attestation_serves_a_custom_image_trust_store() {
 #[tokio::test(flavor = "multi_thread")]
 async fn base_routes_are_still_served() {
     let addr = start(Root::bind("127.0.0.1:0".parse().unwrap()).unwrap());
-    assert_eq!(get(addr, "/evidence.eat").await.status, 200);
+    assert_eq!(get(addr, "/evidence.cmw").await.status, 200);
     assert_eq!(get(addr, "/").await.status, 200);
 }
 
