@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-10-07
+
 ### Changed
 - **BREAKING:** Evidence is wrapped in a RATS Conceptual Message Wrapper (CMW, `draft-ietf-rats-msg-wrap`, CBOR) instead of an RFC 9711 EAT claims-set, in the RA-TLS certificate extension, `GET /evidence.cmw` and `POST /evidence`. Nitro, TDX and SGX evidence are CMW records typed by `ttk_core::media_type`; SEV-SNP evidence is a collection of the report (Evidence) and the VCEK (Endorsement). The unsigned outer EAT claims (`iat`, `ueid`, `eat_profile`) are gone. Old clients cannot verify new servers and vice versa.
 - **BREAKING:** `GET /evidence.eat` is renamed `GET /evidence.cmw`.
@@ -435,7 +437,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.0.0...HEAD
+[6.0.0]: https://github.com/Lanetus/TTKServer/compare/v5.0.0...v6.0.0
 [5.0.0]: https://github.com/Lanetus/TTKServer/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/Lanetus/TTKServer/compare/v3.0.3...v4.0.0
 [3.0.3]: https://github.com/Lanetus/TTKServer/compare/v3.0.2...v3.0.3
