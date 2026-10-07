@@ -2,7 +2,7 @@
 # public QUIC (UDP 443) into the enclave over vsock, and the enclave's outbound traffic back out.
 #
 # Install:
-#   cargo build --release -p ttk-relay --bin vsock-proxy
+#   cargo build --release -p ttk-core --bin vsock-proxy
 #   sudo install -m 0755 target/release/vsock-proxy /usr/local/bin/vsock-proxy
 #   sudo install -m 0644 deploy/systemd/vsock-proxy.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now vsock-proxy

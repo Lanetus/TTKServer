@@ -18,8 +18,8 @@ name = "terminal"
 path = "src/main.rs"
 
 [dependencies]
-ttk-core.workspace = true
-ttk-client.workspace = true
+ttk-ra-server.workspace = true
+ttk-ra-client.workspace = true
 axum.workspace = true
 env_logger.workspace = true
 log.workspace = true
@@ -28,11 +28,11 @@ tokio.workspace = true
 [features]
 default = ["nitro", "mock"]
 
-nitro = ["ttk-core/nitro"]
-mock = ["ttk-core/mock"]
-sev-snp = ["ttk-core/sev-snp"]
-tdx = ["ttk-core/tdx"]
+nitro = ["ttk-ra-server/nitro"]
+mock = ["ttk-ra-server/mock"]
+sev-snp = ["ttk-ra-server/sev-snp"]
+tdx = ["ttk-ra-server/tdx"]
 
 [dev-dependencies]
-ttk-core = { workspace = true, features = ["mock"] }
+ttk-ra-server = { workspace = true, features = ["mock"] }
 rcgen.workspace = true

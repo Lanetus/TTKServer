@@ -3,9 +3,9 @@
 
 use rcgen::KeyPair;
 use std::net::SocketAddr;
-use ttk_client::faf::{FafBody, FafRelay, FafRequest};
-use ttk_client::seal::{self, NodePublicKey, NodeSecretKey};
-use ttk_client::{EnclaveCertVerifier, TtkClient};
+use ttk_ra_client::faf::{FafBody, FafRelay, FafRequest};
+use ttk_ra_client::seal::{self, NodePublicKey, NodeSecretKey};
+use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_terminal::Terminal;
 
 /// Starts a terminal node on a free local port and returns its address.

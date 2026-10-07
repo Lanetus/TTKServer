@@ -1,10 +1,10 @@
-//! TTKServer relay node: an attested [`ttk_core`] server that forwards onion-routed
+//! TTKServer relay node: an attested [`ttk_ra_server`] server that forwards onion-routed
 //! `POST /faf` requests toward their terminal node.
 //!
 //! | Route               | Response                                                        |
 //! |---------------------|-----------------------------------------------------------------|
-//! | `GET /`             | Greeting text (from [`ttk_core`])                               |
-//! | `GET /evidence.eat` | Base64-encoded EAT carrying this node's Evidence (from [`ttk_core`]) |
+//! | `GET /`             | Greeting text (from [`ttk_ra_server`])                               |
+//! | `GET /evidence.eat` | Base64-encoded EAT carrying this node's Evidence (from [`ttk_ra_server`]) |
 //! | `POST /faf`         | Forwards a [`FafRequest`] to its next hop                       |
 //!
 //! When forwarding a [`FafRequest`], the relay is itself a RATS (RFC 9334) Relying Party: it
@@ -19,9 +19,6 @@
 //! request at [`MAX_RELAYS`] and the requests it forwards at once at [`MAX_CONCURRENT_FORWARDS`],
 //! and answers every forwarding failure with the same `502 relay failed`, so a client can't use
 //! it to probe the network.
-//!
-//! The crate also builds `vsock-proxy`, the parent-instance daemon carrying QUIC datagrams
-//! between the network and the enclave's vsock.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -32,12 +29,12 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
-use ttk_client::faf::{classify_hop_address, connect_to_node_filtered, HopAddressClass};
-use ttk_client::faf::{parse_relay_address, parse_relay_server};
-use ttk_client::faf::{FafRelay, FafRequest, FAF_PATH};
-use ttk_client::seal::{self, NodeSecretKey};
-use ttk_client::{ClientResponse, ClientTransport, EnclaveCertVerifier, TtkClient};
-use ttk_core::server::{env_u32, BoxError, Listener, Server, PARENT_CID};
+use ttk_ra_client::faf::{classify_hop_address, connect_to_node_filtered, HopAddressClass};
+use ttk_ra_client::faf::{parse_relay_address, parse_relay_server};
+use ttk_ra_client::faf::{FafRelay, FafRequest, FAF_PATH};
+use ttk_ra_client::seal::{self, NodeSecretKey};
+use ttk_ra_client::{ClientResponse, ClientTransport, EnclaveCertVerifier, TtkClient};
+use ttk_ra_server::server::{env_u32, BoxError, Listener, Server, PARENT_CID};
 
 /// Boxed error type that can cross task boundaries.
 type SendError = Box<dyn std::error::Error + Send + Sync>;

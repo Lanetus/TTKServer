@@ -15,12 +15,12 @@ You are a security reviewer for TTKServer, a Rust workspace of HTTP/3 (QUIC) nod
 ## Map of security-relevant code
 | Area | Files |
 |---|---|
-| Evidence generation (attester) | `crates/core/src/attestation/` (`nitro.rs` NSM, `sev_snp.rs`, `tdx.rs`, `tsm.rs` configfs-tsm, `mock.rs`, `nitro_doc.rs` mock docs, `eat.rs`) |
-| RA-TLS cert, QUIC/h3 server, body limit | `crates/core/src/server.rs`, `crates/core/src/identity.rs`, `crates/core/src/router.rs` |
+| Evidence generation (attester) | `crates/ra-server/src/attestation/` (`nitro.rs` NSM, `sev_snp.rs`, `tdx.rs`, `tsm.rs` configfs-tsm, `mock.rs`, `nitro_doc.rs` mock docs); EAT model in `crates/core/src/eat.rs` |
+| RA-TLS cert, QUIC/h3 server, body limit | `crates/ra-server/src/server.rs`, `crates/ra-server/src/identity.rs`, `crates/ra-server/src/router.rs` |
 | vsock transport (in enclave) | `crates/core/src/vsock.rs` |
-| Evidence verification (verifier) | `crates/client/src/verifier/` (`mod.rs` policy + binding, `nitro.rs` COSE_Sign1 + chain + PCR0 allowlist, `sev_snp.rs`, `dcap.rs`); trust anchors in `crates/core/src/trust/` (`TrustStore`, `nitro_image_allowlist.txt`, `certs/`) |
-| RA-TLS cert verifier, client transport | `crates/client/src/client.rs` (`EnclaveCertVerifier`, `TtkClient`) |
-| Onion encryption (HPKE) | `crates/client/src/seal.rs`, `crates/client/src/faf.rs` |
+| Evidence verification (verifier) | `crates/ra-client/src/verifier/` (`mod.rs` policy + binding, `nitro.rs` COSE_Sign1 + chain + PCR0 allowlist, `sev_snp.rs`, `dcap.rs`); trust anchors in `crates/ra-client/src/trust/` (`TrustStore`, `nitro_image_allowlist.txt`, `certs/`) |
+| RA-TLS cert verifier, client transport | `crates/ra-client/src/client.rs` (`EnclaveCertVerifier`, `TtkClient`) |
+| Onion encryption (HPKE) | `crates/ra-client/src/seal.rs`, `crates/ra-client/src/faf.rs` |
 | Relay forwarding + connection pool | `crates/relay/src/lib.rs` (`faf`, `forward_to_hop`, `run`) |
 | Terminal last hop | `crates/terminal/src/lib.rs` |
 | Parent-side proxy | `crates/relay/src/bin/vsock-proxy.rs` |
@@ -36,7 +36,7 @@ You are a security reviewer for TTKServer, a Rust workspace of HTTP/3 (QUIC) nod
 - No nonce/freshness: evidence is generated once at startup, so there is no replay protection.
 - SEV-SNP VCEK revocation, Intel TCB status and QE identity (PCS collateral) are not evaluated.
 - The attestation OID `1.3.6.1.4.1.99999.1` is a placeholder.
-- The mock root CA's private key (`crates/core/src/attestation/mock_nitro_root_key.pk8`) is public by design; mock evidence is trusted only on explicit opt-in.
+- The mock root CA's private key (`crates/ra-server/src/attestation/mock_nitro_root_key.pk8`) is public by design; mock evidence is trusted only on explicit opt-in.
 - `EnclaveCertVerifier` skips CA validation by design (trust comes from the evidence).
 
 ## Checklist
@@ -46,7 +46,7 @@ You are a security reviewer for TTKServer, a Rust workspace of HTTP/3 (QUIC) nod
 - SEV-SNP (`verifier/sev_snp.rs`) and DCAP (`verifier/dcap.rs`): fixed-offset parsing of untrusted reports/quotes (length checks before slicing, panics), ARK→ASK→VCEK and PCK chains to pinned roots, VCEK `hwID`/TCB matching, QE report and attestation-key binding, debug-bit handling.
 - Policy (`verifier/mod.rs`): exactly one TEE submod accepted, debug TEEs rejected unless `allow_debug`/`allow_mock`, mock root trusted only with `allow_mock`.
 - Mock: `TTK_ALLOW_MOCK_ATTESTATION=1` / `allow_mock()` must never be on by default in the `relay`, `terminal` or deployment files, and the `mock` provider fallback must not let a production node silently serve mock evidence that a strict verifier would accept.
-- Evidence generation (`crates/core/src/attestation/`): the bound hash is the cert key's, configfs-tsm paths and inputs are not attacker-controlled.
+- Evidence generation (`crates/ra-server/src/attestation/`): the bound hash is the cert key's, configfs-tsm paths and inputs are not attacker-controlled.
 
 **TLS / QUIC / crypto**
 - rustls 0.23 with the `ring` provider; protocol versions, ALPN (`h3`), cipher config; handshake signatures verified against the attested cert.

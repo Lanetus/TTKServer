@@ -1,14 +1,14 @@
-//! TTKServer root node: an attested [`ttk_core`] server that publishes the checksums of the
+//! TTKServer root node: an attested [`ttk_ra_server`] server that publishes the checksums of the
 //! accepted enclave images, the reference values a Verifier appraises Nitro Evidence against
 //! (RFC 9334).
 //!
 //! | Route                    | Response                                                        |
 //! |--------------------------|-----------------------------------------------------------------|
-//! | `GET /`                  | Greeting text (from [`ttk_core`])                               |
-//! | `GET /evidence.eat`      | Base64-encoded EAT carrying this node's Evidence (from [`ttk_core`]) |
+//! | `GET /`                  | Greeting text (from [`ttk_ra_server`])                               |
+//! | `GET /evidence.eat`      | Base64-encoded EAT carrying this node's Evidence (from [`ttk_ra_server`]) |
 //! | `GET /root-attestation`  | JSON [`RootAttestation`]: the accepted enclave image checksums  |
 //!
-//! The checksums are the built-in Nitro image allowlist of [`ttk_core::trust`]
+//! The checksums are the built-in Nitro image allowlist of [`ttk_ra_client::trust`]
 //! ([`TrustStore::nitro_image_allowlist`]), the same trust store the client verifier checks
 //! Evidence against, so the root node serves exactly the images the client accepts. Clients reach it over RA-TLS, so the list is bound to an attested
 //! enclave.
@@ -18,8 +18,8 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use ttk_core::server::{BoxError, Listener, Server};
-use ttk_core::TrustStore;
+use ttk_ra_client::TrustStore;
+use ttk_ra_server::server::{BoxError, Listener, Server};
 
 /// Path of the accepted-images endpoint.
 pub const ROOT_ATTESTATION_PATH: &str = "/root-attestation";

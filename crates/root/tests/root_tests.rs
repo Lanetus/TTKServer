@@ -1,6 +1,6 @@
 //! Tests of the root node's `GET /root-attestation`, on a free local port with mock attestation.
 //!
-//! The root node does not depend on `ttk-client`, so these tests use a minimal HTTP/3 client
+//! The root node does not depend on `ttk-ra-client`, so these tests use a minimal HTTP/3 client
 //! that skips RA-TLS verification: they check the routes, not the attestation.
 
 use axum::http::{HeaderMap, Request, StatusCode};
@@ -10,8 +10,8 @@ use rustls::DigitallySignedStruct;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use ttk_core::server::Server;
-use ttk_core::trust::{parse_image_allowlist, TrustStore};
+use ttk_ra_client::trust::{parse_image_allowlist, TrustStore};
+use ttk_ra_server::server::Server;
 use ttk_root::{Root, RootAttestation, ROOT_ATTESTATION_PATH};
 
 const PCR0_A: &str = "7807833a90cc86f5a853a1f49043a568f3428f6b03eb983aed99899fbfa77d6b86b34fa934e318dd3741debca32c0aba";

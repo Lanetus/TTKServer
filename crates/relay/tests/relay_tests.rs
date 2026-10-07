@@ -2,9 +2,9 @@
 //! nodes to a terminal node, on free local ports with mock attestation.
 
 use std::net::SocketAddr;
-use ttk_client::faf::{FafBody, FafRelay, FafRequest};
-use ttk_client::seal::{self, NodePublicKey};
-use ttk_client::{EnclaveCertVerifier, TtkClient};
+use ttk_ra_client::faf::{FafBody, FafRelay, FafRequest};
+use ttk_ra_client::seal::{self, NodePublicKey};
+use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_relay::{Relay, MAX_RELAYS};
 use ttk_terminal::Terminal;
 
@@ -348,7 +348,7 @@ async fn oversized_request_bodies_get_413() {
         relays: vec![],
         body: FafBody {
             key: String::new(),
-            message: "x".repeat(ttk_core::server::MAX_REQUEST_BODY + 1),
+            message: "x".repeat(ttk_ra_server::server::MAX_REQUEST_BODY + 1),
         },
     };
     let response = client.post_json("/faf", &huge).await.unwrap();

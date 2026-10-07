@@ -1,5 +1,5 @@
-[![Documentation](https://docs.rs/ttk-core/badge.svg)](https://lanetus.github.io/TTKServer/api/ttk_core/index.html)
-[![Crates.io](https://img.shields.io/crates/v/ttk-core.svg)](https://crates.io/crates/ttk-core)
+[![Documentation](https://docs.rs/ttk-ra-server/badge.svg)](https://lanetus.github.io/TTKServer/api/ttk_ra_server/index.html)
+[![Crates.io](https://img.shields.io/crates/v/ttk-ra-server.svg)](https://crates.io/crates/ttk-ra-server)
 [![codecov](https://codecov.io/gh/Lanetus/TTKServer/graph/badge.svg?token=G4380O9RMS)](https://codecov.io/gh/Lanetus/TTKServer)
 [![CI](https://github.com/Lanetus/TTKServer/actions/workflows/CI.yml/badge.svg)](https://github.com/Lanetus/TTKServer/actions/workflows/CI.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/Lanetus/TTKServer/blob/main/LICENSE)
@@ -16,13 +16,14 @@ An HTTP/3 (QUIC) **RA-TLS** server in Rust, meant to run inside a Trusted Execut
 
 A client can verify the TLS certificate's embedded Evidence during the handshake, so the connection itself is bound to the attested TEE.
 
-The project is a Cargo workspace of four crates:
+The project is a Cargo workspace of these crates:
 
 | Crate (directory)         | Kind        | Contents                                                                                 |
 |---------------------------|-------------|------------------------------------------------------------------------------------------|
-| `ttk-core` (`crates/core/`)      | library     | The attested server only: TEE attestation providers, EAT, RA-TLS identity and certificate, QUIC / HTTP/3 serving (`GET /`, `GET /evidence.eat`), vsock transport |
-| `ttk-client` (`crates/client/`)  | lib + `client` bin | The RA-TLS client (`TtkClient`, `EnclaveCertVerifier`), the Evidence verifier for all supported TEEs, the `POST /faf` request format and its HPKE sealing; the test `client` binary |
-| `ttk-relay` (`crates/relay/`)    | lib + `relay`, `vsock-proxy` bins | The **relay node** (enclave): forwards `POST /faf` to the next hop; and the parent-instance UDP <-> vsock proxy |
+| `ttk-core` (`crates/core/`)      | lib + `vsock-proxy` bin | What the server and client share: the EAT data model, `submods` labels, the RA-TLS extension OID, the mock root CA, the egress policy and the vsock transport; and the parent-instance UDP <-> vsock proxy |
+| `ttk-ra-server` (`crates/ra-server/`)      | library     | The attested server: TEE attestation providers, RA-TLS identity and certificate, QUIC / HTTP/3 serving (`GET /`, `GET /evidence.eat`) |
+| `ttk-ra-client` (`crates/ra-client/`)  | lib + `client` bin | The RA-TLS client (`TtkClient`, `EnclaveCertVerifier`), the Evidence verifier for all supported TEEs, the `POST /faf` request format and its HPKE sealing; the test `client` binary |
+| `ttk-relay` (`crates/relay/`)    | lib + `relay` bin | The **relay node** (enclave): forwards `POST /faf` to the next hop |
 | `ttk-terminal` (`crates/terminal/`) | lib + `terminal` bin | The **terminal node** (enclave): the last hop of `POST /faf`, decrypting the message |
 
 Supported TEEs:
@@ -60,9 +61,9 @@ cargo build --release -p ttk-relay # one crate
 | `sev-snp`     |         | AMD SEV-SNP provider                                                                     |
 | `tdx`         |         | Intel TDX provider                                                                       |
 
-These features belong to `ttk-core`; `ttk-relay` and `ttk-terminal` forward them. Features are additive, so one binary can support several TEEs, e.g. `cargo build --release -p ttk-terminal --features sev-snp,tdx`.
+These features belong to `ttk-ra-server`; `ttk-relay` and `ttk-terminal` forward them. Features are additive, so one binary can support several TEEs, e.g. `cargo build --release -p ttk-terminal --features sev-snp,tdx`.
 
-The test `client` binary lives in its own crate (`ttk-client`), so the enclave images, which build only `relay` or `terminal`, never include it.
+The test `client` binary lives in its own crate (`ttk-ra-client`), so the enclave images, which build only `relay` or `terminal`, never include it.
 
 ## Usage
 
@@ -74,7 +75,7 @@ TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --release --bin terminal
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4455 cargo run --release --bin root
 ```
 
-The `root` node (crate `ttk-root`) serves `GET /root-attestation`, a JSON list of the accepted enclave image checksums (PCR0, the SHA-384 of each EIF), taken from the built-in `TrustStore` of `ttk-core` (`crates/core/src/trust/nitro_image_allowlist.txt`), the same one the client verifier uses:
+The `root` node (crate `ttk-root`) serves `GET /root-attestation`, a JSON list of the accepted enclave image checksums (PCR0, the SHA-384 of each EIF), taken from the built-in `TrustStore` of `ttk-ra-client` (`crates/ra-client/src/trust/nitro_image_allowlist.txt`), the same one the client verifier uses:
 
 ```json
 { "hash_algorithm": "SHA384", "pcr0": ["7807833a90cc86f5…"] }
@@ -127,7 +128,7 @@ Encryption uses the nodes' attested RA-TLS keys (ECDSA P-256), so a client seals
 - `relays[i].address` (encrypted) is sealed to the node that reads it;
 - `body.message` is encrypted with a fresh AES-256-GCM key (base64 of a 12-byte nonce followed by the ciphertext), and `body.key` is that key sealed to the last hop. `body.key` is required and never null.
 
-HPKE values are base64 of the encapsulated key (65 bytes) followed by the ciphertext. Clients build requests with `ttk_client::faf` and `ttk_client::seal` (`NodePublicKey::from_certificate`, `seal_address`, `seal_body`). Other responses:
+HPKE values are base64 of the encapsulated key (65 bytes) followed by the ciphertext. Clients build requests with `ttk_ra_client::faf` and `ttk_ra_client::seal` (`NodePublicKey::from_certificate`, `seal_address`, `seal_body`). Other responses:
 
 | Status | When                                                                         |
 |--------|------------------------------------------------------------------------------|
@@ -142,7 +143,7 @@ By default next hops must present genuine TEE evidence. For local development wi
 
 The next hop comes from the request, so a relay limits where it sends traffic. It never contacts link-local (including `169.254.169.254` and the VPC DNS), multicast, broadcast or unspecified addresses. It contacts loopback and private addresses (`127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, `100.64/10`, `::1`, `fc00::/7`) only with `TTK_ALLOW_PRIVATE_NEXT_HOPS=1`: for local development, or relays that reach each other over a private network. On the parent instance, `vsock-proxy` applies the same rule to the enclave's outbound traffic (`--allow-private` / `TTK_ALLOW_PRIVATE_NEXT_HOPS=1`).
 
-Each node also limits what a peer can make it hold: 1024 connections, 16 concurrent requests per connection sharing a 4 MiB receive window, 16 KiB of request headers, and 1 MiB per request body (`ttk_core::server`). The client reads at most 1 MiB per response (`ttk_client::MAX_RESPONSE_BODY`).
+Each node also limits what a peer can make it hold: 1024 connections, 16 concurrent requests per connection sharing a 4 MiB receive window, 16 KiB of request headers, and 1 MiB per request body (`ttk_ra_server::server`). The client reads at most 1 MiB per response (`ttk_ra_client::MAX_RESPONSE_BODY`).
 
 ### Environment variables
 
@@ -161,7 +162,7 @@ Each node also limits what a peer can make it hold: 1024 connections, 16 concurr
 
 ### Test client
 
-The `client` binary (crate `ttk-client`) is for testing only. It routes a message through two relay nodes to a terminal node: it connects to the entry relay (`--addr`) over HTTP/3 verifying its certificate's embedded Evidence, attests the second relay (`--relay`) and the terminal (`--terminal`), seals each hop's address to the relay that reads it and the message to the terminal, sends the request to the entry relay with `POST /faf` and prints the response:
+The `client` binary (crate `ttk-ra-client`) is for testing only. It routes a message through two relay nodes to a terminal node: it connects to the entry relay (`--addr`) over HTTP/3 verifying its certificate's embedded Evidence, attests the second relay (`--relay`) and the terminal (`--terminal`), seals each hop's address to the relay that reads it and the message to the terminal, sends the request to the entry relay with `POST /faf` and prints the response:
 
 ```sh
 # Two relays and a terminal (they fall back to mock attestation off-TEE), with
@@ -178,10 +179,10 @@ Run `cargo run --bin client -- --help` for all options.
 
 ### Using the libraries
 
-To embed the client in your own Relying Party, use `ttk_client`:
+To embed the client in your own Relying Party, use `ttk_ra_client`:
 
 ```rust
-use ttk_client::{EnclaveCertVerifier, TtkClient};
+use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 
 let verifier = EnclaveCertVerifier::new()
     .with_expected_pcr(0, expected_pcr0); // reference values for your enclave image
@@ -189,10 +190,10 @@ let mut client = TtkClient::connect_with_verifier(addr, "localhost", verifier).a
 let resp = client.get("/evidence.eat").await?;
 ```
 
-To build another kind of attested node, use `ttk_core` and add routes to the base server:
+To build another kind of attested node, use `ttk_ra_server` and add routes to the base server:
 
 ```rust
-use ttk_core::server::{Listener, Server};
+use ttk_ra_server::server::{Listener, Server};
 
 let server = Server::listen(Listener::from_env()?)?;
 server.serve_with(axum::Router::new().route("/ping", axum::routing::get(|| async { "pong" }))).await;
@@ -203,21 +204,24 @@ server.serve_with(axum::Router::new().route("/ping", axum::routing::get(|| async
 ```
 Cargo.toml              workspace manifest (shared package metadata and dependency versions)
 crates/core/src/
-  lib.rs                crate root of `ttk_core`
-  attestation/          TEE providers (nitro, sev_snp, tdx, mock) and the EAT data model (eat.rs)
+  lib.rs                crate root of `ttk_core`: submods labels, ATTESTATION_OID, PARENT_CID, mock root CA
+  eat.rs                the RFC 9711 EAT data model
+  egress.rs             egress policy for peer-chosen destinations
+  vsock.rs              QUIC datagram sockets over vsock (Linux)
+  bin/vsock-proxy.rs    parent-instance UDP <-> vsock proxy (Linux)
+crates/ra-server/src/
+  lib.rs                crate root of `ttk_ra_server`
+  attestation/          TEE providers (nitro, sev_snp, tdx, mock)
   identity.rs           generate_identity() / AttestationParams
   server.rs             attestation, RA-TLS certificate, QUIC / HTTP/3 serving, Listener
   router.rs             base routes (GET /, GET /evidence.eat)
-  vsock.rs              QUIC datagram sockets over vsock (Linux)
-crates/client/src/
-  lib.rs, client.rs     `ttk_client`: TtkClient, EnclaveCertVerifier
+crates/ra-client/src/
+  lib.rs, client.rs     `ttk_ra_client`: TtkClient, EnclaveCertVerifier
   verifier/             Evidence verification for Nitro, SEV-SNP and TDX/SGX (DCAP)
   faf.rs, seal.rs       the POST /faf request format and its HPKE sealing
   main.rs               test `client` binary
-crates/client/benches/  Criterion benchmarks for the client
 crates/relay/src/
   lib.rs, main.rs       `ttk_relay` and the `relay` binary: forwards POST /faf
-  bin/vsock-proxy.rs    parent-instance UDP <-> vsock proxy (Linux)
 crates/terminal/src/
   lib.rs, main.rs       `ttk_terminal` and the `terminal` binary: last hop of POST /faf
 crates/*/tests/         each crate's integration and end-to-end tests
@@ -228,7 +232,6 @@ crates/*/tests/         each crate's integration and end-to-end tests
 ```sh
 cargo test --workspace                        # default features
 cargo test --workspace --all-features         # everything
-cargo bench -p ttk-client --bench client      # client benchmarks
 cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo deny check                              # licences / advisories, config in deny.toml
 ```
@@ -277,7 +280,7 @@ The profiles are private tag URIs, not registered values. For Nitro, the outer c
 | `eat_profile`   | 265   | `tag:aws.amazon.com,2024:nitro-enclave-nested-eat`                  |
 | `submods`       | 266   | `{ "aws_nitro": <raw NSM Attestation Document bytes> }`             |
 
-Claim keys are from the IANA ["CBOR Web Token (CWT) Claims"](https://www.iana.org/assignments/cwt) registry, as registered by RFC 9711. See `crates/core/src/attestation/eat.rs`.
+Claim keys are from the IANA ["CBOR Web Token (CWT) Claims"](https://www.iana.org/assignments/cwt) registry, as registered by RFC 9711. See `crates/core/src/eat.rs`.
 
 ## Docker
 
