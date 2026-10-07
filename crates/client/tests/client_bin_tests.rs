@@ -59,23 +59,23 @@ async fn client_binary_sends_a_faf_request_through_two_relays() {
         true,
     )
     .await;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(output.status.success(), "{stdout}");
+    assert!(output.status.success(), "{stderr}");
     assert!(
-        stdout.contains(&format!(
+        stderr.contains(&format!(
             "--> Sending POST /faf (route: {addr} -> {relay} -> {terminal})"
         )),
-        "{stdout}"
+        "{stderr}"
     );
-    assert!(stdout.contains("Response Status: 200"), "{stdout}");
+    assert!(stderr.contains("Response Status: 200"), "{stderr}");
     assert!(
-        stdout.contains("Terminal reply (decrypted):\nhello:hello"),
-        "{stdout}"
+        stderr.contains("Terminal reply (decrypted): hello:hello"),
+        "{stderr}"
     );
     assert!(
-        stdout.contains("Connection closed successfully."),
-        "{stdout}"
+        stderr.contains("Connection closed successfully."),
+        "{stderr}"
     );
 }
 
@@ -97,9 +97,9 @@ async fn client_binary_fails_when_the_second_relay_is_a_terminal() {
         true,
     )
     .await;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stdout.contains("Response Status: 502"), "{stdout}");
+    assert!(stderr.contains("Response Status: 502"), "{stderr}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -107,20 +107,19 @@ async fn client_binary_defaults_to_the_second_relay_on_port_4434() {
     let addr = start_relay();
     let url = format!("https://127.0.0.1:{}", addr.port());
     let output = run_client_binary(&[&url], true).await;
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // Nothing listens there, so the relay can't be attested and nothing is sent.
     assert!(
-        stdout.contains("--> Attesting relay 127.0.0.1:4434"),
-        "{stdout}"
+        stderr.contains("--> Attesting relay 127.0.0.1:4434"),
+        "{stderr}"
     );
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains("Failed to attest relay 127.0.0.1:4434"),
         "{stderr}"
     );
-    assert!(!stdout.contains("Sending POST /faf"), "{stdout}");
+    assert!(!stderr.contains("Sending POST /faf"), "{stderr}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -128,20 +127,19 @@ async fn client_binary_defaults_to_the_terminal_on_port_4444() {
     let addr = start_relay().to_string();
     let relay = start_relay().to_string();
     let output = run_client_binary(&["--addr", &addr, "--relay", &relay], true).await;
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // Nothing listens there, so the terminal can't be attested and nothing is sent.
     assert!(
-        stdout.contains("--> Attesting terminal 127.0.0.1:4444"),
-        "{stdout}"
+        stderr.contains("--> Attesting terminal 127.0.0.1:4444"),
+        "{stderr}"
     );
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(
         stderr.contains("Failed to attest terminal 127.0.0.1:4444"),
         "{stderr}"
     );
-    assert!(!stdout.contains("Sending POST /faf"), "{stdout}");
+    assert!(!stderr.contains("Sending POST /faf"), "{stderr}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

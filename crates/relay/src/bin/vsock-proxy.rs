@@ -127,11 +127,11 @@ fn parse_args() -> RelayConfig {
     match parse_relay_args(&args, |name| std::env::var(name).ok()) {
         Ok(Some(config)) => config,
         Ok(None) => {
-            print!("{RELAY_USAGE}");
+            log::info!("{RELAY_USAGE}");
             std::process::exit(0);
         }
         Err(e) => {
-            eprint!("error: {e}\n\n{RELAY_USAGE}");
+            log::error!("error: {e}\n\n{RELAY_USAGE}");
             std::process::exit(2);
         }
     }
@@ -149,8 +149,9 @@ async fn main() -> std::io::Result<()> {
 /// Entry point for the `vsock-proxy` binary on platforms without vsock.
 #[cfg(not(target_os = "linux"))]
 fn main() {
+    env_logger::init();
     let _ = parse_args();
-    eprintln!("error: vsock-proxy needs vsock, which is only available on Linux");
+    log::error!("vsock-proxy needs vsock, which is only available on Linux");
     std::process::exit(1);
 }
 

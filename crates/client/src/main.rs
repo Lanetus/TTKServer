@@ -16,6 +16,7 @@
 //! The enclave images never include it.
 
 use axum::http::Uri;
+use log::{error, info, warn};
 use std::net::SocketAddr;
 use std::time::Instant;
 use ttk_client::faf::{connect_to_node, parse_relay_server, FafRelay, FafRequest, FAF_PATH};
@@ -138,7 +139,7 @@ fn parse_args() -> ClientTarget {
         std::env::var("TTK_SERVER_NAME").ok(),
     )
     .unwrap_or_else(|| {
-        print!("{CLIENT_USAGE}");
+        info!("{CLIENT_USAGE}");
         std::process::exit(0);
     })
 }
@@ -146,7 +147,7 @@ fn parse_args() -> ClientTarget {
 /// Entry point for the `client` binary.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let ClientTarget {
         server_addr,
@@ -156,14 +157,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         message,
     } = parse_args();
 
-    println!("=================================================");
-    println!("TTKServer HTTP/3 Client (RFC 9114)");
-    println!("Connecting to: {} (SNI: {})", server_addr, server_name);
-    println!("=================================================");
+    info!("TTKServer HTTP/3 client (RFC 9114) connecting to {server_addr} (SNI: {server_name})");
 
     let mut verifier = EnclaveCertVerifier::new();
     if std::env::var("TTK_ALLOW_MOCK_ATTESTATION").is_ok_and(|v| v == "1") {
-        eprintln!("WARNING: accepting MOCK attestation (TTK_ALLOW_MOCK_ATTESTATION=1)");
+        warn!("Accepting MOCK attestation (TTK_ALLOW_MOCK_ATTESTATION=1)");
         verifier = verifier.allow_mock();
     }
 
@@ -171,30 +169,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match TtkClient::connect_with_verifier(server_addr, &server_name, verifier.clone()).await {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("Failed to connect to TTKServer at {}: {}", server_addr, e);
+                error!("Failed to connect to TTKServer at {}: {}", server_addr, e);
                 std::process::exit(1);
             }
         };
 
     if let Some(fingerprint) = client.peer_cert_sha256_hex() {
-        println!("Server Certificate SHA-256 Fingerprint:");
-        println!("  {}", fingerprint);
-        println!("  (Attestation verified and bound to this certificate's key)");
+        info!(
+            "Server certificate SHA-256 fingerprint {fingerprint} \
+             (attestation verified and bound to this certificate's key)"
+        );
     }
 
-    println!("\n--> Attesting relay {relay_server} to seal the terminal's address to it");
+    info!("--> Attesting relay {relay_server} to seal the terminal's address to it");
     let relay_key = match attest_node(&relay_server, verifier.clone()).await {
         Ok(key) => key,
         Err(e) => {
-            eprintln!("Failed to attest relay {relay_server}: {e}");
+            error!("Failed to attest relay {relay_server}: {e}");
             std::process::exit(1);
         }
     };
-    println!("--> Attesting terminal {terminal_server} to seal the message to it");
+    info!("--> Attesting terminal {terminal_server} to seal the message to it");
     let terminal_key = match attest_node(&terminal_server, verifier).await {
         Ok(key) => key,
         Err(e) => {
-            eprintln!("Failed to attest terminal {terminal_server}: {e}");
+            error!("Failed to attest terminal {terminal_server}: {e}");
             std::process::exit(1);
         }
     };
@@ -216,50 +215,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         body,
     };
 
-    println!(
-        "\n--> Sending POST {FAF_PATH} (route: {server_addr} -> {relay_server} -> {terminal_server})"
+    info!(
+        "--> Sending POST {FAF_PATH} (route: {server_addr} -> {relay_server} -> {terminal_server})"
     );
     let started = Instant::now();
     let result = client.post_json(FAF_PATH, &request).await;
     let elapsed = started.elapsed();
     match result {
         Ok(resp) => {
-            println!("<-- Response Status: {} (in {:.3?})", resp.status, elapsed);
-            println!("<-- Headers:");
+            info!("<-- Response Status: {} (in {:.3?})", resp.status, elapsed);
+            info!("<-- Headers:");
             for (name, val) in &resp.headers {
-                println!("    {}: {}", name, val.to_str().unwrap_or("<binary>"));
+                info!("    {}: {}", name, val.to_str().unwrap_or("<binary>"));
             }
             match resp.text() {
-                Ok(body_str) => println!("<-- Body:\n{}", body_str),
-                Err(_) => println!("<-- Body (binary, {} bytes)", resp.body.len()),
+                Ok(body_str) => info!("<-- Body: {}", body_str),
+                Err(_) => info!("<-- Body (binary, {} bytes)", resp.body.len()),
             }
             if resp.status == 200 {
                 let reply = resp.text().map_err(|e| e.to_string()).and_then(|sealed| {
                     seal::open_response(&message_key, &sealed).map_err(|e| e.to_string())
                 });
                 match reply {
-                    Ok(reply) => println!(
-                        "<-- Terminal reply (decrypted):\n{}",
+                    Ok(reply) => info!(
+                        "<-- Terminal reply (decrypted): {}",
                         String::from_utf8_lossy(&reply)
                     ),
                     Err(e) => {
-                        eprintln!("Failed to decrypt the terminal's reply: {e}");
+                        error!("Failed to decrypt the terminal's reply: {e}");
                         std::process::exit(1);
                     }
                 }
             }
         }
         Err(e) => {
-            eprintln!(
+            error!(
                 "Error sending request to {} after {:.3?}: {}",
                 FAF_PATH, elapsed, e
             );
         }
     }
 
-    println!("\nClosing connection...");
+    info!("Closing connection...");
     client.close().await?;
-    println!("Connection closed successfully.");
+    info!("Connection closed successfully.");
 
     Ok(())
 }
