@@ -56,6 +56,10 @@ jobs:
       - name: Bump version
         run: cargo set-version --workspace --bump ${{ steps.bump_level.outputs.level }}
 
+      - name: Get new version
+        id: version
+        run: echo "tag=$(cargo pkgid -p ttk-ra-server | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
+
       - name: Update CHANGELOG.md
         uses: anthropics/claude-code-action@v1
         with:
@@ -70,10 +74,6 @@ jobs:
             --model claude-sonnet-5-5
             --max-turns 30
             --allowedTools "Task,Read,Edit,Write,Grep,Glob,Bash(git log:*),Bash(git tag:*),Bash(git show:*),Bash(git diff:*),Bash(git remote:*)"
-
-      - name: Get new version
-        id: version
-        run: echo "tag=$(cargo pkgid -p ttk-ra-server | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
 
       - name: Commit version bump and create tag
         uses: stefanzweifel/git-auto-commit-action@v4
