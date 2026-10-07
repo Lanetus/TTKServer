@@ -139,7 +139,7 @@ fn parse_args() -> ClientTarget {
         std::env::var("TTK_SERVER_NAME").ok(),
     )
     .unwrap_or_else(|| {
-        info!("{CLIENT_USAGE}");
+        print!("{CLIENT_USAGE}");
         std::process::exit(0);
     })
 }
