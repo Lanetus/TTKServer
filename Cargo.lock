@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-core"
-version = "2.8.0"
+version = "2.9.0"
 dependencies = [
  "bytes 1.12.1",
  "ciborium",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-ra-client"
-version = "2.8.0"
+version = "2.9.0"
 dependencies = [
  "aws-nitro-enclaves-nsm-api",
  "axum",
@@ -2472,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-ra-server"
-version = "2.8.0"
+version = "2.9.0"
 dependencies = [
  "aws-nitro-enclaves-nsm-api",
  "axum",
@@ -2497,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-relay"
-version = "2.8.0"
+version = "2.9.0"
 dependencies = [
  "axum",
  "env_logger",
@@ -2511,7 +2511,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-root"
-version = "2.8.0"
+version = "2.9.0"
 dependencies = [
  "axum",
  "bytes 1.12.1",
@@ -2530,7 +2530,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-terminal"
-version = "2.8.0"
+version = "2.9.0"
 dependencies = [
  "axum",
  "env_logger",
