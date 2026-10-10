@@ -46,6 +46,25 @@ TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 RUST_LOG=info cargo run --bin termi
 cargo run --bin client -- <args>                                             # see parse_client_args() in crates/ra-client/src/main.rs
 ```
 
+## Branches
+
+- **`develop`** is the integration branch. Branch off `develop` and open every pull request against `develop`.
+- **`main`** is the release branch. It only receives merges from `develop`; every push to `main` cuts a release (see [Commit messages](#commit-messages)). Don't open feature or fix pull requests against `main`.
+- **Branch names** must start with one of these prefixes:
+
+  | Prefix     | Use for                          | Example                       |
+  |------------|----------------------------------|-------------------------------|
+  | `bugfix/`  | Bug fixes                        | `bugfix/relay-pool-timeout`   |
+  | `feature/` | New features                     | `feature/sev-snp-verifier`    |
+  | `docs/`    | Documentation-only changes       | `docs/branching-model`        |
+
+```sh
+git switch develop && git pull
+git switch -c feature/my-change   # or bugfix/… / docs/…
+# ... commit ...
+gh pr create --base develop
+```
+
 ## Before opening a pull request
 
 CI runs the following on every pull request; please run them locally first:
@@ -73,7 +92,7 @@ Also:
 
 ## Commit messages
 
-Releases are automated from commit messages on `main`, so **every commit message must start with one of these prefixes**:
+Releases are automated from the commit messages that land on `main` (via `develop`), so **every commit message must start with one of these prefixes**:
 
 | Prefix   | Use for                | Version bump |
 |----------|------------------------|--------------|
@@ -83,7 +102,7 @@ Releases are automated from commit messages on `main`, so **every commit message
 
 Example: `feat: verify SEV-SNP evidence in the client`
 
-Don't use `chore(release):` — it is reserved for the automated version-bump commit, and CI skips releasing on it. Don't bump the version in `Cargo.toml` yourself; the CD workflow does it (with `cargo set-version --workspace`) and tags the release when your change lands on `main`. When a pull request is squash-merged, the squash commit's title must follow the same rule.
+Don't use `chore(release):` — it is reserved for the automated version-bump commit, and CI skips releasing on it. Don't bump the version in `Cargo.toml` yourself; the CD workflow does it (with `cargo set-version --workspace`) and tags the release when your change is merged from `develop` into `main`. When a pull request is squash-merged (into `develop`, or a release from `develop` into `main`), the squash commit's title must follow the same rule; the commit that lands on `main` decides the version bump.
 
 ## Security-sensitive changes
 

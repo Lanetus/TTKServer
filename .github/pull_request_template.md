@@ -1,6 +1,10 @@
 <!--
+Base branch: open PRs against `develop`, not `main` (`main` only receives release
+merges from `develop`). Branch name: must start with `bugfix/`, `feature/` or `docs/`.
+
 PR title: must start with `fix:`, `feat:` or `major:` (it becomes the squash commit
-message on main, which drives the automated version bump). See CONTRIBUTING.md.
+message, and the commit that lands on main drives the automated version bump).
+See CONTRIBUTING.md.
 
 Security vulnerabilities: do not open a public PR. See SECURITY.md.
 -->
