@@ -128,14 +128,19 @@ impl BlobStore for S3Store {
         Ok(())
     }
 
-    async fn get(&self, name: &str) -> Result<Vec<u8>, EvalError> {
-        let object = self
+    async fn get(&self, name: &str) -> Result<Option<Vec<u8>>, EvalError> {
+        let object = match self
             .client
             .get_object()
             .bucket(&self.bucket)
             .key(name)
             .send()
-            .await?;
-        Ok(object.body.collect().await?.into_bytes().to_vec())
+            .await
+        {
+            Ok(object) => object,
+            Err(e) if e.as_service_error().is_some_and(|e| e.is_no_such_key()) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(Some(object.body.collect().await?.into_bytes().to_vec()))
     }
 }
