@@ -14,8 +14,8 @@ pub trait BlobStore: Send + Sync + 'static {
     /// Stores `data` under `name`, replacing any blob already there.
     fn put(&self, name: &str, data: Vec<u8>) -> impl Future<Output = Result<(), EvalError>> + Send;
 
-    /// Returns the blob stored under `name`; an error if there is none.
-    fn get(&self, name: &str) -> impl Future<Output = Result<Vec<u8>, EvalError>> + Send;
+    /// Returns the blob stored under `name`, or `None` if there is none.
+    fn get(&self, name: &str) -> impl Future<Output = Result<Option<Vec<u8>>, EvalError>> + Send;
 }
 
 /// An in-process [`BlobStore`], lost on exit: for tests and local runs.
@@ -40,12 +40,12 @@ impl BlobStore for MemoryStore {
         Ok(())
     }
 
-    async fn get(&self, name: &str) -> Result<Vec<u8>, EvalError> {
-        self.blobs
+    async fn get(&self, name: &str) -> Result<Option<Vec<u8>>, EvalError> {
+        Ok(self
+            .blobs
             .lock()
             .map_err(|_| "memory store poisoned")?
             .get(name)
-            .cloned()
-            .ok_or_else(|| format!("no blob named {name}").into())
+            .cloned())
     }
 }
