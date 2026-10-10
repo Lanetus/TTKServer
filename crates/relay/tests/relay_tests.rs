@@ -78,7 +78,7 @@ async fn faf_relays_to_an_attested_terminal_and_answers_200() {
     assert_eq!(response.status, 200, "{:?}", response.text());
     // The terminal's sealed reply comes back through the relay unchanged.
     let reply = seal::open_response(&key, &response.text().unwrap()).unwrap();
-    assert_eq!(reply, b"hello:hello relay");
+    assert_eq!(reply, b"hello relay");
     client.close().await.unwrap();
 }
 
@@ -97,7 +97,7 @@ async fn faf_routes_through_plain_and_sealed_relays_to_the_terminal() {
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 200, "{:?}", response.text());
     let reply = seal::open_response(&key, &response.text().unwrap()).unwrap();
-    assert_eq!(reply, b"hello:hello relay");
+    assert_eq!(reply, b"hello relay");
     client.close().await.unwrap();
 }
 

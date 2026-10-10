@@ -17,6 +17,11 @@ name = "ttk_core"
 name = "vsock-proxy"
 path = "src/bin/vsock-proxy.rs"
 
+# Parent-instance daemon forwarding TCP from the enclave's vsock to one fixed remote (e.g. S3). Linux only.
+[[bin]]
+name = "vsock-proxy-tcp"
+path = "src/bin/vsock-proxy-tcp.rs"
+
 [dependencies]
 ciborium.workspace = true
 env_logger.workspace = true

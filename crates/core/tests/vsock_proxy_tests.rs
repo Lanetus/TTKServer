@@ -67,3 +67,87 @@ fn help_and_errors() {
     assert!(parse_relay_args(&args(&["--cid", "x"]), no_env).is_err());
     assert!(parse_relay_args(&args(&["--bogus"]), no_env).is_err());
 }
+
+mod tcp {
+    use super::{args, no_env};
+    use ttk_core::vsock_proxy_tcp::{parse_tcp_proxy_args, DEFAULT_TCP_VSOCK_PORT};
+
+    const REMOTE: &str = "s3.eu-west-1.amazonaws.com:443";
+
+    #[test]
+    fn requires_cid_and_remote() {
+        assert!(parse_tcp_proxy_args(&args(&["-r", REMOTE]), no_env)
+            .unwrap_err()
+            .contains("CID"));
+        assert!(parse_tcp_proxy_args(&args(&["-c", "17"]), no_env)
+            .unwrap_err()
+            .contains("remote"));
+    }
+
+    #[test]
+    fn defaults_the_vsock_port() {
+        let config = parse_tcp_proxy_args(&args(&["--cid", "17", "--remote", REMOTE]), no_env)
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.cid, 17);
+        assert_eq!(config.remote, REMOTE);
+        assert_eq!(config.vsock_port, DEFAULT_TCP_VSOCK_PORT);
+        assert!(!config.allow_private);
+    }
+
+    #[test]
+    fn flags_override_env() {
+        let env = |name: &str| match name {
+            "TTK_ENCLAVE_CID" => Some("16".to_string()),
+            "TTK_TCP_REMOTE" => Some("example.com:443".to_string()),
+            "TTK_TCP_VSOCK_PORT" => Some("9000".to_string()),
+            "TTK_ALLOW_PRIVATE_NEXT_HOPS" => Some("1".to_string()),
+            _ => None,
+        };
+        let from_env = parse_tcp_proxy_args(&[], env).unwrap().unwrap();
+        assert_eq!(
+            (from_env.cid, from_env.remote.as_str(), from_env.vsock_port),
+            (16, "example.com:443", 9000)
+        );
+        assert!(from_env.allow_private);
+        let from_flags =
+            parse_tcp_proxy_args(&args(&["-c", "17", "-r", REMOTE, "-p", "8001"]), env)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            (
+                from_flags.cid,
+                from_flags.remote.as_str(),
+                from_flags.vsock_port
+            ),
+            (17, REMOTE, 8001)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_remotes_and_ports() {
+        for remote in [
+            "s3.amazonaws.com",
+            ":443",
+            "host:0",
+            "host:https",
+            "host:70000",
+        ] {
+            assert!(
+                parse_tcp_proxy_args(&args(&["-c", "17", "-r", remote]), no_env).is_err(),
+                "{remote}"
+            );
+        }
+        assert!(
+            parse_tcp_proxy_args(&args(&["-c", "17", "-r", REMOTE, "-p", "x"]), no_env).is_err()
+        );
+        assert!(
+            parse_tcp_proxy_args(&args(&["-c", "17", "-r", REMOTE, "--bogus"]), no_env).is_err()
+        );
+    }
+
+    #[test]
+    fn help() {
+        assert_eq!(parse_tcp_proxy_args(&args(&["-h"]), no_env).unwrap(), None);
+    }
+}

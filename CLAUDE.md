@@ -16,6 +16,8 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
   - `src/vsock.rs` (Linux) — quinn `AsyncUdpSocket`s over vsock, datagrams framed `[u16 BE len][payload]`: `VsockUdpSocket` (inbound) and `VsockOutboundSocket` (outbound via parent `3:5001`, `[4|6][ip][u16 port]` destination header); framing helpers reused by `vsock-proxy`.
   - `src/vsock_proxy.rs` — `vsock-proxy` config: `RELAY_USAGE`, defaults, `RelayConfig`, `parse_relay_args` (in the lib so `tests/` can reach it).
   - `src/bin/vsock-proxy.rs` — bin `vsock-proxy` (Linux, parent instance: public UDP `:443` to enclave vsock `5000`, and outbound vsock `5001` to UDP, egress policy via `egress`, `--allow-private`).
+  - `src/vsock_proxy_tcp.rs` — `vsock-proxy-tcp` config: `TCP_PROXY_USAGE`, `DEFAULT_TCP_VSOCK_PORT` (8001), `TcpProxyConfig`, `parse_tcp_proxy_args` (`TTK_ENCLAVE_CID`, `TTK_TCP_REMOTE`, `TTK_TCP_VSOCK_PORT`).
+  - `src/bin/vsock-proxy-tcp.rs` — bin `vsock-proxy-tcp` (Linux, parent instance): vsock `8001` (enclave CID only) to one **fixed** TCP remote (`--remote host:port`, e.g. the S3 endpoint), resolved on the parent, egress policy via `egress`; opaque bytes (TLS ends in the enclave). Enclave side: `vsock::forward_tcp_to_vsock` (loopback TCP listener -> vsock to the parent).
 - `crates/ra-server/` — crate `ttk-ra-server` (lib `ttk_ra_server`), **server only**: no relay/message logic, no client.
   - `src/lib.rs` — declares `attestation`, `router`, `server`; re-exports `ttk_core::{egress, vsock}`; re-exports `cmw`, `Cmw`, `CmwRecord`, `CmwCollection`, `CmwType`, `generate_identity`, `AttestationParams`.
   - `src/identity.rs` — `generate_identity()` and the `AttestationParams` struct (plain pub fields, `Default`).
@@ -32,7 +34,10 @@ Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a
   - `src/main.rs` — **test-only** bin `client` (never in enclave images): routes `/faf` through two relays to a terminal: connects to the entry relay (`--addr`), attests the second relay (`--relay`, default `127.0.0.1:4434`) and the terminal (`--terminal`, default `127.0.0.1:4444`), seals each hop address to the relay reading it and the body to the terminal. E2E tests in `tests/client_bin_tests.rs`.
 - `crates/relay/` — crate `ttk-relay` (lib `ttk_relay`): `Relay` (wraps a `ttk-ra-server` `Server`, adds `POST /faf` forwarding with a verified connection pool; empty `relays` = 400), `run()` (env config, `TTK_PARENT_CID`/`TTK_OUTBOUND_VSOCK_PORT`, `TTK_ALLOW_MOCK_ATTESTATION=1` for mock next hops, `TTK_ALLOW_PRIVATE_NEXT_HOPS=1` / `allow_private_next_hops()` for loopback/private next hops — needed locally and in relay tests). Egress policy via `ttk_core::egress::classify_hop_address` (link-local/multicast/broadcast/unspecified always refused), `MAX_RELAYS` (8), `MAX_CONCURRENT_FORWARDS` (256, else 503), every forwarding failure = uniform `502 relay failed`. Bin: `relay` (`src/main.rs`, enclave).
 - `crates/root/` — crate `ttk-root` (lib `ttk_root`): `Root` (wraps a `ttk-ra-server` `Server`, adds `GET /root-attestation`: JSON `RootAttestation` `{hash_algorithm: "SHA384", pcr0: [hex…]}`, the accepted enclave image checksums from `FileImageTrustStore` (`src/nitro_image_allowlist.txt`); `with_image_trust_store` overrides), `run()`. Bin `root` (enclave). Depends on `ttk-core` (not `ttk-ra-client`); `ttk-ra-client` dev-depends on it (`tests/images_tests.rs`); `tests/root_tests.rs` has its own minimal h3 client.
-- `crates/terminal/` — crate `ttk-terminal` (lib `ttk_terminal`): `Terminal` (wraps a `ttk-ra-server` `Server`, adds `POST /faf` last hop: non-empty `relays` = 400, must decrypt `body` or 400; answers `hello:<message>` sealed under the body's message key via `seal::seal_response`, which relays pass back unchanged), `run()`. Bin `terminal` (enclave).
+- `crates/terminal/` — crate `ttk-terminal` (lib `ttk_terminal`): `Terminal<E: Evaluator = Echo>` (wraps a `ttk-ra-server` `Server`, adds `POST /faf` last hop: non-empty `relays` = 400, must decrypt `body` or 400; answers `Evaluator::eval(message)` (default `Echo`: the message itself; error = bare 500) sealed under the body's message key via `seal::seal_response`, which relays pass back unchanged), `with_evaluator`, `run()` / `run_with(evaluator)`. Bin `terminal` (enclave).
+  - `src/file_service.rs` — `FileService<S: BlobStore>` evaluator, CBOR with byte strings (no base64): `{"type": "upload", "body": h'<file>'}` → `{"response": h'<32-byte sha256>'}`, `{"type": "download", "body": h'<sha256>'}` → `{"response": h'<file>'}`; `FileRequest`/`FileResponse` `to_cbor`/`from_cbor`; content-addressed (blob name = hex sha256, `blob_name`). Evaluator/store errors are `EvalError` (`Send + Sync`, unlike `BoxError`).
+  - `src/storage/` — `BlobStore` trait, `MemoryStore` (tests), `s3::S3Store` (feature `s3`, non-default: `TTK_S3_BUCKET`, optional `TTK_S3_ENDPOINT`, AWS env credential chain, rustls/`ring`; `TTK_S3_VSOCK_PORT` (Linux) = S3 over vsock: `LoopbackResolver` sends every host to `127.0.0.1:443`, forwarded to the parent's `vsock-proxy-tcp`).
+  - `src/bin/s3_server.rs` — bin `s3-server` (`required-features = ["s3"]`): terminal with `FileService<S3Store>`.
 
 ## Features (`ttk-ra-server`; `ttk-relay` / `ttk-terminal` forward them)
 - `nitro` and `mock` are default; `sev-snp`, `tdx` optional; all additive. `mock` is the fallback when no TEE hardware is detected.
@@ -47,15 +52,19 @@ cargo test --workspace                        # nitro tests fall back to mock do
 cargo test --workspace --all-features
 TTK_USE_UDP=1 cargo run --bin relay           # relay node on UDP :4433 (TTK_LISTEN_ADDR overrides; RUST_LOG=info for logs)
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --bin terminal
+TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 cargo run --bin s3-server --features s3
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4455 cargo run --bin root   # GET /root-attestation
 cargo run --bin client -- <args>              # see parse_client_args() in crates/ra-client/src/main.rs
 cargo run --bin vsock-proxy -- --cid <CID>    # parent-side UDP :443 -> enclave vsock relay (Linux)
+cargo run --bin vsock-proxy-tcp -- --cid <CID> --remote s3.<region>.amazonaws.com:443   # parent-side enclave vsock 8001 -> fixed TCP remote (Linux)
 cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo deny check                              # config in deny.toml
 mdbook build docs                             # book -> docs/book; needs `cargo install mdbook-mermaid` (```mermaid blocks)
-scripts/build-eif.sh [amd64|arm64] [relay|terminal|root]   # EIF via Docker (Dockerfile ARG NODE) -> out/ttk-<node>_v<ver>_<arch>.eif + .json (PCRs)
+scripts/build-eif.sh [amd64|arm64] [relay|terminal|s3-server|root]   # EIF via Docker (Dockerfile ARG NODE) -> out/ttk-<node>_v<ver>_<arch>.eif + .json (PCRs)
+TTK_S3_BUCKET=<bucket> AWS_REGION=<region> scripts/build-eif.sh arm64 s3-server   # bakes bucket/region/TTK_S3_VSOCK_PORT (8001) + ca-certificates into the image
 deploy/systemd/vsock-proxy.service            # systemd unit for `vsock-proxy` on the parent (steps in its header)
-deploy/ec2/user-data.sh                       # EC2 user data: installs nitro-cli, downloads EIF/vsock-proxy/units over HTTP, starts both
+deploy/systemd/vsock-proxy-tcp.service        # systemd unit for `vsock-proxy-tcp` (enclave -> S3)
+deploy/ec2/user-data.sh                       # EC2 user data: installs nitro-cli, downloads EIF/vsock-proxy/units over HTTP, starts both (TTK_NODE=s3-server: also vsock-proxy-tcp to s3.<TTK_S3_REGION>, enclave under ttk-terminal-enclave.service)
 deploy/systemd/ttk-{relay,terminal}-enclave.service  # systemd units running the node EIF via nitro-cli (CID 16 / 17, 2 vCPU, 1024 MiB; /etc/default/ttk-<node>-enclave)
 ```
 

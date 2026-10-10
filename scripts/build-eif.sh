@@ -2,8 +2,12 @@
 # Builds a TTKServer Nitro Enclave image file (EIF) locally with Docker, mirroring the
 # "Build EIF" steps of .github/workflows/build.yml.
 #
-# Usage: scripts/build-eif.sh [amd64|arm64] [relay|terminal|root]
+# Usage: scripts/build-eif.sh [amd64|arm64] [relay|terminal|s3-server|root]
 #        (defaults: this machine's architecture, and the relay node)
+#
+# s3-server (a terminal storing files in S3) needs TTK_S3_BUCKET and AWS_REGION, which are baked
+# into the image (so they are part of the measurements); TTK_S3_VSOCK_PORT (default 8001) must
+# match the parent's vsock-proxy-tcp.
 #
 # TTK_DEBUG=1 builds a debug image (suffix _debug): RUST_LOG=info and
 # TTK_ALLOW_MOCK_ATTESTATION=1 baked in, for running with `nitro-cli run-enclave --debug-mode`
@@ -22,7 +26,7 @@ case "${1:-$(uname -m)}" in
     amd64 | x86_64) arch=amd64 ;;
     arm64 | aarch64) arch=arm64 ;;
     -h | --help)
-        sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *)
@@ -33,12 +37,22 @@ esac
 platform="linux/$arch"
 
 case "${2:-relay}" in
-    relay | terminal | root) node="${2:-relay}" ;;
+    relay | terminal | s3-server | root) node="${2:-relay}" ;;
     *)
-        echo "error: unknown node '$2' (expected relay, terminal or root)" >&2
+        echo "error: unknown node '$2' (expected relay, terminal, s3-server or root)" >&2
         exit 2
         ;;
 esac
+
+node_args=""
+if [ "$node" = s3-server ]; then
+    if [ -z "${TTK_S3_BUCKET:-}" ] || [ -z "${AWS_REGION:-}" ]; then
+        echo "error: s3-server needs TTK_S3_BUCKET and AWS_REGION" >&2
+        exit 2
+    fi
+    node_args="--build-arg TTK_S3_BUCKET=$TTK_S3_BUCKET --build-arg AWS_REGION=$AWS_REGION"
+    node_args="$node_args --build-arg TTK_S3_VSOCK_PORT=${TTK_S3_VSOCK_PORT:-8001}"
+fi
 
 version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
 name="ttk-${node}_v${version}_${arch}"
@@ -51,8 +65,9 @@ app_image="ttk-$node:local-$arch"
 cli_image="ttkserver-nitro-cli:$arch"
 
 echo "==> Building app image $app_image ($platform)"
-# shellcheck disable=SC2086 # $debug_args is a list of arguments
-docker build --platform "$platform" --build-arg NODE="$node" $debug_args -t "$app_image" .
+# shellcheck disable=SC2086 # $debug_args and $node_args are lists of arguments
+docker build --platform "$platform" --build-arg NODE="$node" $debug_args $node_args \
+    -t "$app_image" .
 
 # nitro-cli image, built once per architecture and reused on later runs.
 if ! docker image inspect "$cli_image" > /dev/null 2>&1; then
