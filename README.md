@@ -242,8 +242,10 @@ Commit messages must start with `fix:` (patch), `feat:` (minor) or `major:` (maj
 
 This project uses GitHub Actions:
 
+Pull requests come from `bugfix/`, `feature/` or `docs/` branches and target the **`develop`** branch; `main` is the release branch and only receives merges from `develop` (see [CONTRIBUTING.md](CONTRIBUTING.md#branches)).
+
 *   **CI (`CI.yml`):** runs on every pull request. It runs the tests with coverage (`cargo llvm-cov nextest --all-features`, uploaded to Codecov), checks formatting, runs clippy on the workspace with `--all-features`, and runs `cargo audit` and `cargo deny`.
-*   **CD (`main.yml`):** runs on pushes to `main`. It bumps the workspace version in `Cargo.toml` according to the commit prefix, commits it as `chore(release): version X.Y.Z` with a tag, and runs the tests with coverage. The manual Build workflow (`build.yml`) builds `linux/amd64` and `linux/arm64` Docker images and EIFs for both the relay and the terminal node, pushes the images to Amazon ECR, and publishes the crates.
+*   **Release (`main.yml`):** runs on pushes to `main` (merges from `develop`). It bumps the workspace version in `Cargo.toml` according to the commit prefix, commits it as `chore(release): version X.Y.Z` with a tag, and runs the tests with coverage. The manual Build workflow (`build.yml`) builds `linux/amd64` and `linux/arm64` Docker images and EIFs for both the relay and the terminal node, pushes the images to Amazon ECR, and publishes the crates.
 
 ## RATS Architecture (RFC 9334)
 

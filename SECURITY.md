@@ -4,7 +4,7 @@ TTKServer is attestation and RA-TLS code: its purpose is to let a client trust t
 
 ## Supported versions
 
-Only the latest release receives security fixes. Releases are cut automatically from `main`, so a fix ships as a new patch (or higher) version.
+Only the latest release receives security fixes. Releases are cut automatically from `main` (which receives merges from the `develop` integration branch), so a fix ships as a new patch (or higher) version.
 
 | Version          | Supported |
 |------------------|:---------:|

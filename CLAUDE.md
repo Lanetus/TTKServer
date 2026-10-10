@@ -3,8 +3,9 @@
 Rust HTTP/3 (QUIC) server meant to run inside an AWS Nitro Enclave. It acts as a RATS (RFC 9334) **Attester**: it generates an ephemeral TLS key, gets an NSM Attestation Document whose `user_data` is bound to that key, embeds the evidence in a self-signed X.509 cert (custom extension), and serves the evidence over HTTP/3. Two enclave nodes are built on it: the **relay** (forwards onion-routed `POST /faf` requests) and the **terminal** (the last hop, decrypts the message). A companion `client` binary attests the nodes and sends a `/faf` message through a relay to a terminal. Appraisal against reference values (PCRs) happens outside this repo.
 
 ## Context & File Access Rules
-- **Do NOT read or search inside:** `docs/`, `target/`, or `data/raw_datasets/`.
+- **Do NOT read or search inside:** `docs/`, `target/`, or `out/`.
 - Only inspect the crates' `src/` and `tests/` unless explicitly instructed otherwise.
+- `docs/src` are NOT for reference. We use them to generate the architectural documentation.
 
 ## Layout (Cargo workspace, members in `crates/`; root `Cargo.toml` holds `[workspace.package]` version/metadata and `[workspace.dependencies]`)
 - `crates/core/` — crate `ttk-core` (lib `ttk_core` + bin `vsock-proxy`): what server and client share, so `ttk-ra-client` does not depend on `ttk-ra-server`. Re-exported by `ttk-ra-server` at its old paths (`attestation::{cmw, media_type, MOCK_NITRO_ROOT_CERT}`, `server::{ATTESTATION_OID, PARENT_CID}`, `egress`, `vsock`).
@@ -61,14 +62,14 @@ deploy/systemd/ttk-{relay,terminal}-enclave.service  # systemd units running the
 ## Conventions
 - Tests live in each crate's `tests/` (no inline `#[cfg(test)]` modules); items they need must be `pub`.
 - Rust 2021; run `cargo fmt` and clippy before finishing. Keep `//!`/`///` doc comments on public items, in the existing RATS/RFC-referencing style.
-- Logging via `log` + `env_logger` in library/server code; the server accept loop currently uses `eprintln!` for per-connection errors.
+- Logging via `log` + `env_logger` in code; do not use `eprintln!` , `println!` or `dbg!`.
 - Crypto: rustls 0.23 with the `ring` provider (installed explicitly when attesting / connecting); quinn 0.11 + h3 0.0.7 / h3-quinn 0.0.9 — versions are tightly coupled, upgrade together.
-- The attestation OID `1.3.6.1.4.1.99999.1` (`ttk_core::ATTESTATION_OID`) is a placeholder (not a registered PEN).
 - Releases use conventional commits (`feat:`, `fix:`, `chore(release):`) and version bumps of `[workspace.package]` in the root `Cargo.toml`.
+- **Branches:** `develop` is the integration branch; all PRs target `develop` (`gh pr create --base develop`), never `main`. Branch names MUST start with `bugfix/`, `feature/` or `docs/`. `main` is the release branch: it only receives merges from `develop`, and every push to it runs CD (`main.yml`: version bump + tag). CI (`CI.yml`) runs on every PR.
 - **STRICT commit message rule:** every commit message MUST start with one of these prefixes, no exceptions:
   - `fix:` — bug fixes
   - `feat:` — new features (minor version bump)
-  - `major:` — breaking changes (major version bump)
+  - `major:` — breaking changes (major version bump)(In case of `major:` ask me first)
 
   Never write an unprefixed commit message. (`chore(release):` is reserved for the automated release bump.)
 
