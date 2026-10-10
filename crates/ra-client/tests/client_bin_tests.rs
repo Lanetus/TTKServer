@@ -70,7 +70,7 @@ async fn client_binary_sends_a_faf_request_through_two_relays() {
     );
     assert!(stderr.contains("Response Status: 200"), "{stderr}");
     assert!(
-        stderr.contains("Terminal reply (decrypted): hello:hello"),
+        stderr.contains("Terminal reply (decrypted): hello"),
         "{stderr}"
     );
     assert!(

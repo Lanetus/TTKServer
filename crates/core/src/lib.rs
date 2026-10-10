@@ -8,6 +8,7 @@
 //! - [`egress`]: the egress policy for peer-chosen destinations ([`egress::classify_hop_address`]).
 //! - `vsock` (Linux): QUIC datagram sockets over vsock, the enclave's only way out.
 //! - [`vsock_proxy`]: configuration of the parent-instance `vsock-proxy` binary.
+//! - [`vsock_proxy_tcp`]: configuration of the parent-instance `vsock-proxy-tcp` binary.
 //! - The RA-TLS certificate extension OID ([`ATTESTATION_OID`]), the parent instance's vsock CID
 //!   ([`PARENT_CID`]) and the mock root CA ([`MOCK_NITRO_ROOT_CERT`]).
 
@@ -17,6 +18,7 @@ pub mod image_trust;
 #[cfg(target_os = "linux")]
 pub mod vsock;
 pub mod vsock_proxy;
+pub mod vsock_proxy_tcp;
 
 pub use cmw::{Cmw, CmwCollection, CmwRecord, CmwType};
 pub use image_trust::ImageTrustStore;

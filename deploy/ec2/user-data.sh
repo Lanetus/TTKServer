@@ -2,6 +2,8 @@
 # EC2 user data that turns a fresh Amazon Linux instance into a TTKServer parent instance: it
 # installs the Nitro Enclaves tooling, downloads the EIF, the `vsock-proxy` binary and the systemd units
 # from an HTTP server, and starts the enclave and the proxy (both also start on every reboot).
+# With TTK_NODE=s3-server it also installs `vsock-proxy-tcp`, through which the enclave reaches
+# the S3 endpoint of TTK_S3_REGION.
 #
 # Launch the instance with:
 #   - Amazon Linux 2023 (or Amazon Linux 2), on an enclave-capable type with at least 4 vCPUs
@@ -10,33 +12,57 @@
 #     `--enclave-options Enabled=true`).
 #   - A security group allowing inbound UDP 443.
 #   - This file as user data, with TTK_BASE_URL (and ideally the SHA-256 values) filled in.
+#   - s3-server: an EIF built for the bucket's region (scripts/build-eif.sh with TTK_S3_BUCKET /
+#     AWS_REGION), and TTK_S3_REGION below set to that region.
 #
 # The HTTP server must serve, under TTK_BASE_URL:
 #   ttk-<node>.eif              scripts/build-eif.sh output (out/ttk-<node>_v<ver>_<arch>.eif)
 #   vsock-proxy                 target/release/vsock-proxy, built for Linux on the same architecture
 #   vsock-proxy.service         deploy/systemd/vsock-proxy.service
 #   ttk-<node>-enclave.service  deploy/systemd/ttk-<node>-enclave.service
+#                               (s3-server runs under ttk-terminal-enclave.service)
+#   vsock-proxy-tcp             s3-server only: target/release/vsock-proxy-tcp, like vsock-proxy
+#   vsock-proxy-tcp.service     s3-server only: deploy/systemd/vsock-proxy-tcp.service
 #
 # Progress: /var/log/ttk-user-data.log (also /var/log/cloud-init-output.log).
 # Afterwards: nitro-cli describe-enclaves; journalctl -u ttk-<node>-enclave -u vsock-proxy
+#             (s3-server: journalctl -u ttk-terminal-enclave -u vsock-proxy -u vsock-proxy-tcp)
 set -euo pipefail
 
 # ---- Configuration ----------------------------------------------------------------------------
 TTK_BASE_URL="https://aptrepo.move.ai/ttkserver"   # no trailing slash
-TTK_NODE=relay                # enclave node to run: relay or terminal (<node> above)
+TTK_NODE=relay                # enclave node to run: relay, terminal or s3-server (<node> above)
 # SHA-256 of the downloads; leave empty to skip the check (not recommended over plain HTTP).
 TTK_EIF_SHA256=""
 TTK_VSOCK_PROXY_SHA256=""
+TTK_VSOCK_PROXY_TCP_SHA256=""   # s3-server only
 
 TTK_ENCLAVE_CID=16
 TTK_ENCLAVE_CPUS=2
 TTK_ENCLAVE_MEMORY=4096       # MiB; raise it if nitro-cli reports the EIF needs more
 TTK_ENCLAVE_EXTRA_ARGS=""     # e.g. --debug-mode (debug only: zeroes PCRs)
 TTK_RELAY_LISTEN=0.0.0.0:443
+
+# s3-server only: the bucket's region (must match the AWS_REGION baked into the EIF), the S3
+# endpoint vsock-proxy-tcp forwards to, and its vsock port (must match TTK_S3_VSOCK_PORT in the EIF).
+TTK_S3_REGION=eu-west-1
+TTK_S3_REMOTE="s3.$TTK_S3_REGION.amazonaws.com:443"
+TTK_TCP_VSOCK_PORT=8001
 # -----------------------------------------------------------------------------------------------
 
 exec > >(tee -a /var/log/ttk-user-data.log) 2>&1
 echo "==> TTKServer user data starting at $(date -Is)"
+
+# s3-server is a terminal node: it runs under the terminal's enclave unit, and needs the TCP
+# proxy to S3 alongside the UDP one.
+case "$TTK_NODE" in
+    relay | terminal) enclave_unit="ttk-$TTK_NODE-enclave"; with_s3=0 ;;
+    s3-server) enclave_unit=ttk-terminal-enclave; with_s3=1 ;;
+    *)
+        echo "error: unknown TTK_NODE '$TTK_NODE' (expected relay, terminal or s3-server)" >&2
+        exit 1
+        ;;
+esac
 
 download() { # <name> <dest> <mode> <eif|elf|unit>
     echo "==> Downloading $TTK_BASE_URL/$1"
@@ -89,12 +115,20 @@ download vsock-proxy /usr/local/bin/vsock-proxy.dl 0755 elf
 verify /usr/local/bin/vsock-proxy.dl "$TTK_VSOCK_PROXY_SHA256"
 mv -f /usr/local/bin/vsock-proxy.dl /usr/local/bin/vsock-proxy
 
-download "ttk-$TTK_NODE-enclave.service" "/etc/systemd/system/ttk-$TTK_NODE-enclave.service" 0644 unit
+if [ "$with_s3" = 1 ]; then
+    download vsock-proxy-tcp /usr/local/bin/vsock-proxy-tcp.dl 0755 elf
+    verify /usr/local/bin/vsock-proxy-tcp.dl "$TTK_VSOCK_PROXY_TCP_SHA256"
+    mv -f /usr/local/bin/vsock-proxy-tcp.dl /usr/local/bin/vsock-proxy-tcp
+    download vsock-proxy-tcp.service /etc/systemd/system/vsock-proxy-tcp.service 0644 unit
+fi
+
+download "$enclave_unit.service" "/etc/systemd/system/$enclave_unit.service" 0644 unit
 download vsock-proxy.service /etc/systemd/system/vsock-proxy.service 0644 unit
 
 echo "==> Writing unit configuration"
-cat > "/etc/default/ttk-$TTK_NODE-enclave" << EOF
+cat > "/etc/default/$enclave_unit" << EOF
 TTK_EIF=/opt/ttkserver/ttk-$TTK_NODE.eif
+TTK_ENCLAVE_NAME=ttk-$TTK_NODE
 TTK_ENCLAVE_CID=$TTK_ENCLAVE_CID
 TTK_ENCLAVE_CPUS=$TTK_ENCLAVE_CPUS
 TTK_ENCLAVE_MEMORY=$TTK_ENCLAVE_MEMORY
@@ -105,10 +139,22 @@ TTK_ENCLAVE_CID=$TTK_ENCLAVE_CID
 TTK_RELAY_LISTEN=$TTK_RELAY_LISTEN
 RUST_LOG=info
 EOF
+if [ "$with_s3" = 1 ]; then
+    cat > /etc/default/vsock-proxy-tcp << EOF
+TTK_ENCLAVE_CID=$TTK_ENCLAVE_CID
+TTK_TCP_REMOTE=$TTK_S3_REMOTE
+TTK_TCP_VSOCK_PORT=$TTK_TCP_VSOCK_PORT
+RUST_LOG=info
+EOF
+fi
 
-echo "==> Starting the enclave and vsock-proxy"
+echo "==> Starting the enclave and the vsock proxies"
 systemctl daemon-reload
-systemctl enable --now "ttk-$TTK_NODE-enclave.service"
+# The TCP proxy first, so S3 is reachable as soon as the enclave starts.
+if [ "$with_s3" = 1 ]; then
+    systemctl enable --now vsock-proxy-tcp.service
+fi
+systemctl enable --now "$enclave_unit.service"
 systemctl enable --now vsock-proxy.service
 
 nitro-cli describe-enclaves

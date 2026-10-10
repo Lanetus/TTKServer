@@ -13,6 +13,10 @@
 //!   the parent relays the datagrams to that UDP address.
 //!
 //! On every vsock connection, datagrams are framed as `[u16 big-endian length][payload]`.
+//!
+//! TCP needs no framing: [`forward_tcp_to_vsock`] carries each local TCP connection over its own
+//! vsock connection to the parent, where the `vsock-proxy-tcp` binary forwards it to one fixed
+//! remote (e.g. S3).
 
 use bytes::Bytes;
 use log::{debug, info, warn};
@@ -416,6 +420,36 @@ impl AsyncUdpSocket for VsockOutboundSocket {
     /// Frames are delivered whole, so path MTU discovery may run.
     fn may_fragment(&self) -> bool {
         false
+    }
+}
+
+/// Forwards each TCP connection accepted on `listener` (typically loopback inside the enclave)
+/// over a new vsock connection to `cid:port`, both ways, until either side closes. Runs until
+/// `listener` fails.
+///
+/// The bytes are opaque: TLS (e.g. to S3) runs inside the enclave, end to end with the remote,
+/// so the parent's `vsock-proxy-tcp` only sees ciphertext.
+pub async fn forward_tcp_to_vsock(
+    listener: tokio::net::TcpListener,
+    cid: u32,
+    port: u32,
+) -> io::Result<()> {
+    loop {
+        let (mut tcp, peer) = listener.accept().await?;
+        tokio::spawn(async move {
+            let mut vsock = match VsockStream::connect(cid, port).await {
+                Ok(vsock) => vsock,
+                Err(e) => {
+                    return warn!("TCP from {peer}: vsock connect to {cid}:{port} failed: {e}")
+                }
+            };
+            match tokio::io::copy_bidirectional(&mut tcp, &mut vsock).await {
+                Ok((sent, received)) => {
+                    debug!("TCP from {peer} closed ({sent} bytes out, {received} bytes in)")
+                }
+                Err(e) => debug!("TCP from {peer} closed: {e}"),
+            }
+        });
     }
 }
 

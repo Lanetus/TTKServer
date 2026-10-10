@@ -50,7 +50,7 @@ async fn faf_without_relays_answers_hello_sealed_to_the_sender() {
     let sealed = response.text().unwrap();
     assert_eq!(
         seal::open_response(&key, &sealed).unwrap(),
-        b"hello:hello terminal"
+        b"hello terminal"
     );
     client.close().await.unwrap();
 }

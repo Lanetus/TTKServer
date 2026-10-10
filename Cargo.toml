@@ -19,7 +19,12 @@ ttk-relay = { path = "crates/relay", version = "6.0.0" }
 ttk-terminal = { path = "crates/terminal", version = "6.0.0" }
 ttk-root = { path = "crates/root", version = "6.0.0" }
 
+aws-config = { version = "1.12", default-features = false, features = ["rt-tokio", "behavior-version-latest"] }
 aws-nitro-enclaves-nsm-api = "0.4"
+aws-sdk-s3 = { version = "1.152", default-features = false, features = ["rt-tokio", "http-1x", "behavior-version-latest"] }
+# HTTPS client for the AWS SDK on rustls with `ring` (not the default aws-lc), like the rest of the workspace.
+aws-smithy-http-client = { version = "1", features = ["rustls-ring"] }
+aws-smithy-runtime-api = { version = "1", features = ["client"] }
 axum = "0.8.9"
 base64 = "0.21"
 bytes = "1"
@@ -40,6 +45,7 @@ rustls = { version = "0.23", features = ["ring"] }
 rustls-pki-types = "1"
 rustls-webpki = "0.103"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_bytes = "0.11"
 serde_json = "1"
 sha2 = "0.11"
 time = "0.3.36"
