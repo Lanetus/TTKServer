@@ -1,0 +1,69 @@
+# systemd unit for the TTKServer `vsock-proxy-tcp` on the Nitro Enclave's parent instance:
+# forwards TCP connections from the enclave (vsock) to one fixed remote, the S3 endpoint the
+# `s3-server` node stores files in (the enclave sets TTK_S3_VSOCK_PORT to the same port).
+#
+# Install:
+#   cargo build --release -p ttk-core --bin vsock-proxy-tcp
+#   sudo install -m 0755 target/release/vsock-proxy-tcp /usr/local/bin/vsock-proxy-tcp
+#   sudo install -m 0644 deploy/systemd/vsock-proxy-tcp.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now vsock-proxy-tcp
+#
+# Configure in /etc/default/vsock-proxy-tcp (optional; overrides the defaults below), e.g.
+#   TTK_ENCLAVE_CID=17                                # must match `nitro-cli run-enclave --enclave-cid`
+#   TTK_TCP_REMOTE=s3.eu-west-1.amazonaws.com:443     # the bucket's regional S3 endpoint
+#   TTK_TCP_VSOCK_PORT=8001                           # must match the enclave's TTK_S3_VSOCK_PORT
+#   RUST_LOG=info
+#
+# Logs: journalctl -u vsock-proxy-tcp -f
+
+[Unit]
+Description=TTKServer vsock-proxy-tcp (Nitro Enclave vsock -> S3 over TCP)
+Documentation=https://github.com/Lanetus/TTKServer
+Wants=network-online.target
+After=network-online.target nitro-enclaves-allocator.service
+
+[Service]
+Type=exec
+Environment=TTK_ENCLAVE_CID=17
+Environment=TTK_TCP_REMOTE=s3.eu-west-1.amazonaws.com:443
+Environment=TTK_TCP_VSOCK_PORT=8001
+Environment=RUST_LOG=info
+EnvironmentFile=-/etc/default/vsock-proxy-tcp
+ExecStart=/usr/local/bin/vsock-proxy-tcp
+Restart=always
+RestartSec=2
+
+# One vsock and one TCP connection per forwarded connection, up to 1024.
+LimitNOFILE=4096
+
+# Unprivileged: the proxy binds only a vsock port and connects out.
+DynamicUser=yes
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+
+# Sandboxing: the proxy needs no files, only TCP, vsock and DNS (AF_UNIX for the resolver).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_VSOCK AF_UNIX
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

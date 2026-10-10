@@ -17,13 +17,27 @@ name = "ttk_terminal"
 name = "terminal"
 path = "src/main.rs"
 
+# The S3 file node: a terminal whose `/faf` messages upload / download files in S3.
+[[bin]]
+name = "s3-server"
+path = "src/bin/s3_server.rs"
+required-features = ["s3"]
+
 [dependencies]
 ttk-ra-server.workspace = true
 ttk-ra-client.workspace = true
 axum.workspace = true
+ciborium.workspace = true
 env_logger.workspace = true
 log.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+sha2.workspace = true
 tokio.workspace = true
+aws-config = { workspace = true, optional = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+aws-smithy-http-client = { workspace = true, optional = true }
+aws-smithy-runtime-api = { workspace = true, optional = true }
 
 [features]
 default = ["nitro", "mock"]
@@ -32,6 +46,13 @@ nitro = ["ttk-ra-server/nitro"]
 mock = ["ttk-ra-server/mock"]
 sev-snp = ["ttk-ra-server/sev-snp"]
 tdx = ["ttk-ra-server/tdx"]
+# `storage::s3::S3Store` and the `s3-server` bin.
+s3 = [
+    "dep:aws-config",
+    "dep:aws-sdk-s3",
+    "dep:aws-smithy-http-client",
+    "dep:aws-smithy-runtime-api",
+]
 
 [dev-dependencies]
 ttk-ra-server = { workspace = true, features = ["mock"] }
