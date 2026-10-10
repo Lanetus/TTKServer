@@ -1,116 +1,85 @@
 # `ttk-core` Architecture
 
-Crate reference for `../../crates/core`. For the system-level picture (attestation, onion routing, vsock, deployment), see the [workspace ARCHITECTURE.md](../../docs/src/ARCHITECTURE.md).
+Crate reference for `crates/core`. For the system-level picture (attestation, onion routing, vsock, deployment), see the [workspace architecture](ARCHITECTURE.md).
 
-Other crates: [`ttk-client`](client.md) · [`ttk-relay`](relay.md) · [`ttk-terminal`](terminal.md)
+Other crates: [`ttk-ra-server`](ra-server.md) · [`ttk-ra-client`](ra-client.md) · [`ttk-relay`](relay.md) · [`ttk-terminal`](terminal.md) · [`ttk-root`](root.md)
 
-> **Role:** the RATS **Attester**. Library only. Generates evidence at startup, puts it in a self-signed RA-TLS certificate and serves HTTP/3. Contains no relay, message or client logic.
+> **Role:** what the attested server and its client share, so `ttk-ra-client` never depends on `ttk-ra-server`: the CMW evidence wrapper, the RA-TLS constants, the image-trust format, the egress policy and the vsock transport. Also ships the parent-side `vsock-proxy` binary. No features, and no attestation or verification logic.
 
 ## 1. Modules
 
 ```mermaid
 flowchart LR
-    lib["lib.rs<br/>(re-exports)"]
-    subgraph att["attestation/"]
-        mod["mod.rs<br/>detect, by_name,<br/>AttestationProvider"]
-        nitro["nitro.rs<br/>NsmSession"]
-        mock["mock.rs<br/>MockSession"]
-        sev["sev_snp.rs<br/>SevSnpSession"]
-        tdx["tdx.rs<br/>TdxSession"]
-        tsm["tsm.rs<br/>configfs-tsm"]
-        ndoc["nitro_doc.rs<br/>COSE, mock docs, EAT wrap"]
-        eat["eat.rs<br/>EatClaimsSet"]
-    end
-    identity["identity.rs<br/>AttestationParams"]
-    server["server.rs<br/>Server, Listener"]
-    router["router.rs<br/>base routes"]
-    vsock["vsock.rs (Linux)<br/>vsock datagram sockets"]
+    lib["lib.rs<br/>media_type, ATTESTATION_OID,<br/>PARENT_CID, MOCK_NITRO_ROOT_CERT"]
+    cmw["cmw.rs<br/>Cmw, CmwRecord,<br/>CmwCollection, ind"]
+    img["image_trust.rs<br/>ImageTrustStore,<br/>RootAttestation"]
+    egress["egress.rs<br/>classify_hop_address"]
+    vsock["vsock.rs (Linux)<br/>VsockUdpSocket,<br/>VsockOutboundSocket"]
+    vpc["vsock_proxy.rs<br/>RelayConfig,<br/>parse_relay_args"]
+    bin["bin/vsock-proxy.rs"]
 
-    lib --> att
-    lib --> server
-    server --> mod
-    server --> router
-    server --> vsock
-    server --> identity
-    mod --> nitro & mock & sev & tdx
-    nitro --> ndoc
-    mock --> ndoc
-    sev --> tsm
-    tdx --> tsm
-    ndoc --> eat
+    lib --> cmw & img & egress & vsock & vpc
+    bin --> vpc
+    bin --> vsock
+    bin --> egress
 ```
 
 | File | Responsibility |
 |---|---|
-| `../../crates/core/src/lib.rs` | Declares the modules; re-exports `eat`, `EatClaimsSet`, `EatClaimKey`, `generate_identity`, `AttestationParams` |
-| `../../crates/core/src/identity.rs` | `AttestationParams` builder (`user_data`, `nonce`, `public_key`), `generate_identity()` |
-| `../../crates/core/src/server.rs` | Attestation at startup, RA-TLS certificate, QUIC/HTTP/3 accept loop, listener config |
-| `../../crates/core/src/router.rs` | Base routes `GET /` and `GET /evidence.eat`; the `Evidence` struct |
-| `../../crates/core/src/vsock.rs` | quinn `AsyncUdpSocket`s over vsock, plus framing helpers reused by `vsock-proxy` |
-| `../../crates/core/src/attestation/mod.rs` | `AttestationProvider` trait, `AttestationError`, provider detection, `submod` labels |
-| `../../crates/core/src/attestation/nitro.rs` | AWS Nitro provider over `/dev/nsm` |
-| `../../crates/core/src/attestation/mock.rs` | Mock provider: Nitro-format documents signed by a published mock root CA |
-| `../../crates/core/src/attestation/nitro_doc.rs` | COSE_Sign1 payload extraction and parsing, mock document creation, `wrap_as_eat` |
-| `../../crates/core/src/attestation/sev_snp.rs` | AMD SEV-SNP provider (report + VCEK) |
-| `../../crates/core/src/attestation/tdx.rs` | Intel TDX provider (DCAP quote) |
-| `../../crates/core/src/attestation/tsm.rs` | Linux configfs-tsm request handling, shared by SEV-SNP and TDX |
-| `../../crates/core/src/attestation/eat.rs` | RFC 9711 claim keys and `EatClaimsSet` CBOR encoding/decoding |
+| `crates/core/src/lib.rs` | CMW media types (`media_type`), `ATTESTATION_OID`, `PARENT_CID`, `MOCK_NITRO_ROOT_CERT`; re-exports `Cmw`, `CmwRecord`, `CmwCollection`, `CmwType`, `ImageTrustStore` |
+| `crates/core/src/cmw.rs` | RATS Conceptual Message Wrapper (`draft-ietf-rats-msg-wrap`), CBOR only |
+| `crates/core/src/image_trust.rs` | `ImageTrustStore` trait, `parse_image_allowlist`, the `/root-attestation` wire format |
+| `crates/core/src/egress.rs` | Egress policy for peer-chosen destinations |
+| `crates/core/src/vsock.rs` | quinn `AsyncUdpSocket`s over vsock and their framing helpers (Linux) |
+| `crates/core/src/vsock_proxy.rs` | `vsock-proxy` usage text, defaults and argument parsing (platform independent, so `tests/` can reach it) |
+| `crates/core/src/bin/vsock-proxy.rs` | Parent-side UDP ↔ vsock bridge (Linux; errors out elsewhere) |
+| `crates/core/src/mock_nitro_root.der` | Mock root CA certificate (its key lives in `ttk-ra-server`) |
 
-## 2. Server lifecycle
+## 2. Public API
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant App as Node (relay / terminal)
-    participant S as Server
-    participant P as AttestationProvider
-    participant Q as quinn Endpoint
-
-    App->>S: Server::listen(Listener::from_env())
-    S->>S: KeyPair::generate() (P-256)
-    S->>P: attestation::detect()
-    S->>P: generate_document(user_data = SHA-256(SPKI))
-    P-->>S: EatClaimsSet
-    S->>S: to_cbor_bytes(), create_cert_with_attestation()
-    S->>Q: bind UDP or vsock, ALPN h3
-    App->>S: serve_with(extra routes)
-    loop each QUIC connection
-        Q-->>S: Incoming
-        S->>S: spawn handle_connection → per request: read_body (≤ 1 MiB) → axum Router → stream response
-    end
-```
-
-## 3. Public API
-
-**`server`**
+**Crate root**
 
 | Item | Kind | Description |
 |---|---|---|
-| `Server::bind(addr)` | fn | Attest and bind a UDP QUIC endpoint (port `0` = free port) |
-| `Server::bind_vsock(port)` | fn (Linux) | Attest and listen on a vsock port |
-| `Server::listen(listener)` | fn | Bind UDP or vsock based on `Listener`, and log where |
-| `Server::serve()` | async fn | Serve the base routes |
-| `Server::serve_with(router)` | async fn | Serve base routes merged with a node's own routes |
-| `Server::local_addr()` / `evidence()` / `private_key_der()` | fn | Bound address, `Evidence`, RA-TLS private key (PKCS#8 DER) |
-| `Listener` | enum | `Udp(SocketAddr)` or `Vsock(u32)`; `Listener::from_env()` |
-| `create_cert_with_attestation(...)` | fn | Self-signed cert with the evidence as a non-critical extension |
+| `media_type::{AWS_NITRO, TDX, SGX}` | consts | Record types for Nitro documents and DCAP quotes (`application/vnd.ttk.*`) |
+| `media_type::{SEV_SNP_COLLECTION, SEV_SNP_REPORT, PKIX_CERT}` | consts | SEV-SNP collection type and its `report` / `vcek` member types |
+| `media_type::{SEV_SNP_REPORT_LABEL, SEV_SNP_VCEK_LABEL}` | consts | `"report"`, `"vcek"` |
 | `ATTESTATION_OID` | const | `1.3.6.1.4.1.99999.1` (placeholder) |
-| `MAX_REQUEST_BODY` | const | 1 MiB; larger bodies get `413` |
 | `PARENT_CID` | const | `3`, the parent instance as seen from an enclave |
-| `env_u32(name, default)` | fn | Read a `u32` env var |
-| `BoxError` | type | `Box<dyn Error>` |
+| `MOCK_NITRO_ROOT_CERT` | const | DER of the mock root CA; trust only when mock attestation is allowed |
 
-**`attestation`**
+**`cmw`**
 
-| Item | Kind | Description |
-|---|---|---|
-| `AttestationProvider` | trait | `name()`, `is_available()`, `generate_document(&AttestationParams) -> EatClaimsSet` |
-| `detect()` | fn | Pick a provider: `TTK_ATTESTATION` if set, else probe Nitro → SEV-SNP → TDX, else `mock` (if compiled) |
-| `by_name(name)` | fn | Open `aws-nitro`, `sev-snp`, `tdx` or `mock` |
-| `AttestationError` | enum | `DeviceOpenFailed`, `Driver`, `UnexpectedResponse`, `InvalidInput`, `DocumentDecodingFailed`, `Unsupported`, `NoProvider`, `Io` |
-| `submod::{AWS_NITRO, SEV_SNP, TDX, SGX}` | consts | EAT `submods` labels |
-| `eat::EatClaimsSet` | struct | All RFC 9711 claims as `Option`s; `to_cbor_bytes`, `from_bytes` |
-| `eat::EatClaimKey` | enum | IANA claim keys (`Iat = 6`, `Nonce = 10`, `Ueid = 256` … `IntUse = 275`) |
+| Item | Description |
+|---|---|
+| `Cmw` | `Record(CmwRecord)` or `Collection(CmwCollection)`; `evidence(media_type, value)`, `to_cbor_bytes` / `to_cbor_value`, `from_cbor_bytes` / `from_cbor_value` |
+| `CmwRecord { cm_type, value, ind }` | `[type, value, ?ind]`; `new`, `media_type()` |
+| `CmwCollection { collection_type, entries }` | `{ ?"__cmwc_t": uri, label => CMW }`; `get(label)` |
+| `CmwType` | `MediaType(String)` or `ContentFormat(u16)` |
+| `ind::{REFERENCE_VALUES, ENDORSEMENTS, EVIDENCE, ATTESTATION_RESULTS}` | Indicator bits `1`, `2`, `4`, `8` |
+| `COLLECTION_TYPE_KEY` | `"__cmwc_t"` |
+
+Not supported (decoding fails): the CBOR-tag form, integer labels, OID collection types, JSON. Collections must be non-empty with no repeated labels.
+
+**`image_trust`**
+
+| Item | Description |
+|---|---|
+| `ImageTrustStore` | Trait: `builtin()`, `nitro_image_allowlist() -> &[Vec<u8>]`, `nitro_pcr_index()` (default `0`; `8` pins the EIF signing cert) |
+| `parse_image_allowlist(text)` | One 96-hex-char SHA-384 per line; blank lines and `#` comments ignored |
+| `RootAttestation { hash_algorithm, pcr0 }` | `GET /root-attestation` body; `from_image_trust_store`, `pcr0_values()` (checks `"SHA384"` and every entry) |
+| `ROOT_ATTESTATION_PATH` / `ROOT_ATTESTATION_HASH` | `"/root-attestation"` / `"SHA384"` |
+
+Implementations: `ttk_root::FileImageTrustStore`, `ttk_ra_client::RootImageTrustStore`, `ttk_ra_client::trust::RootSignerTrustStore`.
+
+**`egress`**
+
+| Item | Description |
+|---|---|
+| `classify_hop_address(ip)` | `Public`, `Private` (loopback, RFC 1918, `100.64/10`, `fc00::/7`) or `Forbidden` (unspecified, `0/8`, link-local, multicast, broadcast); IPv4-mapped IPv6 as IPv4 |
+| `HopAddressClass` | The three classes |
+
+Used by `ttk-relay` (next hops, re-exported via `ttk_ra_client::faf`) and `vsock-proxy` (outbound).
 
 **`vsock`** (Linux)
 
@@ -121,34 +90,39 @@ sequenceDiagram
 | `write_frame` / `read_frame` | `[u16 BE len][payload]` framing |
 | `write_destination` / `read_destination` | `[4 or 6][IP][u16 port]` header that opens an outbound stream |
 
-## 4. Attestation providers
+**`vsock_proxy`**
 
-| Provider | Feature | Hardware interface | Evidence in EAT `submods` | Extra config |
-|---|---|---|---|---|
-| `NsmSession` | `nitro` | `/dev/nsm` | `aws_nitro`: NSM document (COSE_Sign1) | — |
-| `MockSession` | `mock` | none | `aws_nitro`: mock-signed NSM-format document | — |
-| `SevSnpSession` | `sev-snp` | `/sys/kernel/config/tsm/report` | `sev_snp`: `{report, vcek}` | `TTK_SEV_SNP_VCEK` if the host supplies no VCEK |
-| `TdxSession` | `tdx` | `/sys/kernel/config/tsm/report` | `tdx`: DCAP quote | — |
+| Item | Description |
+|---|---|
+| `RELAY_USAGE` | Usage text |
+| `DEFAULT_LISTEN` / `DEFAULT_VSOCK_PORT` / `DEFAULT_OUTBOUND_PORT` | `0.0.0.0:443` / `5000` / `5001` |
+| `RelayConfig { listen, cid, vsock_port, outbound_port, allow_private }` | Parsed configuration |
+| `parse_relay_args(args, env)` | Flags over `TTK_*` env; `Ok(None)` on `--help` |
 
-`NsmSession` also exposes `describe_nsm`, `get_random`, and PCR helpers (`describe_pcr`, `extend_pcr`, `lock_pcr`).
+## 3. `vsock-proxy`
 
-## 5. Features and dependencies
+| Flag | Env | Default | Meaning |
+|---|---|---|---|
+| `-c, --cid` | `TTK_ENCLAVE_CID` | required | Enclave CID (e.g. `16`) |
+| `-l, --listen` | `TTK_RELAY_LISTEN` | `0.0.0.0:443` | Public UDP address |
+| `-p, --vsock-port` | `TTK_VSOCK_PORT` | `5000` | Enclave inbound port |
+| `-o, --outbound-port` | `TTK_OUTBOUND_VSOCK_PORT` | `5001` | Outbound port (`0` disables) |
+| `-P, --allow-private` | `TTK_ALLOW_PRIVATE_NEXT_HOPS=1` | off | Allow outbound to loopback/private addresses |
 
-| Feature | Default | Pulls in |
-|---|:---:|---|
-| `nitro` | ✅ | `aws-nitro-enclaves-nsm-api` |
-| `mock` | ✅ | `aws-nitro-enclaves-nsm-api` |
-| `sev-snp` | — | — |
-| `tdx` | — | — |
+| Direction | Behaviour |
+|---|---|
+| Inbound | One vsock stream to the enclave per client UDP address; framed datagrams both ways |
+| Outbound | Accepts vsock from the enclave CID only; reads the destination header (within 5 s), applies `classify_hop_address`, sends datagrams from a dedicated UDP socket, frames replies back |
+| Limits | Peers idle for 120 s are dropped; at most 4096 peers per direction; 256 datagrams queued per peer |
 
-Main dependencies: `quinn`, `h3`, `h3-quinn`, `axum`, `rustls` (ring), `rcgen`, `ciborium`, `sha2`, `x509-parser`; `tokio-vsock` on Linux only.
+It only moves opaque QUIC datagrams. TLS ends inside the enclave. Deployed with `deploy/systemd/vsock-proxy.service`.
 
-## 6. Tests
+## 4. Dependencies and tests
+
+Dependencies: `ciborium`, `serde`, `log`, `env_logger`; on Linux also `bytes`, `quinn`, `tokio`, `tokio-vsock`.
 
 | File | Covers |
 |---|---|
-| `../../crates/core/tests/attestation_tests.rs` | Provider selection and errors |
-| `../../crates/core/tests/eat_tests.rs` | EAT CBOR encode/decode |
-| `../../crates/core/tests/nitro_tests.rs` | Nitro / mock documents (mock off-enclave) |
-| `../../crates/core/tests/tsm_tests.rs` | configfs-tsm requests against an emulated directory |
-| `../../crates/core/tests/integration_test.rs` | Identity generation, base routes, Nitro + EAT integration |
+| `crates/core/tests/cmw_tests.rs` | CMW record/collection CBOR encoding and decoding, malformed input |
+| `crates/core/tests/vsock_proxy_tests.rs` | `vsock-proxy` argument parsing |
+| `crates/core/tests/vsock_tests.rs` | Datagram framing and destination header (Linux) |

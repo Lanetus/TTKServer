@@ -1,7 +1,9 @@
 [Architecture](ARCHITECTURE.md)
 
 - [Core](core.md)
-- [Client](client.md)
+- [RA Server](ra-server.md)
+- [RA Client](ra-client.md)
 - [Relay](relay.md)
 - [Terminal](terminal.md)
+- [Root](root.md)
 - [API Reference](api.md)
