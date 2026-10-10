@@ -1,0 +1,137 @@
+name: Build
+
+# Manually triggered: builds the production package and publishes it to crates.io.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and package only; don't upload to crates.io"
+        type: boolean
+        default: false
+
+env:
+  ECR_REGISTRY: 103680339861.dkr.ecr.eu-west-1.amazonaws.com
+  ECR_REPOSITORY: ra-server
+  IMAGE_TAG: latest
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    # Only release what is on main.
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      # Production build: the enclave nodes and the parent's vsock-proxy, not the test-only `client`.
+      - name: Build release
+        run: cargo build --release --locked -p ttk-core -p ttk-relay -p ttk-terminal -p ttk-root
+
+      - name: Upload node binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: TTKServer-${{ github.sha }}
+          path: |
+            target/release/relay
+            target/release/terminal
+            target/release/root
+            target/release/vsock-proxy
+          if-no-files-found: error
+
+      # Packages the crates and verifies that they build from the packaged sources.
+      - name: Package crates
+        run: cargo package --workspace --locked
+
+      - name: Publish to crates.io
+        if: ${{ !inputs.dry_run }}
+        run: cargo publish --workspace --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
+
+  build:
+    name: Build (${{ matrix.node }}, ${{ matrix.arch }})
+    if: ${{ github.ref == 'refs/heads/main' &&  !inputs.dry_run }}
+    strategy:
+      matrix:
+        node: [relay, terminal, root]
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Get new version
+        id: version
+        run: echo "tag=$(cargo pkgid -p ttk-ra-server | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
+
+      - name: Build and push per-arch image to Amazon ECR
+        id: build-image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          platforms: ${{ matrix.platform }}
+          build-args: NODE=${{ matrix.node }}
+          cache-from: type=gha,scope=${{ matrix.node }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.node }}-${{ matrix.arch }}
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.node }}-${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.node }}-v${{ steps.version.outputs.tag }}
+
+      - name: Build app Docker image
+        run: docker build --build-arg NODE=${{ matrix.node }} -t ttk-node:local .
+
+      - name: Build EIF
+        run: |
+          mkdir -p out
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/out:/out" \
+            amazonlinux:2023 bash -c '
+              dnf install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel &&
+              mkdir -p /var/log/nitro_enclaves &&
+              nitro-cli build-enclave \
+                --docker-uri ttk-node:local \
+                --output-file /out/ttk-${{ matrix.node }}_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.eif > /out/ttk-${{ matrix.node }}_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.json
+            '
+          cat out/ttk-${{ matrix.node }}_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ttk-${{ matrix.node }}_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}
+          path: out/
