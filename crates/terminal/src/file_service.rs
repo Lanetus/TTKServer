@@ -8,8 +8,12 @@
 //! |------------------------------------------------------|-----------------------------------------------|
 //! | `{"type": "upload", "body": h'<file>'}`              | `{"response": h'<SHA-256 of the file>'}`      |
 //! | `{"type": "download", "body": h'<SHA-256>'}`         | `{"response": h'<file>'}`                     |
+//! | `{"type": "download", "body": h'<unknown SHA-256>'}` | `{"error": "not_found"}`                      |
 //!
 //! The SHA-256 is the raw 32-byte digest; the stored blob's name is its lowercase hex.
+//!
+//! A [`FileError`] is a reply like any other, sealed to the sender: relays see the same `200`
+//! for a missing file as for a found one.
 
 use crate::storage::BlobStore;
 use crate::EvalError;
@@ -44,13 +48,33 @@ impl FileRequest {
     }
 }
 
-/// The file service's reply.
+/// The file service's reply: a CBOR map with a single key, `response` or `error`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FileResponse {
+#[serde(rename_all = "lowercase")]
+pub enum FileResponse {
     /// The SHA-256 for an upload, the file for a download.
-    #[serde(with = "serde_bytes")]
-    pub response: Vec<u8>,
+    Response(#[serde(with = "serde_bytes")] Vec<u8>),
+    /// The request could not be served.
+    Error(FileError),
 }
+
+/// Why a [`FileRequest`] could not be served, sent as a CBOR text string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileError {
+    /// No file with the requested SHA-256 is stored (`"not_found"`).
+    NotFound,
+}
+
+impl std::fmt::Display for FileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("file not found"),
+        }
+    }
+}
+
+impl std::error::Error for FileError {}
 
 impl FileResponse {
     /// Encodes as CBOR, the reply the terminal seals to the sender.
@@ -61,6 +85,14 @@ impl FileResponse {
     /// Decodes a CBOR reply.
     pub fn from_cbor(reply: &[u8]) -> Result<Self, EvalError> {
         Ok(ciborium::from_reader(reply)?)
+    }
+
+    /// Returns the response bytes, or the [`FileError`].
+    pub fn into_result(self) -> Result<Vec<u8>, FileError> {
+        match self {
+            Self::Response(response) => Ok(response),
+            Self::Error(e) => Err(e),
+        }
     }
 }
 
@@ -82,22 +114,26 @@ impl<S: BlobStore> FileService<S> {
         Self { store }
     }
 
-    /// Answers one request.
+    /// Answers one request: a missing file is a [`FileError::NotFound`] reply, not an error.
     pub async fn handle(&self, request: FileRequest) -> Result<FileResponse, EvalError> {
-        let response = match request {
+        Ok(match request {
             FileRequest::Upload(file) => {
                 let hash = Sha256::digest(&file).to_vec();
                 debug!("file service: upload of {} bytes", file.len());
                 self.store.put(&blob_name(&hash)?, file).await?;
-                hash
+                FileResponse::Response(hash)
             }
-            FileRequest::Download(hash) => {
-                let file = self.store.get(&blob_name(&hash)?).await?;
-                debug!("file service: download of {} bytes", file.len());
-                file
-            }
-        };
-        Ok(FileResponse { response })
+            FileRequest::Download(hash) => match self.store.get(&blob_name(&hash)?).await? {
+                Some(file) => {
+                    debug!("file service: download of {} bytes", file.len());
+                    FileResponse::Response(file)
+                }
+                None => {
+                    debug!("file service: download of a missing file");
+                    FileResponse::Error(FileError::NotFound)
+                }
+            },
+        })
     }
 }
 

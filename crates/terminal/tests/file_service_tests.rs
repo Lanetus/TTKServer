@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use ttk_ra_client::faf::FafRequest;
 use ttk_ra_client::seal::{self, NodePublicKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
-use ttk_terminal::file_service::{blob_name, FileRequest, FileResponse, FileService};
+use ttk_terminal::file_service::{blob_name, FileError, FileRequest, FileResponse, FileService};
 use ttk_terminal::storage::{BlobStore, MemoryStore};
 use ttk_terminal::{Evaluator, Terminal};
 
@@ -38,13 +38,34 @@ async fn upload_stores_the_file_under_its_sha256() {
         .handle(FileRequest::Upload(b"hello world".to_vec()))
         .await
         .unwrap();
-    assert_eq!(response.response, hello_sha256());
+    assert_eq!(response, FileResponse::Response(hello_sha256()));
 
     let downloaded = service
         .handle(FileRequest::Download(hello_sha256()))
         .await
         .unwrap();
-    assert_eq!(downloaded.response, b"hello world");
+    assert_eq!(downloaded, FileResponse::Response(b"hello world".to_vec()));
+}
+
+#[tokio::test]
+async fn download_of_a_missing_file_is_not_found() {
+    let service = FileService::new(MemoryStore::new());
+    let response = service
+        .handle(FileRequest::Download(hello_sha256()))
+        .await
+        .unwrap();
+    assert_eq!(response, FileResponse::Error(FileError::NotFound));
+    assert_eq!(response.into_result(), Err(FileError::NotFound));
+
+    // Built by hand, as a non-Rust client would read it.
+    let request = FileRequest::Download(hello_sha256()).to_cbor().unwrap();
+    assert_eq!(
+        service.eval(request).await.unwrap(),
+        cbor(&Value::Map(vec![(
+            Value::Text("error".into()),
+            Value::Text("not_found".into())
+        )]))
+    );
 }
 
 #[test]
@@ -74,8 +95,8 @@ async fn eval_speaks_cbor_with_byte_strings() {
     assert_eq!(request, message("download", Value::Bytes(hello_sha256())));
     let reply = service.eval(request).await.unwrap();
     assert_eq!(
-        FileResponse::from_cbor(&reply).unwrap().response,
-        b"hello world"
+        FileResponse::from_cbor(&reply).unwrap().into_result(),
+        Ok(b"hello world".to_vec())
     );
 }
 
@@ -89,8 +110,6 @@ async fn eval_rejects_bad_requests() {
         // A file as text, or as an array of integers, rather than a byte string.
         message("upload", Value::Text("hello".into())),
         message("download", Value::Bytes(b"../other-object".to_vec())),
-        // Well-formed, but never uploaded.
-        message("download", Value::Bytes(hello_sha256())),
     ] {
         assert!(service.eval(message.clone()).await.is_err(), "{message:?}");
     }
@@ -99,9 +118,9 @@ async fn eval_rejects_bad_requests() {
 #[tokio::test]
 async fn memory_store_round_trips() {
     let store = MemoryStore::new();
-    assert!(store.get("a").await.is_err());
+    assert_eq!(store.get("a").await.unwrap(), None);
     store.put("a", b"1".to_vec()).await.unwrap();
-    assert_eq!(store.get("a").await.unwrap(), b"1");
+    assert_eq!(store.get("a").await.unwrap(), Some(b"1".to_vec()));
 }
 
 /// Sends `message` sealed to the terminal behind `client` and returns the opened reply.
@@ -137,11 +156,17 @@ async fn terminal_with_the_file_service_uploads_and_downloads_over_faf() {
     let upload = FileRequest::Upload(file.clone()).to_cbor().unwrap();
     let hash = FileResponse::from_cbor(&faf(&client, &upload).await)
         .unwrap()
-        .response;
+        .into_result()
+        .unwrap();
     assert_eq!(hash, Sha256::digest(&file).to_vec());
     let download = FileRequest::Download(hash).to_cbor().unwrap();
     let reply = FileResponse::from_cbor(&faf(&client, &download).await).unwrap();
-    assert_eq!(reply.response, file);
+    assert_eq!(reply.into_result(), Ok(file));
+
+    // A missing file is a sealed not-found reply, still a 200 to the relays.
+    let missing = FileRequest::Download(vec![0; 32]).to_cbor().unwrap();
+    let reply = FileResponse::from_cbor(&faf(&client, &missing).await).unwrap();
+    assert_eq!(reply, FileResponse::Error(FileError::NotFound));
 
     // An evaluation failure is a bare 500, without detail.
     let node = NodePublicKey::from_certificate(client.peer_cert().unwrap()).unwrap();
