@@ -93,7 +93,12 @@ async fn evidence_with_nonce_carries_the_nonce() {
     let cmw = base64::engine::general_purpose::STANDARD
         .decode(response.text().unwrap())
         .unwrap();
-    let doc = parse_attestation_document(&nitro_record(&cmw).1).unwrap();
+    let fresh = ttk_core::FreshEvidence::from_cbor_bytes(&cmw).unwrap();
+    assert_eq!(
+        Some(fresh.certificate.as_slice()),
+        client.peer_cert().map(|c| c.as_ref())
+    );
+    let doc = parse_attestation_document(&nitro_record(&fresh.evidence.to_cbor_bytes()).1).unwrap();
     assert_eq!(doc.nonce.unwrap().as_slice(), nonce);
 
     // The nonce is required and bounded.

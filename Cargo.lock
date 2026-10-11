@@ -3292,6 +3292,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "serde_json",
+ "sha2 0.11.0",
  "time",
  "tokio",
  "ttk-core",

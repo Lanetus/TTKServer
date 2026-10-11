@@ -2,6 +2,7 @@
 
 use ciborium::Value;
 use ttk_core::cmw::{ind, Cmw, CmwCollection, CmwRecord, CmwType, COLLECTION_TYPE_KEY};
+use ttk_core::{media_type, FreshEvidence};
 
 fn text(s: &str) -> Value {
     Value::Text(s.into())
@@ -166,4 +167,67 @@ fn nested_collections_round_trip() {
         entries: vec![("inner".into(), collection())],
     });
     assert_eq!(Cmw::from_cbor_bytes(&cmw.to_cbor_bytes()).unwrap(), cmw);
+}
+
+#[test]
+fn fresh_evidence_round_trips_through_cbor() {
+    let fresh = FreshEvidence {
+        evidence: Cmw::evidence(media_type::AWS_NITRO, b"doc".to_vec()),
+        certificate: b"cert".to_vec(),
+    };
+    let cmw = fresh.to_cmw();
+    let Cmw::Collection(collection) = &cmw else {
+        panic!("fresh Evidence should be a collection");
+    };
+    assert_eq!(
+        collection.collection_type.as_deref(),
+        Some(media_type::FRESH_EVIDENCE_COLLECTION)
+    );
+    assert_eq!(
+        FreshEvidence::from_cbor_bytes(&cmw.to_cbor_bytes()).unwrap(),
+        fresh
+    );
+}
+
+#[test]
+fn fresh_evidence_requires_its_type_and_members() {
+    let evidence = Cmw::evidence(media_type::AWS_NITRO, b"doc".to_vec());
+    // A bare Evidence record (the old `POST /evidence` response).
+    assert!(FreshEvidence::from_cmw(&evidence).is_err());
+
+    let collection = |collection_type: &str, entries: Vec<(&str, Cmw)>| {
+        Cmw::Collection(CmwCollection {
+            collection_type: Some(collection_type.to_string()),
+            entries: entries
+                .into_iter()
+                .map(|(label, cmw)| (label.to_string(), cmw))
+                .collect(),
+        })
+    };
+    let cert = Cmw::Record(CmwRecord::new(media_type::PKIX_CERT, b"cert".to_vec(), 0));
+    let wrong_type = collection(
+        media_type::SEV_SNP_COLLECTION,
+        vec![
+            (media_type::FRESH_EVIDENCE_LABEL, evidence.clone()),
+            (media_type::FRESH_CERTIFICATE_LABEL, cert.clone()),
+        ],
+    );
+    let no_cert = collection(
+        media_type::FRESH_EVIDENCE_COLLECTION,
+        vec![(media_type::FRESH_EVIDENCE_LABEL, evidence.clone())],
+    );
+    let no_evidence = collection(
+        media_type::FRESH_EVIDENCE_COLLECTION,
+        vec![(media_type::FRESH_CERTIFICATE_LABEL, cert)],
+    );
+    let cert_not_pkix = collection(
+        media_type::FRESH_EVIDENCE_COLLECTION,
+        vec![
+            (media_type::FRESH_EVIDENCE_LABEL, evidence.clone()),
+            (media_type::FRESH_CERTIFICATE_LABEL, evidence),
+        ],
+    );
+    for cmw in [wrong_type, no_cert, no_evidence, cert_not_pkix] {
+        assert!(FreshEvidence::from_cmw(&cmw).is_err(), "{cmw:?}");
+    }
 }

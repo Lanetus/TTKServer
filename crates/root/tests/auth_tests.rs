@@ -8,8 +8,10 @@ use rcgen::{
 };
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, UnixTime};
 use rustls::RootCertStore;
+use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use ttk_core::{Cmw, FreshEvidence};
 use ttk_ra_client::verifier::{nitro, Policy, VerifiedEvidence};
 use ttk_ra_client::{EnclaveCertVerifier, ImageTrustStore, TrustStore, TtkClient};
 use ttk_ra_server::certificate::{CertificateError, CertificateStore, CERT_DNS_NAME};
@@ -86,28 +88,78 @@ async fn presented_chain(
     *chain
 }
 
-/// Mock Nitro Evidence (CBOR CMW) carrying `params`.
-fn mock_evidence(params: &AttestationParams) -> Vec<u8> {
+/// Mock Nitro Evidence carrying `params`.
+fn mock_evidence(params: &AttestationParams) -> Cmw {
     attestation::by_name("mock")
         .unwrap()
         .generate_document(params)
         .unwrap()
-        .to_cbor_bytes()
 }
 
-/// Appraises the mock Nitro document in `cmw` as the RA-TLS certificate's Evidence.
-fn appraise(cmw: &[u8]) -> VerifiedEvidence {
-    let ttk_core::Cmw::Record(record) = ttk_core::Cmw::from_cbor_bytes(cmw).unwrap() else {
+/// SHA-256 of `key`'s SubjectPublicKeyInfo, the RA-TLS key binding.
+fn binding(key: &KeyPair) -> Vec<u8> {
+    Sha256::digest(key.public_key_der()).to_vec()
+}
+
+/// A node's RA-TLS certificate with mock Evidence bound to its key, and that Evidence
+/// appraised.
+struct Node {
+    cert: CertificateDer<'static>,
+    cert_evidence: VerifiedEvidence,
+}
+
+/// Creates a [`Node`] for `key`.
+fn node(key: &KeyPair) -> Node {
+    let evidence = mock_evidence(&AttestationParams {
+        user_data: Some(binding(key)),
+        ..AttestationParams::default()
+    });
+    let pem =
+        create_cert_with_attestation(key, CERT_DNS_NAME, &evidence.to_cbor_bytes(), 30).unwrap();
+    let Cmw::Record(record) = evidence else {
         panic!("not a record");
     };
-    nitro::verify(
+    let cert_evidence = nitro::verify(
         &record.value,
         UnixTime::now(),
         &TrustStore::builtin(),
         &FileImageTrustStore::builtin(),
         mock_policy(),
     )
-    .unwrap()
+    .unwrap();
+    Node {
+        cert: CertificateDer::from_pem_slice(pem.as_bytes()).unwrap(),
+        cert_evidence,
+    }
+}
+
+/// A `POST /evidence` response (CBOR): mock Evidence carrying `nonce` bound to `bound_key`, with
+/// `certificate`.
+fn fresh_evidence(nonce: &[u8], bound_key: &KeyPair, certificate: &[u8]) -> Vec<u8> {
+    let evidence = mock_evidence(&AttestationParams {
+        user_data: Some(binding(bound_key)),
+        nonce: Some(nonce.to_vec()),
+        ..AttestationParams::default()
+    });
+    FreshEvidence {
+        evidence,
+        certificate: certificate.to_vec(),
+    }
+    .to_cmw()
+    .to_cbor_bytes()
+}
+
+/// Runs [`verify_fresh_evidence`] for `node` with nonce `b"nonce"`.
+fn verify_fresh(node: &Node, fresh: &[u8], policy: Policy) -> Result<VerifiedEvidence, String> {
+    let images: &dyn ImageTrustStore = &FileImageTrustStore::builtin();
+    verify_fresh_evidence(
+        fresh,
+        b"nonce",
+        &node.cert,
+        &node.cert_evidence,
+        images,
+        policy,
+    )
 }
 
 /// Policy accepting mock attestation.
@@ -220,52 +272,79 @@ fn pem_chain_parses_back() {
 }
 
 #[test]
-fn fresh_evidence_must_carry_the_nonce() {
-    let cert_evidence = appraise(&mock_evidence(&AttestationParams::default()));
-    let images = FileImageTrustStore::builtin();
-    let fresh = mock_evidence(&AttestationParams {
-        nonce: Some(b"nonce".to_vec()),
-        ..AttestationParams::default()
-    });
+fn fresh_evidence_for_the_tls_certificate_is_accepted() {
+    let key = KeyPair::generate().unwrap();
+    let node = node(&key);
+    let fresh = fresh_evidence(b"nonce", &key, &node.cert);
+    let evidence = verify_fresh(&node, &fresh, mock_policy()).unwrap();
+    assert_eq!(evidence.report_data, binding(&key));
+}
 
-    verify_fresh_evidence(&fresh, b"nonce", &cert_evidence, &images, mock_policy()).unwrap();
-    let err = verify_fresh_evidence(&fresh, b"other", &cert_evidence, &images, mock_policy())
-        .unwrap_err();
+#[test]
+fn fresh_evidence_must_carry_the_nonce() {
+    let key = KeyPair::generate().unwrap();
+    let node = node(&key);
+    let fresh = fresh_evidence(b"other", &key, &node.cert);
+    let err = verify_fresh(&node, &fresh, mock_policy()).unwrap_err();
     assert!(err.contains("nonce"), "{err}");
 }
 
 #[test]
-fn fresh_mock_evidence_is_refused_without_allow_mock() {
-    let cert_evidence = appraise(&mock_evidence(&AttestationParams::default()));
-    let fresh = mock_evidence(&AttestationParams {
+fn fresh_evidence_certificate_must_be_the_tls_certificate() {
+    let key = KeyPair::generate().unwrap();
+    let node = node(&key);
+    let other = node_cert_for_other_key();
+    let fresh = fresh_evidence(b"nonce", &key, &other);
+    let err = verify_fresh(&node, &fresh, mock_policy()).unwrap_err();
+    assert!(err.contains("differs from the TLS certificate"), "{err}");
+}
+
+#[test]
+fn fresh_evidence_must_be_bound_to_the_certificate_key() {
+    let key = KeyPair::generate().unwrap();
+    let node = node(&key);
+    let fresh = fresh_evidence(b"nonce", &KeyPair::generate().unwrap(), &node.cert);
+    let err = verify_fresh(&node, &fresh, mock_policy()).unwrap_err();
+    assert!(err.contains("public key"), "{err}");
+}
+
+#[test]
+fn fresh_evidence_without_the_certificate_is_rejected() {
+    let key = KeyPair::generate().unwrap();
+    let node = node(&key);
+    // The previous `POST /evidence` format: a bare Evidence record.
+    let bare = mock_evidence(&AttestationParams {
+        user_data: Some(binding(&key)),
         nonce: Some(b"nonce".to_vec()),
         ..AttestationParams::default()
     });
-    let images: &dyn ImageTrustStore = &FileImageTrustStore::builtin();
-    assert!(
-        verify_fresh_evidence(&fresh, b"nonce", &cert_evidence, images, Policy::default()).is_err()
-    );
+    let err = verify_fresh(&node, &bare.to_cbor_bytes(), mock_policy()).unwrap_err();
+    assert!(err.contains("invalid fresh Evidence"), "{err}");
+}
+
+#[test]
+fn fresh_mock_evidence_is_refused_without_allow_mock() {
+    let key = KeyPair::generate().unwrap();
+    let node = node(&key);
+    let fresh = fresh_evidence(b"nonce", &key, &node.cert);
+    assert!(verify_fresh(&node, &fresh, Policy::default()).is_err());
 }
 
 #[test]
 fn fresh_evidence_must_match_the_certificate_measurements() {
-    let mut cert_evidence = appraise(&mock_evidence(&AttestationParams::default()));
-    cert_evidence
+    let key = KeyPair::generate().unwrap();
+    let mut node = node(&key);
+    node.cert_evidence
         .measurements
         .insert("pcr0".into(), vec![1u8; 48]);
-    let fresh = mock_evidence(&AttestationParams {
-        nonce: Some(b"nonce".to_vec()),
-        ..AttestationParams::default()
-    });
-    let err = verify_fresh_evidence(
-        &fresh,
-        b"nonce",
-        &cert_evidence,
-        &FileImageTrustStore::builtin(),
-        mock_policy(),
-    )
-    .unwrap_err();
+    let fresh = fresh_evidence(b"nonce", &key, &node.cert);
+    let err = verify_fresh(&node, &fresh, mock_policy()).unwrap_err();
     assert!(err.contains("measurements"), "{err}");
+}
+
+/// The RA-TLS certificate of another node.
+fn node_cert_for_other_key() -> CertificateDer<'static> {
+    node(&KeyPair::generate().unwrap()).cert
 }
 
 #[tokio::test]
