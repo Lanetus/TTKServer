@@ -14,17 +14,21 @@ fn start_relay() -> SocketAddr {
     start(|relay| relay.allow_mock().allow_private_next_hops())
 }
 
-/// Starts a relay node configured by `configure` on a free local port and returns its address.
+/// Starts a relay node configured by `configure`, unlocked with a test CA certificate, on a free
+/// local port and returns its address.
 fn start(configure: impl FnOnce(Relay) -> Relay) -> SocketAddr {
     let relay = configure(Relay::bind("127.0.0.1:0".parse().unwrap()).unwrap());
+    relay.server().sign_for_tests().unwrap();
     let addr = relay.local_addr().unwrap();
     tokio::spawn(async move { relay.serve().await.unwrap() });
     addr
 }
 
-/// Starts a terminal node on a free local port and returns its address.
+/// Starts a terminal node (unlocked with a test CA certificate) on a free local port and returns
+/// its address.
 fn start_terminal() -> SocketAddr {
     let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    terminal.server().sign_for_tests().unwrap();
     let addr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });
     addr
@@ -353,5 +357,16 @@ async fn oversized_request_bodies_get_413() {
     };
     let response = client.post_json("/faf", &huge).await.unwrap();
     assert_eq!(response.status, 413);
+    client.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn faf_is_locked_until_the_certificate_is_replaced() {
+    let node = Relay::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = node.local_addr().unwrap();
+    tokio::spawn(async move { node.serve().await.unwrap() });
+    let client = connect(addr).await;
+    assert_eq!(client.post("/faf", b"{}").await.unwrap().status, 404);
+    assert_eq!(client.get("/").await.unwrap().status, 404);
     client.close().await.unwrap();
 }

@@ -10,7 +10,8 @@
 //! - [`egress`]: the egress policy for peer-chosen destinations (re-exported from [`ttk_core`]).
 //! - [`server`]: the HTTP/3 Attester endpoint, serving Evidence from inside the TEE.
 //! - [`router`]: the server's base HTTP routes (`GET /`, `GET /evidence.cmw`, `POST /evidence`,
-//!   `POST /certificate`).
+//!   `POST /certificate`) and the gating of every route on the certificate replacement.
+//! - `testing` (feature `test-ca`, tests only): unlocks a server with a throwaway CA.
 //! - `vsock` (Linux): QUIC datagram sockets over vsock, the enclave's only way out (re-exported
 //!   from [`ttk_core`]).
 
@@ -22,6 +23,8 @@ pub mod certificate;
 pub use ttk_core::egress;
 pub mod router;
 pub mod server;
+#[cfg(feature = "test-ca")]
+pub mod testing;
 #[cfg(target_os = "linux")]
 pub use ttk_core::vsock;
 

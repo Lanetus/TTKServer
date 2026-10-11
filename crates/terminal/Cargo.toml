@@ -55,5 +55,5 @@ s3 = [
 ]
 
 [dev-dependencies]
-ttk-ra-server = { workspace = true, features = ["mock"] }
+ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }
 rcgen.workspace = true

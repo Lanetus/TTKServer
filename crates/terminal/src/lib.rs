@@ -7,6 +7,11 @@
 //! | `GET /evidence.cmw` | Base64-encoded CMW carrying this node's Evidence (from [`ttk_ra_server`]) |
 //! | `POST /faf`         | Receives a [`FafRequest`], decrypts its message and answers its [`Evaluator`]'s reply, encrypted |
 //!
+//! Every route above answers `404` until the node's self-signed RA-TLS certificate has been
+//! replaced by a CA-issued one (`POST /evidence` + `POST /certificate`, from [`ttk_ra_server`]),
+//! and then only on connections that negotiated the CA-issued certificate; see
+//! [`ttk_ra_server::router`].
+//!
 //! A terminal never forwards: it accepts only requests with no relays left, and is the only node
 //! that can decrypt their body, which is sealed to its RA-TLS key.
 //!
@@ -111,6 +116,11 @@ impl<E: Evaluator> Terminal<E> {
     /// Returns the address the endpoint is bound to.
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.server.local_addr()
+    }
+
+    /// Returns the wrapped attested server (e.g. its presented certificate chain).
+    pub fn server(&self) -> &Server {
+        &self.server
     }
 
     /// Serves the base routes and `POST /faf` over HTTP/3 until the endpoint closes.

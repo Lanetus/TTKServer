@@ -12,7 +12,12 @@
 //!   is currently valid and names [`CERT_DNS_NAME`] (Web PKI path validation by `rustls`).
 //!
 //! The accepted chain then replaces the current one for new TLS handshakes; open connections
-//! keep the certificate they negotiated. Without trusted roots ([`CA_ROOTS_ENV`] unset and no
+//! keep the certificate they negotiated. A certificate is replaced at most once: afterwards
+//! [`CertificateStore::is_replaced`] is `true`, further replacements are refused
+//! ([`CertificateError::AlreadyReplaced`]). The router serves its routes according to this
+//! state (see [`super::router`]): until the replacement, only `POST /evidence` and
+//! `POST /certificate`; after it, every other route (on connections that negotiated the
+//! CA-issued certificate) and no longer those two. Without trusted roots ([`CA_ROOTS_ENV`] unset and no
 //! [`CertificateStore::set_trusted_roots`]) every replacement is refused.
 
 use crate::server::BoxError;
@@ -25,6 +30,7 @@ use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::{CertifiedKey, SigningKey};
 use rustls::RootCertStore;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use ttk_core::ATTESTATION_OID;
 use x509_parser::prelude::{FromDer, X509Certificate};
@@ -48,6 +54,8 @@ pub enum CertificateError {
     Untrusted(String),
     /// No trusted root authorities are configured.
     NoTrustedRoots,
+    /// A CA-issued certificate has already replaced the self-signed one.
+    AlreadyReplaced,
 }
 
 impl fmt::Display for CertificateError {
@@ -57,6 +65,7 @@ impl fmt::Display for CertificateError {
             Self::Mismatch(what) => write!(f, "certificate does not match the current one: {what}"),
             Self::Untrusted(e) => write!(f, "certificate not issued by a trusted root: {e}"),
             Self::NoTrustedRoots => write!(f, "no trusted root authorities configured"),
+            Self::AlreadyReplaced => write!(f, "certificate already replaced"),
         }
     }
 }
@@ -72,6 +81,8 @@ pub struct CertificateStore {
     signing_key: Arc<dyn SigningKey>,
     /// Validates replacement chains against the trusted roots; `None` refuses all.
     verifier: RwLock<Option<Arc<WebPkiServerVerifier>>>,
+    /// Whether a CA-issued chain has replaced the self-signed certificate.
+    replaced: AtomicBool,
 }
 
 impl fmt::Debug for CertificateStore {
@@ -91,6 +102,7 @@ impl CertificateStore {
             current: RwLock::new(Arc::new(CertifiedKey::new(vec![cert], signing_key.clone()))),
             signing_key,
             verifier: RwLock::new(None),
+            replaced: AtomicBool::new(false),
         })
     }
 
@@ -108,6 +120,14 @@ impl CertificateStore {
             .write()
             .map_err(|_| "certificate store poisoned")? = verifier;
         Ok(())
+    }
+
+    /// Whether trusted root authorities are configured, i.e. whether a replacement can succeed.
+    pub fn has_trusted_roots(&self) -> bool {
+        self.verifier
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
     }
 
     /// Loads the trusted roots from the PEM file named by [`CA_ROOTS_ENV`], if set.
@@ -145,9 +165,19 @@ impl CertificateStore {
             .clone()
     }
 
+    /// Whether a CA-issued chain has replaced the self-signed certificate (see
+    /// [`replace`](Self::replace)).
+    pub fn is_replaced(&self) -> bool {
+        self.replaced.load(Ordering::Acquire)
+    }
+
     /// Validates `chain` (leaf first, then intermediates) and, if it is the current certificate
-    /// issued by a trusted root, presents it to new connections from now on.
+    /// issued by a trusted root, presents it to new connections from now on. Succeeds at most
+    /// once; later calls fail with [`CertificateError::AlreadyReplaced`].
     pub fn replace(&self, chain: Vec<CertificateDer<'static>>) -> Result<(), CertificateError> {
+        if self.is_replaced() {
+            return Err(CertificateError::AlreadyReplaced);
+        }
         let verifier = self
             .verifier
             .read()
@@ -166,9 +196,17 @@ impl CertificateStore {
             .verify_server_cert(leaf, intermediates, &name, &[], UnixTime::now())
             .map_err(|e| CertificateError::Untrusted(e.to_string()))?;
 
+        // Only the first of concurrent valid replacements wins.
+        if self
+            .replaced
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(CertificateError::AlreadyReplaced);
+        }
         let replacement = Arc::new(CertifiedKey::new(chain, self.signing_key.clone()));
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = replacement;
-        info!("Replaced the RA-TLS certificate with a CA-issued one");
+        info!("Replaced the RA-TLS certificate with a CA-issued one; routes unlocked for new connections");
         Ok(())
     }
 }

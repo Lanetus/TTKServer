@@ -40,3 +40,5 @@ nitro = ["dep:aws-nitro-enclaves-nsm-api"]
 mock = ["dep:aws-nitro-enclaves-nsm-api"]
 sev-snp = []
 tdx = []
+# `testing`: unlocks a server's routes with a throwaway CA. Tests only, never in enclave images.
+test-ca = []
