@@ -4,15 +4,15 @@
 //!
 //! 1. connects over RA-TLS ([`EnclaveCertVerifier`]), which appraises the Evidence in the node's
 //!    self-signed certificate and its binding to the TLS key;
-//! 2. sends a random nonce to `POST /evidence` and appraises the fresh Evidence it gets back
-//!    (RFC 9334 §10): genuine, carrying the nonce, and from the same enclave image (equal
-//!    measurements) as the certificate's Evidence;
+//! 2. sends a random nonce to `POST /evidence` and checks the [`FreshEvidence`] it gets back
+//!    (RFC 9334 §10, [`verify_fresh_evidence`]): its certificate is the one from the TLS
+//!    handshake, and its Evidence is genuine, bound to that certificate's key, carries the
+//!    nonce, and comes from the same enclave image (equal measurements) as the certificate's
+//!    Evidence;
 //! 3. issues a certificate for the node's RA-TLS key with the same attestation extension
 //!    ([`CertificateAuthority::issue`]) and installs it with `POST /certificate`.
 //!
-//! The fresh Evidence carries only the nonce, not the key; it is tied to the key by being
-//! requested over the RA-TLS connection. Accepted Nitro images are this crate's
-//! [`FileImageTrustStore`] by default.
+//! Accepted Nitro images are this crate's [`FileImageTrustStore`] by default.
 
 use crate::FileImageTrustStore;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -24,11 +24,11 @@ use rcgen::{
     SignatureAlgorithm,
 };
 use rustls_pki_types::{pem::PemObject, CertificateDer, UnixTime};
+use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use time::{Duration, OffsetDateTime};
-use ttk_core::cmw::ind;
-use ttk_core::{Cmw, ATTESTATION_OID};
-use ttk_ra_client::verifier::{nitro, Policy, TeeKind, VerifiedEvidence};
+use ttk_core::{FreshEvidence, ATTESTATION_OID};
+use ttk_ra_client::verifier::{self, Policy, VerifiedEvidence};
 use ttk_ra_client::{EnclaveCertVerifier, ImageTrustStore, TrustStore, TtkClient};
 use ttk_ra_server::certificate::CERT_DNS_NAME;
 use ttk_ra_server::server::BoxError;
@@ -258,9 +258,9 @@ async fn authorize_over(
     let cmw = STANDARD
         .decode(response.body.trim_ascii())
         .map_err(|e| format!("fresh Evidence is not base64: {e}"))?;
-    let fresh = verify_fresh_evidence(&cmw, &nonce, &cert_evidence, images, policy)?;
+    let fresh = verify_fresh_evidence(&cmw, &nonce, &ra_tls_cert, &cert_evidence, images, policy)?;
     info!(
-        "Fresh {} Evidence verified for nonce {}",
+        "Fresh {} Evidence verified for nonce {} (certificate matches the TLS certificate)",
         fresh.tee,
         ttk_ra_client::hex_encode(&nonce)
     );
@@ -282,31 +282,40 @@ async fn authorize_over(
     Ok(chain)
 }
 
-/// Appraises the fresh Evidence `cmw` (CBOR CMW) from `POST /evidence`: genuine under `policy`,
-/// carrying `nonce`, and with the same measurements as `cert_evidence`, the Evidence of the
-/// node's RA-TLS certificate. Only AWS Nitro Evidence carries a nonce.
+/// Checks the [`FreshEvidence`] `cmw` (CBOR CMW) from `POST /evidence` against the node's
+/// RA-TLS certificate `ra_tls_cert` (from the TLS handshake) and its Evidence `cert_evidence`:
+///
+/// 1. the certificate in the response is `ra_tls_cert`, byte for byte;
+/// 2. the Evidence is genuine under `policy` and bound to that certificate's key (as in
+///    [`verifier::verify_evidence`]);
+/// 3. it carries `nonce` (only AWS Nitro Evidence can);
+/// 4. it has the same measurements as `cert_evidence`.
 pub fn verify_fresh_evidence(
     cmw: &[u8],
     nonce: &[u8],
+    ra_tls_cert: &CertificateDer<'_>,
     cert_evidence: &VerifiedEvidence,
     images: &dyn ImageTrustStore,
     policy: Policy,
 ) -> Result<VerifiedEvidence, String> {
-    let cmw = Cmw::from_cbor_bytes(cmw).map_err(|e| format!("invalid CMW: {e}"))?;
-    let record = match (TeeKind::from_cmw(&cmw), &cmw) {
-        (Some(TeeKind::AwsNitro), Cmw::Record(record)) => record,
-        (Some(tee), _) => return Err(format!("fresh {tee} Evidence is not supported")),
-        (None, _) => return Err("CMW does not carry supported TEE evidence".into()),
-    };
-    if record.ind.is_some_and(|bits| bits & ind::EVIDENCE == 0) {
-        return Err("CMW record is not marked as Evidence".into());
+    let fresh =
+        FreshEvidence::from_cbor_bytes(cmw).map_err(|e| format!("invalid fresh Evidence: {e}"))?;
+    if fresh.certificate != ra_tls_cert.as_ref() {
+        return Err("fresh Evidence certificate differs from the TLS certificate".into());
     }
 
-    let trust = TrustStore::builtin();
-    let evidence = nitro::verify(&record.value, UnixTime::now(), &trust, images, policy)?;
-    if evidence.debug && !(policy.allow_debug || policy.allow_mock) {
-        return Err("fresh Evidence comes from a debug-mode enclave".into());
-    }
+    let (_, cert) = X509Certificate::from_der(&fresh.certificate)
+        .map_err(|e| format!("malformed fresh Evidence certificate: {e}"))?;
+    let binding = Sha256::digest(cert.public_key().raw);
+    let evidence = verifier::verify_evidence(
+        &fresh.evidence.to_cbor_bytes(),
+        &binding,
+        UnixTime::now(),
+        &TrustStore::builtin(),
+        images,
+        policy,
+    )?;
+
     let doc_nonce = evidence.nitro.as_ref().and_then(|doc| doc.nonce.as_deref());
     if doc_nonce != Some(nonce) {
         return Err("fresh Evidence does not carry the nonce".into());
