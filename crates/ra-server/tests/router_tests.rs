@@ -5,17 +5,30 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use rcgen::KeyPair;
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use std::sync::Arc;
 use tower_service::Service;
 use ttk_ra_server::attestation::{self, media_type, nitro_doc::parse_attestation_document};
+use ttk_ra_server::certificate::{CertificateStore, CERT_DNS_NAME};
 use ttk_ra_server::router::{build_router, Evidence, MAX_NONCE_LEN};
+use ttk_ra_server::server::create_cert_with_attestation;
 use ttk_ra_server::Cmw;
 
 /// A router over the mock provider.
 fn router() -> Router {
     let evidence = Evidence { cmw: Vec::new() };
+    let key = KeyPair::generate().unwrap();
+    let cert = create_cert_with_attestation(&key, CERT_DNS_NAME, b"evidence", 30).unwrap();
+    let certificates = CertificateStore::new(
+        CertificateDer::from_pem_slice(cert.as_bytes()).unwrap(),
+        &PrivateKeyDer::from_pem_slice(key.serialize_pem().as_bytes()).unwrap(),
+    )
+    .unwrap();
     build_router(
         &evidence,
         attestation::by_name("mock").unwrap().into(),
+        Arc::new(certificates),
         Router::new(),
     )
 }

@@ -19,6 +19,7 @@
 
 use super::router::build_router;
 use crate::attestation::{self, AttestationProvider};
+use crate::certificate::{CertificateStore, CERT_DNS_NAME};
 use crate::AttestationParams;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -28,6 +29,7 @@ use log::{error, info, warn};
 use quinn::{Endpoint, ServerConfig, TransportConfig, VarInt};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::RootCertStore;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -202,6 +204,7 @@ pub struct Server {
     evidence: Arc<Evidence>,
     provider: Arc<dyn AttestationProvider>,
     private_key: Vec<u8>,
+    certificates: Arc<CertificateStore>,
 }
 
 /// Setup and serving.
@@ -259,6 +262,7 @@ impl Server {
             evidence: identity.evidence,
             provider: identity.provider,
             private_key: identity.private_key,
+            certificates: identity.certificates,
         }
     }
 
@@ -278,6 +282,19 @@ impl Server {
         &self.private_key
     }
 
+    /// Returns the RA-TLS certificate chain currently presented (leaf first): the self-signed
+    /// certificate, until `POST /certificate` replaces it with a CA-issued one.
+    pub fn certificate_chain(&self) -> Vec<CertificateDer<'static>> {
+        self.certificates.current_chain()
+    }
+
+    /// Sets the root authorities a `POST /certificate` replacement must chain to, overriding
+    /// [`CA_ROOTS_ENV`](crate::certificate::CA_ROOTS_ENV). An empty store refuses all
+    /// replacements.
+    pub fn set_trusted_roots(&self, roots: RootCertStore) -> Result<(), BoxError> {
+        self.certificates.set_trusted_roots(roots)
+    }
+
     /// Accepts QUIC connections and serves the base routes over HTTP/3 until the endpoint
     /// closes.
     pub async fn serve(self) {
@@ -288,7 +305,12 @@ impl Server {
     /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections, new ones are
     /// refused.
     pub async fn serve_with(self, routes: Router) {
-        let app = build_router(&self.evidence, self.provider.clone(), routes);
+        let app = build_router(
+            &self.evidence,
+            self.provider.clone(),
+            self.certificates.clone(),
+            routes,
+        );
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         while let Some(incoming) = self.endpoint.accept().await {
             let Ok(permit) = connections.clone().try_acquire_owned() else {
@@ -313,6 +335,8 @@ struct Identity {
     provider: Arc<dyn AttestationProvider>,
     /// The key pair's private key (PKCS#8 DER).
     private_key: Vec<u8>,
+    /// The presented certificate chain, replaceable by `POST /certificate`.
+    certificates: Arc<CertificateStore>,
 }
 
 /// Attests and builds the RA-TLS identity: an ephemeral key pair and Evidence bound to it,
@@ -334,7 +358,9 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
         .to_cbor_bytes();
     info!("Wrapped Evidence as a CMW ({} bytes).", cmw_bytes.len());
 
-    let tls_config = build_tls_config(&key_pair, &cmw_bytes)?;
+    let certificates = Arc::new(build_certificate_store(&key_pair, &cmw_bytes)?);
+    certificates.load_trusted_roots_from_env()?;
+    let tls_config = build_tls_config(certificates.clone())?;
     let evidence = Arc::new(Evidence { cmw: cmw_bytes });
 
     let mut quic_config = ServerConfig::with_crypto(Arc::new(
@@ -347,6 +373,7 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
             evidence,
             provider,
             private_key,
+            certificates,
         },
     ))
 }
@@ -370,21 +397,23 @@ fn transport_config() -> TransportConfig {
     transport
 }
 
-/// Builds the rustls config using a self-signed RA-TLS certificate carrying `cmw_bytes`.
-fn build_tls_config(
+/// Builds the certificate store presenting a self-signed RA-TLS certificate carrying
+/// `cmw_bytes`.
+fn build_certificate_store(
     key_pair: &KeyPair,
     cmw_bytes: &[u8],
-) -> Result<rustls::ServerConfig, BoxError> {
-    let cert_pem = create_cert_with_attestation(key_pair, "enclave.internal", cmw_bytes, 30)?;
-    let key_pem = key_pair.serialize_pem();
+) -> Result<CertificateStore, BoxError> {
+    let cert_pem = create_cert_with_attestation(key_pair, CERT_DNS_NAME, cmw_bytes, 30)?;
+    let cert = CertificateDer::from_pem_slice(cert_pem.as_bytes())?;
+    let key = PrivateKeyDer::from_pem_slice(key_pair.serialize_pem().as_bytes())?;
+    CertificateStore::new(cert, &key)
+}
 
-    let certs =
-        CertificateDer::pem_slice_iter(cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
-    let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())?;
-
+/// Builds the rustls config presenting the chain held by `certificates`.
+fn build_tls_config(certificates: Arc<CertificateStore>) -> Result<rustls::ServerConfig, BoxError> {
     let mut config = rustls::ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(certs, key)?;
+        .with_cert_resolver(certificates);
     // Enable ALPN for HTTP/3 ("h3")
     config.alpn_protocols = vec![b"h3".to_vec()];
     Ok(config)

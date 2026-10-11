@@ -6,15 +6,18 @@
 //! crates) add their own routes. This file only wires the modules together:
 //!
 //! - [`attestation`]: hardware-agnostic Attester providers and the CMW evidence wrapper.
+//! - [`certificate`]: the replaceable RA-TLS certificate (`POST /certificate`).
 //! - [`egress`]: the egress policy for peer-chosen destinations (re-exported from [`ttk_core`]).
 //! - [`server`]: the HTTP/3 Attester endpoint, serving Evidence from inside the TEE.
-//! - [`router`]: the server's base HTTP routes (`GET /`, `GET /evidence.cmw`, `POST /evidence`).
+//! - [`router`]: the server's base HTTP routes (`GET /`, `GET /evidence.cmw`, `POST /evidence`,
+//!   `POST /certificate`).
 //! - `vsock` (Linux): QUIC datagram sockets over vsock, the enclave's only way out (re-exported
 //!   from [`ttk_core`]).
 
 extern crate self as ttk_ra_server;
 
 pub mod attestation;
+pub mod certificate;
 
 pub use ttk_core::egress;
 pub mod router;
