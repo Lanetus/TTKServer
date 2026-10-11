@@ -47,7 +47,9 @@ fn test_extract_attestation_doc() {
 }
 
 mod attestation_verification {
-    use rcgen::KeyPair;
+    use rcgen::{
+        BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, IsCa, KeyPair,
+    };
     use rustls::client::danger::ServerCertVerifier;
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
@@ -57,8 +59,9 @@ mod attestation_verification {
     use ttk_ra_server::attestation::nitro_doc::{
         create_mock_attestation_document, parse_attestation_document, wrap_as_cmw,
     };
-    use ttk_ra_server::server::create_cert_with_attestation;
+    use ttk_ra_server::server::{create_cert_with_attestation, ATTESTATION_OID};
     use ttk_ra_server::AttestationParams;
+    use x509_parser::prelude::{FromDer, X509Certificate};
 
     /// Builds an RA-TLS certificate for `cert_key` carrying mock evidence bound to `bound_key`.
     fn ra_tls_cert(cert_key: &KeyPair, bound_key: &KeyPair) -> CertificateDer<'static> {
@@ -73,6 +76,38 @@ mod attestation_verification {
             .to_cbor_bytes();
         let pem = create_cert_with_attestation(cert_key, "enclave.internal", &cmw, 1).unwrap();
         CertificateDer::from_pem_slice(pem.as_bytes()).unwrap()
+    }
+
+    /// Builds a certificate for `cert_key` issued by a fresh CA, carrying mock evidence bound
+    /// to `bound_key` (as installed by a node's `POST /certificate`).
+    fn ca_issued_cert(cert_key: &KeyPair, bound_key: &KeyPair) -> CertificateDer<'static> {
+        let self_signed = ra_tls_cert(bound_key, bound_key);
+        let (_, parsed) = X509Certificate::from_der(&self_signed).unwrap();
+        let extension = parsed
+            .extensions()
+            .iter()
+            .find(|e| e.oid.to_id_string() == "1.3.6.1.4.1.99999.1")
+            .unwrap();
+
+        let ca_key = KeyPair::generate().unwrap();
+        let mut ca_params = CertificateParams::default();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca = ca_params.self_signed(&ca_key).unwrap();
+
+        let mut params = CertificateParams::new(vec!["enclave.internal".into()]).unwrap();
+        // Unlike the CA's, so the leaf is not self-issued.
+        params.distinguished_name = DistinguishedName::new();
+        params
+            .custom_extensions
+            .push(CustomExtension::from_oid_content(
+                ATTESTATION_OID,
+                extension.value.to_vec(),
+            ));
+        params
+            .signed_by(cert_key, &ca, &ca_key)
+            .unwrap()
+            .der()
+            .clone()
     }
 
     fn verify(
@@ -164,6 +199,39 @@ mod attestation_verification {
 
         let err = verify(&verifier, &cert).unwrap_err();
         assert!(err.to_string().contains("PCR0"), "{err}");
+    }
+
+    #[test]
+    fn accepts_a_ca_issued_certificate_with_bound_evidence() {
+        let key = KeyPair::generate().unwrap();
+        let cert = ca_issued_cert(&key, &key);
+        let verifier = EnclaveCertVerifier::new().allow_mock();
+
+        verify(&verifier, &cert).expect("CA-issued cert with bound evidence should verify");
+        assert_eq!(verifier.received_certificate().as_ref(), Some(&cert));
+    }
+
+    #[test]
+    fn rejects_a_ca_issued_certificate_with_evidence_bound_to_another_key() {
+        let cert = ca_issued_cert(&KeyPair::generate().unwrap(), &KeyPair::generate().unwrap());
+
+        let err = verify(&EnclaveCertVerifier::new().allow_mock(), &cert).unwrap_err();
+        assert!(err.to_string().contains("public key"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_self_signed_certificate_with_a_bad_signature() {
+        let key = KeyPair::generate().unwrap();
+        let mut der = ra_tls_cert(&key, &key).to_vec();
+        // The signature BIT STRING ends the certificate.
+        *der.last_mut().unwrap() ^= 0x01;
+
+        let err = verify(
+            &EnclaveCertVerifier::new().allow_mock(),
+            &CertificateDer::from(der),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("self-signed"), "{err}");
     }
 
     #[test]
