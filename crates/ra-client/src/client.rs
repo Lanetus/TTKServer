@@ -5,7 +5,8 @@
 //!
 //! Handles:
 //! - QUIC transport negotiation via `quinn` with ALPN `h3`
-//! - RA-TLS verification of the enclave's ephemeral self-signed certificate: the embedded
+//! - RA-TLS verification of the enclave's ephemeral certificate (self-signed, or issued by a CA
+//!   through the node's `POST /certificate`, which keeps the key and evidence): the embedded
 //!   TEE evidence (AWS Nitro, AMD SEV-SNP, Intel TDX or SGX) is verified against the vendor's
 //!   root and must bind to the SHA-256 of the certificate's public key
 //! - Sending HTTP/3 requests and receiving responses using `h3` and `h3-quinn`
@@ -33,12 +34,15 @@ use x509_parser::prelude::*;
 
 /// Custom certificate verifier for Remote Attestation TLS (RA-TLS).
 ///
-/// The server presents an ephemeral self-signed certificate that carries a CMW wrapping
-/// TEE evidence (AWS Nitro, AMD SEV-SNP, Intel TDX or Intel SGX) in a custom X.509 extension.
+/// The server presents an ephemeral certificate that carries a CMW wrapping TEE evidence
+/// (AWS Nitro, AMD SEV-SNP, Intel TDX or Intel SGX) in a custom X.509 extension: self-signed at
+/// startup, or later issued by a CA for the same key and evidence (`POST /certificate`).
 /// Instead of a Web PKI CA chain, [`verify_server_cert`](ServerCertVerifier::verify_server_cert)
 /// checks:
 ///
-/// 1. the certificate itself: well-formed, within its validity period, correctly self-signed;
+/// 1. the certificate itself: well-formed, within its validity period, and, if self-issued
+///    (issuer = subject), correctly self-signed. A CA-issued certificate's signature is not
+///    checked: no CA is trusted here, the issuer only matters to Web PKI clients;
 /// 2. the evidence: vendor signature chain up to a root in the [`TrustStore`] (see
 ///    [`crate::verifier`]), that the TEE is not in debug mode, and for Nitro that the enclave
 ///    image's PCR0 is in [`ImageTrustStore::nitro_image_allowlist`];
@@ -170,8 +174,10 @@ impl EnclaveCertVerifier {
         if now_secs > cert.validity().not_after.timestamp() {
             return Err("certificate has expired".into());
         }
-        cert.verify_signature(None)
-            .map_err(|e| format!("certificate is not correctly self-signed: {e}"))?;
+        if cert.subject().as_raw() == cert.issuer().as_raw() {
+            cert.verify_signature(None)
+                .map_err(|e| format!("certificate is not correctly self-signed: {e}"))?;
+        }
 
         // 2 & 3. The embedded evidence, bound to this certificate's public key
         let cmw_bytes = extract_attestation_doc(end_entity.as_ref())
