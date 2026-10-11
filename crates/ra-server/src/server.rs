@@ -17,7 +17,7 @@
 //! base HTTP routes live in [`super::router`], and nodes add their own with
 //! [`Server::serve_with`].
 
-use super::router::build_router;
+use super::router::{build_router, CertificatePhase};
 use crate::attestation::{self, AttestationProvider};
 use crate::certificate::{CertificateStore, CERT_DNS_NAME};
 use crate::AttestationParams;
@@ -204,7 +204,7 @@ pub struct Server {
     evidence: Arc<Evidence>,
     provider: Arc<dyn AttestationProvider>,
     private_key: Vec<u8>,
-    certificates: Arc<CertificateStore>,
+    pub(crate) certificates: Arc<CertificateStore>,
 }
 
 /// Setup and serving.
@@ -311,6 +311,12 @@ impl Server {
             self.certificates.clone(),
             routes,
         );
+        if !self.certificates.has_trusted_roots() {
+            warn!(
+                "No trusted root authorities configured: the RA-TLS certificate cannot be \
+                 replaced, so only POST /evidence and POST /certificate will be served"
+            );
+        }
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         while let Some(incoming) = self.endpoint.accept().await {
             let Ok(permit) = connections.clone().try_acquire_owned() else {
@@ -319,8 +325,14 @@ impl Server {
                 continue;
             };
             let app = app.clone();
+            // Read before the handshake: see `CertificatePhase`.
+            let phase = if self.certificates.is_replaced() {
+                CertificatePhase::CaIssued
+            } else {
+                CertificatePhase::SelfSigned
+            };
             tokio::spawn(async move {
-                handle_connection(incoming, app).await;
+                handle_connection(incoming, app, phase).await;
                 drop(permit);
             });
         }
@@ -419,8 +431,9 @@ fn build_tls_config(certificates: Arc<CertificateStore>) -> Result<rustls::Serve
     Ok(config)
 }
 
-/// Drives a single QUIC connection, dispatching each HTTP/3 request to `app`.
-async fn handle_connection(incoming: quinn::Incoming, app: Router) {
+/// Drives a single QUIC connection, dispatching each HTTP/3 request to `app` with the
+/// connection's certificate `phase` attached.
+async fn handle_connection(incoming: quinn::Incoming, app: Router, phase: CertificatePhase) {
     let conn = match incoming.await {
         Ok(conn) => conn,
         Err(err) => return warn!("Handshake failed: {err}"),
@@ -435,7 +448,8 @@ async fn handle_connection(incoming: quinn::Incoming, app: Router) {
         Err(e) => return warn!("H3 setup failed: {e}"),
     };
 
-    while let Ok(Some((req, stream))) = h3_conn.accept().await {
+    while let Ok(Some((mut req, stream))) = h3_conn.accept().await {
+        req.extensions_mut().insert(phase);
         let app = app.clone();
         tokio::spawn(respond(app, req, stream));
     }

@@ -8,9 +8,11 @@ use ttk_ra_client::seal::{self, NodePublicKey, NodeSecretKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_terminal::Terminal;
 
-/// Starts a terminal node on a free local port and returns its address.
+/// Starts a terminal node (unlocked with a test CA certificate) on a free local port and returns
+/// its address.
 fn start_terminal() -> SocketAddr {
     let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    terminal.server().sign_for_tests().unwrap();
     let addr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });
     addr
@@ -99,5 +101,16 @@ async fn faf_with_relays_left_is_rejected() {
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 400);
     assert!(response.text().unwrap().starts_with("relays left"));
+    client.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn faf_is_locked_until_the_certificate_is_replaced() {
+    let node = Terminal::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = node.local_addr().unwrap();
+    tokio::spawn(async move { node.serve().await.unwrap() });
+    let client = connect(addr).await;
+    assert_eq!(client.post("/faf", b"{}").await.unwrap().status, 404);
+    assert_eq!(client.get("/").await.unwrap().status, 404);
     client.close().await.unwrap();
 }

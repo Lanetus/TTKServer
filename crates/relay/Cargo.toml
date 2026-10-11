@@ -34,6 +34,6 @@ sev-snp = ["ttk-ra-server/sev-snp"]
 tdx = ["ttk-ra-server/tdx"]
 
 [dev-dependencies]
-ttk-ra-server = { workspace = true, features = ["mock"] }
+ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }
 ttk-terminal.workspace = true
 serde_json.workspace = true

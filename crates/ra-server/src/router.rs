@@ -7,6 +7,20 @@
 //! | `POST /evidence`    | Base64-encoded CBOR [`FreshEvidence`]: Evidence carrying the body as nonce, and the certificate |
 //! | `POST /certificate` | Replaces the RA-TLS certificate with a CA-issued one (`204`)    |
 //!
+//! # Route gating
+//!
+//! The routes are split in two phases around the replacement of the self-signed certificate
+//! (see [`crate::certificate`]); a locked route answers `404 Not Found` whatever the method:
+//!
+//! - **bootstrap** (`POST /evidence`, `POST /certificate`): served while the certificate is
+//!   self-signed, locked for good once it has been replaced ([`CertificateStore::is_replaced`]),
+//!   so the certificate is replaced at most once and no further Evidence is generated.
+//! - **gated** (every other route: `GET /`, `GET /evidence.cmw` and all the routes nodes add with
+//!   [`Server::serve_with`](super::server::Server::serve_with)): served only on connections
+//!   that negotiated the CA-issued certificate ([`CertificatePhase::CaIssued`], set by the
+//!   server per connection). A connection opened with the self-signed certificate stays locked
+//!   even after the replacement.
+//!
 //! `POST /evidence` gives a Verifier freshness (RFC 9334 §10): the request body is the raw
 //! nonce (1 to [`MAX_NONCE_LEN`] bytes, else `400`), and the server asks the TEE for new Evidence
 //! bound, like the startup Evidence, to the RA-TLS key (`user_data` = SHA-256 of its
@@ -29,7 +43,9 @@ use crate::attestation::AttestationProvider;
 use crate::certificate::{parse_chain, CertificateError, CertificateStore};
 use crate::AttestationParams;
 use axum::body::Bytes;
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -54,11 +70,28 @@ pub struct Evidence {
     pub cmw: Vec<u8>,
 }
 
-/// Builds the Axum router serving the greeting and the evidence endpoints, merged with `routes`.
+/// The certificate a connection negotiated, attached by the server to each of its requests as
+/// an extension; it decides whether the gated routes are served (see the module docs).
+///
+/// The server reads [`CertificateStore::is_replaced`] before the TLS handshake: replacement
+/// only goes one way, so `CaIssued` guarantees the CA-issued certificate was presented, while a
+/// replacement racing the handshake leaves the connection `SelfSigned` (locked).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CertificatePhase {
+    /// The connection was opened with the self-signed RA-TLS certificate.
+    SelfSigned,
+    /// The connection was opened with the CA-issued certificate.
+    CaIssued,
+}
+
+/// Builds the Axum router serving the greeting and the evidence endpoints, merged with `routes`,
+/// gated as described in the module docs.
 ///
 /// `POST /evidence` asks `provider` for Evidence carrying the request's nonce, bound to the key
 /// of the certificate held by `certificates`, and returns it with that certificate;
-/// `POST /certificate` replaces the chain held by `certificates`.
+/// `POST /certificate` replaces the chain held by `certificates`. Both answer `404` once the
+/// chain has been replaced ([`CertificateStore::is_replaced`]). `GET /`, `GET /evidence.cmw` and
+/// `routes` answer `404` unless the request carries [`CertificatePhase::CaIssued`].
 pub fn build_router(
     evidence: &Evidence,
     provider: Arc<dyn AttestationProvider>,
@@ -68,10 +101,15 @@ pub fn build_router(
     let cmw_b64 = STANDARD.encode(&evidence.cmw);
     let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_ATTESTATIONS));
     let evidence_certificates = certificates.clone();
+    let gate_certificates = certificates.clone();
 
-    Router::new()
+    let gated = Router::new()
         .route("/", get(|| async { "Hello from Enclave over HTTP/3!" }))
         .route("/evidence.cmw", get(move || async move { cmw_b64 }))
+        .merge(routes)
+        .layer(middleware::from_fn(require_ca_issued));
+
+    Router::new()
         .route(
             "/evidence",
             post(move |nonce: Bytes| {
@@ -82,7 +120,32 @@ pub fn build_router(
             "/certificate",
             post(move |body: Bytes| async move { replace_certificate(&certificates, &body) }),
         )
-        .merge(routes)
+        .layer(middleware::from_fn_with_state(
+            gate_certificates,
+            require_self_signed,
+        ))
+        .merge(gated)
+}
+
+/// Gate of the bootstrap routes: `404` once the certificate has been replaced.
+async fn require_self_signed(
+    State(certificates): State<Arc<CertificateStore>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if certificates.is_replaced() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    next.run(request).await
+}
+
+/// Gate of every other route: `404` unless the request's connection negotiated the CA-issued
+/// certificate (no [`CertificatePhase`] counts as self-signed).
+async fn require_ca_issued(request: Request, next: Next) -> Response {
+    match request.extensions().get::<CertificatePhase>() {
+        Some(CertificatePhase::CaIssued) => next.run(request).await,
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Handles `POST /evidence`: generates fresh Evidence carrying `nonce`, bound to the key of the
@@ -155,7 +218,8 @@ fn key_binding(cert: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Handles `POST /certificate`: validates the chain in `body` and, if it is the current
-/// certificate issued by a trusted root, presents it from now on (`204 No Content`).
+/// certificate issued by a trusted root, presents it from now on (`204 No Content`). `404` if
+/// a concurrent request replaced it first.
 fn replace_certificate(certificates: &CertificateStore, body: &[u8]) -> Response {
     let result = parse_chain(body).and_then(|chain| certificates.replace(chain));
     let Err(e) = result else {
@@ -167,6 +231,7 @@ fn replace_certificate(certificates: &CertificateStore, body: &[u8]) -> Response
         CertificateError::Mismatch(_) => StatusCode::UNPROCESSABLE_ENTITY,
         CertificateError::Untrusted(_) => StatusCode::FORBIDDEN,
         CertificateError::NoTrustedRoots => StatusCode::SERVICE_UNAVAILABLE,
+        CertificateError::AlreadyReplaced => StatusCode::NOT_FOUND,
     };
     (status, e.to_string()).into_response()
 }

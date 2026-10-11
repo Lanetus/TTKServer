@@ -64,7 +64,7 @@ auth-test = [
 [dev-dependencies]
 rcgen.workspace = true
 sha2.workspace = true
-ttk-ra-server = { workspace = true, features = ["mock"] }
+ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }
 bytes.workspace = true
 h3.workspace = true
 h3-quinn.workspace = true

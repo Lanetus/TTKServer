@@ -20,7 +20,7 @@ use ttk_ra_server::{attestation, AttestationParams};
 use ttk_root::auth::{
     authorize, pem, verify_fresh_evidence, AuthorizeOptions, CertificateAuthority,
 };
-use ttk_root::{FileImageTrustStore, Root};
+use ttk_root::{FileImageTrustStore, Root, ROOT_ATTESTATION_PATH};
 
 /// Options accepting mock attestation.
 fn mock_options() -> AuthorizeOptions {
@@ -403,4 +403,63 @@ async fn authorize_refuses_mock_attestation_by_default() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn authorize_fails_once_the_certificate_is_replaced() {
+    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let addr = start_node(Some(&ca));
+    authorize(addr, "localhost", &ca, &mock_options())
+        .await
+        .unwrap();
+
+    // POST /evidence is gone after the replacement.
+    let err = authorize(addr, "localhost", &ca, &mock_options())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("404"), "{err}");
+}
+
+/// Connects to the node at `addr` over RA-TLS, accepting its mock evidence.
+async fn connect_mock(addr: SocketAddr) -> TtkClient {
+    let verifier = EnclaveCertVerifier::new()
+        .with_image_trust_store(FileImageTrustStore::builtin())
+        .allow_mock();
+    TtkClient::connect_with_verifier(addr, "localhost", verifier)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn routes_unlock_only_for_connections_opened_after_the_replacement() {
+    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let addr = start_node(Some(&ca));
+
+    // Self-signed: only the bootstrap routes are served.
+    let before = connect_mock(addr).await;
+    for path in ["/", "/evidence.cmw", ROOT_ATTESTATION_PATH] {
+        assert_eq!(before.get(path).await.unwrap().status, 404, "{path}");
+    }
+
+    authorize(addr, "localhost", &ca, &mock_options())
+        .await
+        .unwrap();
+
+    // The connection opened with the self-signed certificate stays locked, and the bootstrap
+    // routes are gone for it too.
+    assert_eq!(before.get(ROOT_ATTESTATION_PATH).await.unwrap().status, 404);
+    assert_eq!(
+        before.post("/evidence", b"nonce").await.unwrap().status,
+        404
+    );
+    before.close().await.unwrap();
+
+    // New connections get the CA-issued certificate and every other route.
+    let after = connect_mock(addr).await;
+    for path in ["/", "/evidence.cmw", ROOT_ATTESTATION_PATH] {
+        assert_eq!(after.get(path).await.unwrap().status, 200, "{path}");
+    }
+    assert_eq!(after.post("/evidence", b"nonce").await.unwrap().status, 404);
+    assert_eq!(after.post("/certificate", b"").await.unwrap().status, 404);
+    after.close().await.unwrap();
 }
