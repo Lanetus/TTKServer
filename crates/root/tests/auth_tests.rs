@@ -11,7 +11,7 @@ use rustls::RootCertStore;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use ttk_ra_client::verifier::{nitro, Policy, VerifiedEvidence};
-use ttk_ra_client::{ImageTrustStore, TrustStore};
+use ttk_ra_client::{EnclaveCertVerifier, ImageTrustStore, TrustStore, TtkClient};
 use ttk_ra_server::certificate::{CertificateError, CertificateStore, CERT_DNS_NAME};
 use ttk_ra_server::server::{create_cert_with_attestation, Server};
 use ttk_ra_server::{attestation, AttestationParams};
@@ -279,6 +279,16 @@ async fn authorize_installs_the_issued_certificate() {
 
     // New connections get the CA-issued chain, valid under Web PKI rules for the CA.
     assert_eq!(presented_chain(addr, &ca).await, chain);
+
+    // RA-TLS clients still accept the node: same key and evidence, CA-issued.
+    let verifier = EnclaveCertVerifier::new()
+        .with_image_trust_store(FileImageTrustStore::builtin())
+        .allow_mock();
+    let client = TtkClient::connect_with_verifier(addr, "localhost", verifier)
+        .await
+        .unwrap();
+    assert_eq!(client.peer_cert(), Some(&chain[0]));
+    client.close().await.unwrap();
 }
 
 #[tokio::test]
