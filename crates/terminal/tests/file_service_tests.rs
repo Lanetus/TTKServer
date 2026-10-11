@@ -141,6 +141,7 @@ async fn terminal_with_the_file_service_uploads_and_downloads_over_faf() {
     let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap())
         .unwrap()
         .with_evaluator(FileService::new(MemoryStore::new()));
+    terminal.server().sign_for_tests().unwrap();
     let addr: SocketAddr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });
     let client = TtkClient::connect_with_verifier(

@@ -18,9 +18,19 @@ fn nitro_record(cmw: &[u8]) -> (Option<String>, Vec<u8>) {
     }
 }
 
-/// Starts a server on a free local port and returns its address. It serves until the test's
-/// runtime shuts down.
+/// Starts a server, unlocked with a test CA certificate, on a free local port and returns its
+/// address. It serves until the test's runtime shuts down.
 fn start_server() -> SocketAddr {
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).expect("server should start");
+    server.sign_for_tests().unwrap();
+    let addr = server.local_addr().unwrap();
+    tokio::spawn(server.serve());
+    addr
+}
+
+/// Starts a server still presenting its self-signed certificate (only `POST /evidence` and
+/// `POST /certificate` served) on a free local port and returns its address.
+fn start_unsigned_server() -> SocketAddr {
     let server = Server::bind("127.0.0.1:0".parse().unwrap()).expect("server should start");
     let addr = server.local_addr().unwrap();
     tokio::spawn(server.serve());
@@ -47,11 +57,11 @@ async fn client_verifies_the_mock_server_and_exchanges_requests() {
     assert_eq!(root.status, 200);
     assert_eq!(root.text().unwrap(), "Hello from Enclave over HTTP/3!");
 
-    // Only `/` and `/evidence.cmw` are served over GET; `/evidence` is POST-only.
-    for removed in ["/hello", "/attestation"] {
+    // Only `/` and `/evidence.cmw` are served over GET; `/evidence` is locked once the
+    // certificate is CA-issued, whatever the method.
+    for removed in ["/hello", "/attestation", "/evidence"] {
         assert_eq!(client.get(removed).await.unwrap().status, 404, "{removed}");
     }
-    assert_eq!(client.get("/evidence").await.unwrap().status, 405);
 
     // The evidence served over HTTP is the CMW embedded in the TLS certificate. Paths without a
     // leading slash are accepted too.
@@ -78,7 +88,7 @@ async fn client_verifies_the_mock_server_and_exchanges_requests() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn evidence_with_nonce_carries_the_nonce() {
-    let addr = start_server();
+    let addr = start_unsigned_server();
     let client = TtkClient::connect_with_verifier(
         addr,
         "localhost",
@@ -142,6 +152,7 @@ async fn client_connects_over_ipv6() {
         eprintln!("IPv6 loopback unavailable; skipping");
         return;
     };
+    server.sign_for_tests().unwrap();
     let addr = server.local_addr().unwrap();
     tokio::spawn(server.serve());
 
@@ -166,6 +177,7 @@ async fn connect_mock(addr: SocketAddr) -> TtkClient {
 #[tokio::test(flavor = "multi_thread")]
 async fn client_rejects_responses_larger_than_max_response_body() {
     let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    server.sign_for_tests().unwrap();
     let addr = server.local_addr().unwrap();
     let routes = axum::Router::new()
         .route(

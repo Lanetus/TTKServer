@@ -4,6 +4,7 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use axum::routing::get;
 use axum::Router;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rcgen::{
@@ -14,8 +15,8 @@ use rustls::RootCertStore;
 use std::sync::Arc;
 use tower_service::Service;
 use ttk_ra_server::attestation;
-use ttk_ra_server::certificate::{CertificateStore, CERT_DNS_NAME};
-use ttk_ra_server::router::{build_router, Evidence};
+use ttk_ra_server::certificate::{CertificateError, CertificateStore, CERT_DNS_NAME};
+use ttk_ra_server::router::{build_router, CertificatePhase, Evidence};
 use ttk_ra_server::server::{create_cert_with_attestation, ATTESTATION_OID};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
@@ -84,7 +85,7 @@ fn octet_string(data: &[u8]) -> Vec<u8> {
 }
 
 /// The RA-TLS key, its certificate store presenting the self-signed certificate, and a router
-/// serving it.
+/// serving it with a node route `GET /node`.
 fn setup() -> (KeyPair, Arc<CertificateStore>, Router) {
     let key = KeyPair::generate().unwrap();
     let pem = create_cert_with_attestation(&key, CERT_DNS_NAME, EVIDENCE, 30).unwrap();
@@ -95,7 +96,7 @@ fn setup() -> (KeyPair, Arc<CertificateStore>, Router) {
         &Evidence { cmw: Vec::new() },
         attestation::by_name("mock").unwrap().into(),
         store.clone(),
-        Router::new(),
+        Router::new().route("/node", get(|| async { "node" })),
     );
     (key, store, router)
 }
@@ -251,5 +252,149 @@ async fn refuses_a_malformed_body() {
     assert_eq!(
         post_certificate(&mut router, Vec::new()).await,
         StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn evidence_and_certificate_are_gone_after_a_replacement() {
+    let (key, store, mut router) = setup();
+    let ca = Ca::root();
+    store.set_trusted_roots(ca.roots()).unwrap();
+    assert!(!store.is_replaced());
+
+    let leaf = ca.issue(&key, CERT_DNS_NAME, EVIDENCE);
+    assert_eq!(
+        post_certificate(&mut router, leaf.to_vec()).await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(store.is_replaced());
+
+    // A second (even valid) replacement and fresh Evidence are no longer served.
+    let again = ca.issue(&key, CERT_DNS_NAME, EVIDENCE);
+    assert_eq!(
+        post_certificate(&mut router, again.to_vec()).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(store.current_chain(), vec![leaf]);
+    let request = Request::post("/evidence")
+        .body(Body::from(b"nonce".to_vec()))
+        .unwrap();
+    assert_eq!(
+        router.call(request).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn store_refuses_a_second_replacement() {
+    let (key, store, _) = setup();
+    let ca = Ca::root();
+    store.set_trusted_roots(ca.roots()).unwrap();
+
+    let leaf = ca.issue(&key, CERT_DNS_NAME, EVIDENCE);
+    store.replace(vec![leaf.clone()]).unwrap();
+    assert_eq!(
+        store.replace(vec![ca.issue(&key, CERT_DNS_NAME, EVIDENCE)]),
+        Err(CertificateError::AlreadyReplaced)
+    );
+    assert_eq!(store.current_chain(), vec![leaf]);
+}
+
+/// Sends `method path` (empty body) on a connection in `phase` (`None`: no phase attached),
+/// returning the status.
+async fn status(
+    router: &mut Router,
+    method: &str,
+    path: &str,
+    phase: Option<CertificatePhase>,
+) -> StatusCode {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .body(Body::empty())
+        .unwrap();
+    if let Some(phase) = phase {
+        request.extensions_mut().insert(phase);
+    }
+    router.call(request).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn only_the_bootstrap_routes_are_served_before_a_replacement() {
+    let (_, _, mut router) = setup();
+    for phase in [None, Some(CertificatePhase::SelfSigned)] {
+        for (method, path) in [
+            ("GET", "/"),
+            ("GET", "/evidence.cmw"),
+            ("GET", "/node"),
+            // A wrong method on a locked route is not told apart (no 405).
+            ("POST", "/"),
+            ("POST", "/node"),
+            ("GET", "/missing"),
+        ] {
+            assert_eq!(
+                status(&mut router, method, path, phase).await,
+                StatusCode::NOT_FOUND,
+                "{method} {path} {phase:?}"
+            );
+        }
+    }
+    let ok = status(&mut router, "POST", "/evidence", None).await;
+    assert_eq!(ok, StatusCode::BAD_REQUEST, "empty nonce, but served");
+    assert_eq!(
+        status(&mut router, "GET", "/evidence", None).await,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+}
+
+#[tokio::test]
+async fn every_other_route_is_served_after_a_replacement() {
+    let (key, store, mut router) = setup();
+    let ca = Ca::root();
+    store.set_trusted_roots(ca.roots()).unwrap();
+    store
+        .replace(vec![ca.issue(&key, CERT_DNS_NAME, EVIDENCE)])
+        .unwrap();
+
+    let signed = Some(CertificatePhase::CaIssued);
+    for path in ["/", "/evidence.cmw", "/node"] {
+        assert_eq!(
+            status(&mut router, "GET", path, signed).await,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        status(&mut router, "POST", "/node", signed).await,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        status(&mut router, "GET", "/missing", signed).await,
+        StatusCode::NOT_FOUND
+    );
+    // The bootstrap routes are locked whatever the method or connection.
+    for phase in [signed, Some(CertificatePhase::SelfSigned)] {
+        for (method, path) in [
+            ("POST", "/evidence"),
+            ("GET", "/evidence"),
+            ("POST", "/certificate"),
+        ] {
+            assert_eq!(
+                status(&mut router, method, path, phase).await,
+                StatusCode::NOT_FOUND,
+                "{method} {path} {phase:?}"
+            );
+        }
+    }
+    // Connections opened with the self-signed certificate stay locked.
+    assert_eq!(
+        status(
+            &mut router,
+            "GET",
+            "/node",
+            Some(CertificatePhase::SelfSigned)
+        )
+        .await,
+        StatusCode::NOT_FOUND
     );
 }

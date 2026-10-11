@@ -11,11 +11,13 @@ use ttk_root::{FileImageTrustStore, Root};
 const PCR0_A: &str = "7807833a90cc86f5a853a1f49043a568f3428f6b03eb983aed99899fbfa77d6b86b34fa934e318dd3741debca32c0aba";
 const PCR0_B: &str = "1de927770d7a1c250ba364440947226ed9af7250ae25fdad391c3cd87d0044b1e4a4e96810bc8f2dfc9160fcf0742c8d";
 
-/// Starts a root node serving `allowlist` on a free local port and returns its address.
+/// Starts a root node serving `allowlist`, unlocked with a test CA certificate, on a free local
+/// port and returns its address.
 fn start_root(allowlist: &str) -> SocketAddr {
     let images = FileImageTrustStore::parse(allowlist).unwrap();
     let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let root = Root::with_image_trust_store(server, &images);
+    root.server().sign_for_tests().unwrap();
     let addr = root.local_addr().unwrap();
     tokio::spawn(async move { root.serve().await.unwrap() });
     addr

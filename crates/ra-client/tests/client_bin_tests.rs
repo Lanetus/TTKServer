@@ -7,20 +7,24 @@ use ttk_relay::Relay;
 use ttk_terminal::Terminal;
 
 /// Starts a relay node that accepts mock-attested next hops on a free local port and returns
-/// its address. It serves until the test's runtime shuts down.
+/// its address. It serves (unlocked with a test CA certificate) until the test's runtime shuts
+/// down.
 fn start_relay() -> SocketAddr {
     let relay = Relay::bind("127.0.0.1:0".parse().unwrap())
         .expect("relay should start")
         .allow_mock()
         .allow_private_next_hops();
+    relay.server().sign_for_tests().unwrap();
     let addr = relay.local_addr().unwrap();
     tokio::spawn(async move { relay.serve().await.unwrap() });
     addr
 }
 
-/// Starts a terminal node on a free local port and returns its address.
+/// Starts a terminal node (unlocked with a test CA certificate) on a free local port and returns
+/// its address.
 fn start_terminal() -> SocketAddr {
     let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap()).expect("terminal should start");
+    terminal.server().sign_for_tests().unwrap();
     let addr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });
     addr
