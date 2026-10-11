@@ -36,6 +36,7 @@ log = { workspace = true, optional = true }
 rand_core = { workspace = true, optional = true }
 rcgen = { workspace = true, optional = true }
 rustls-pki-types = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 time = { workspace = true, optional = true }
 ttk-ra-client = { workspace = true, optional = true }
 x509-parser = { workspace = true, optional = true }
@@ -54,6 +55,7 @@ auth-test = [
     "dep:rand_core",
     "dep:rcgen",
     "dep:rustls-pki-types",
+    "dep:sha2",
     "dep:time",
     "dep:ttk-ra-client",
     "dep:x509-parser",
@@ -61,6 +63,7 @@ auth-test = [
 
 [dev-dependencies]
 rcgen.workspace = true
+sha2.workspace = true
 ttk-ra-server = { workspace = true, features = ["mock"] }
 bytes.workspace = true
 h3.workspace = true

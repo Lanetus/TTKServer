@@ -5,6 +5,7 @@
 //! - [`media_type`]: the CMW types naming the TEE behind the wrapped Evidence.
 //! - [`image_trust`]: the accepted enclave images ([`ImageTrustStore`]) and the root node's
 //!   `GET /root-attestation` format.
+//! - [`fresh_evidence`]: the `POST /evidence` response ([`FreshEvidence`]).
 //! - [`egress`]: the egress policy for peer-chosen destinations ([`egress::classify_hop_address`]).
 //! - `vsock` (Linux): QUIC datagram sockets over vsock, the enclave's only way out.
 //! - [`vsock_proxy`]: configuration of the parent-instance `vsock-proxy` binary.
@@ -14,6 +15,7 @@
 
 pub mod cmw;
 pub mod egress;
+pub mod fresh_evidence;
 pub mod image_trust;
 #[cfg(target_os = "linux")]
 pub mod vsock;
@@ -21,6 +23,7 @@ pub mod vsock_proxy;
 pub mod vsock_proxy_tcp;
 
 pub use cmw::{Cmw, CmwCollection, CmwRecord, CmwType};
+pub use fresh_evidence::FreshEvidence;
 pub use image_trust::ImageTrustStore;
 
 /// CMW types of the TEE Evidence carried in the RA-TLS certificate and served over HTTP.
@@ -47,6 +50,13 @@ pub mod media_type {
     pub const SEV_SNP_REPORT_LABEL: &str = "report";
     /// Label of the VCEK in an [`SEV_SNP_COLLECTION`].
     pub const SEV_SNP_VCEK_LABEL: &str = "vcek";
+    /// Collection type (RFC 4151 tag URI, not registered) of the `POST /evidence` response:
+    /// fresh Evidence and the RA-TLS certificate it is bound to (see [`crate::FreshEvidence`]).
+    pub const FRESH_EVIDENCE_COLLECTION: &str = "tag:lanetus.github.io,2026:fresh-evidence";
+    /// Label of the Evidence CMW in a [`FRESH_EVIDENCE_COLLECTION`].
+    pub const FRESH_EVIDENCE_LABEL: &str = "evidence";
+    /// Label of the DER certificate ([`PKIX_CERT`]) in a [`FRESH_EVIDENCE_COLLECTION`].
+    pub const FRESH_CERTIFICATE_LABEL: &str = "certificate";
 }
 
 /// OID of the X.509 extension carrying the attestation document (placeholder, not a registered PEN).
