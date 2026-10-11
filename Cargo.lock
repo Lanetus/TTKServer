@@ -3280,17 +3280,24 @@ name = "ttk-root"
 version = "6.0.0"
 dependencies = [
  "axum",
+ "base64 0.21.7",
  "bytes 1.12.1",
  "env_logger",
  "h3",
  "h3-quinn",
+ "log",
  "quinn",
+ "rand_core 0.6.4",
+ "rcgen",
  "rustls",
  "rustls-pki-types",
  "serde_json",
+ "time",
  "tokio",
  "ttk-core",
+ "ttk-ra-client",
  "ttk-ra-server",
+ "x509-parser",
 ]
 
 [[package]]
