@@ -289,7 +289,7 @@ impl Server {
     }
 
     /// Sets the root authorities a `POST /certificate` replacement must chain to, overriding
-    /// [`CA_ROOTS_ENV`](crate::certificate::CA_ROOTS_ENV). An empty store refuses all
+    /// the built-in TTK root ([`ttk_core::TTK_ROOT_CA_PEM`]). An empty store refuses all
     /// replacements.
     pub fn set_trusted_roots(&self, roots: RootCertStore) -> Result<(), BoxError> {
         self.certificates.set_trusted_roots(roots)
@@ -371,7 +371,7 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
     info!("Wrapped Evidence as a CMW ({} bytes).", cmw_bytes.len());
 
     let certificates = Arc::new(build_certificate_store(&key_pair, &cmw_bytes)?);
-    certificates.load_trusted_roots_from_env()?;
+    certificates.load_builtin_trusted_roots()?;
     let tls_config = build_tls_config(certificates.clone())?;
     let evidence = Arc::new(Evidence { cmw: cmw_bytes });
 

@@ -25,8 +25,8 @@
 #   vsock-proxy-tcp.service     s3-server only: deploy/systemd/vsock-proxy-tcp.service
 #
 # The node then serves only POST /evidence and POST /certificate until a CA installs a
-# certificate for it (after every enclave restart: the RA-TLS key is ephemeral); the EIF must
-# carry the CA's root as TTK_CA_ROOTS. Authorize root nodes before the nodes fetching from them.
+# certificate for it (after every enclave restart: the RA-TLS key is ephemeral); the node trusts
+# only the TTK root CA built into the binary. Authorize root nodes before the nodes fetching from them.
 #
 # Progress: /var/log/ttk-user-data.log (also /var/log/cloud-init-output.log).
 # Afterwards: nitro-cli describe-enclaves; journalctl -u ttk-<node>-enclave -u vsock-proxy
