@@ -11,7 +11,8 @@
 //! - [`vsock_proxy`]: configuration of the parent-instance `vsock-proxy` binary.
 //! - [`vsock_proxy_tcp`]: configuration of the parent-instance `vsock-proxy-tcp` binary.
 //! - The RA-TLS certificate extension OID ([`ATTESTATION_OID`]), the parent instance's vsock CID
-//!   ([`PARENT_CID`]) and the mock root CA ([`MOCK_NITRO_ROOT_CERT`]).
+//!   ([`PARENT_CID`]), the mock root CA ([`MOCK_NITRO_ROOT_CERT`]) and the TTK root authority
+//!   ([`TTK_ROOT_CA_PEM`]).
 
 pub mod cmw;
 pub mod egress;
@@ -69,3 +70,7 @@ pub const PARENT_CID: u32 = 3;
 /// key is public, so verifiers must trust it only when mock attestation is explicitly allowed
 /// (local development).
 pub const MOCK_NITRO_ROOT_CERT: &[u8] = include_bytes!("mock_nitro_root.der");
+
+/// PEM of the TTK root certificate authority: the only root a CA-issued RA-TLS certificate
+/// (installed with `POST /certificate`) may chain to.
+pub const TTK_ROOT_CA_PEM: &[u8] = include_bytes!("TTK_Root_CA.pem");

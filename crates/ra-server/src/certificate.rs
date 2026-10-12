@@ -17,8 +17,10 @@
 //! ([`CertificateError::AlreadyReplaced`]). The router serves its routes according to this
 //! state (see [`super::router`]): until the replacement, only `POST /evidence` and
 //! `POST /certificate`; after it, every other route (on connections that negotiated the
-//! CA-issued certificate) and no longer those two. Without trusted roots ([`CA_ROOTS_ENV`] unset and no
-//! [`CertificateStore::set_trusted_roots`]) every replacement is refused.
+//! CA-issued certificate) and no longer those two. The trusted root is the built-in TTK root
+//! authority ([`TTK_ROOT_CA_PEM`], see [`CertificateStore::load_builtin_trusted_roots`]);
+//! [`CertificateStore::set_trusted_roots`] overrides it. Without trusted roots every replacement
+//! is refused.
 
 use crate::server::BoxError;
 use log::info;
@@ -32,16 +34,12 @@ use rustls::RootCertStore;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use ttk_core::ATTESTATION_OID;
+use ttk_core::{ATTESTATION_OID, TTK_ROOT_CA_PEM};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 /// DNS name (subject alternative name) of the RA-TLS certificate; a replacement must be valid
 /// for it.
 pub const CERT_DNS_NAME: &str = "enclave.internal";
-
-/// Environment variable naming a PEM file with the trusted root authorities whose
-/// certificates `POST /certificate` accepts. Unset: no replacement is accepted.
-pub const CA_ROOTS_ENV: &str = "TTK_CA_ROOTS";
 
 /// Why a replacement certificate was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,24 +128,16 @@ impl CertificateStore {
             .is_some()
     }
 
-    /// Loads the trusted roots from the PEM file named by [`CA_ROOTS_ENV`], if set.
-    pub fn load_trusted_roots_from_env(&self) -> Result<(), BoxError> {
-        let Ok(path) = std::env::var(CA_ROOTS_ENV) else {
-            return Ok(());
-        };
-        let pem =
-            std::fs::read(&path).map_err(|e| format!("reading {CA_ROOTS_ENV} {path}: {e}"))?;
+    /// Trusts the built-in TTK root authority ([`TTK_ROOT_CA_PEM`]).
+    pub fn load_builtin_trusted_roots(&self) -> Result<(), BoxError> {
         let mut roots = RootCertStore::empty();
-        for cert in CertificateDer::pem_slice_iter(&pem) {
+        for cert in CertificateDer::pem_slice_iter(TTK_ROOT_CA_PEM) {
             roots.add(cert?)?;
         }
         if roots.is_empty() {
-            return Err(format!("{CA_ROOTS_ENV} {path} holds no certificates").into());
+            return Err("the built-in TTK root CA holds no certificates".into());
         }
-        info!(
-            "Loaded {} trusted root authorities from {path}",
-            roots.len()
-        );
+        info!("Loaded {} built-in trusted root authorities", roots.len());
         self.set_trusted_roots(roots)
     }
 
