@@ -5,8 +5,9 @@
 //! for the node's RA-TLS key as the CA and installs it with `POST /certificate`.
 //!
 //! The CA is read from `--ca-cert` / `--ca-key` (PEM); if neither file exists a new root CA is
-//! created and written there. The node accepts the certificate only if it trusts the CA: start
-//! it with `TTK_CA_ROOTS=<ca-cert>`. The enclave images never include this binary.
+//! created and written there. Nodes trust only the built-in TTK root CA
+//! (`ttk_core::TTK_ROOT_CA_PEM`), so a running node accepts the certificate only if the CA is
+//! that root (or an intermediate it issued). The enclave images never include this binary.
 
 use log::{error, info, warn};
 use std::net::SocketAddr;
@@ -30,8 +31,11 @@ If neither CA file exists, a new root CA is created and written to them.
 TTK_ALLOW_MOCK_ATTESTATION=1 accepts mock attestation (local development).
 
 Example:
-  TTK_CA_ROOTS=auth-test-ca.pem TTK_USE_UDP=1 cargo run --bin root
-  TTK_ALLOW_MOCK_ATTESTATION=1 cargo run -p ttk-root --features auth-test --bin auth-test
+  TTK_USE_UDP=1 cargo run --bin root
+  TTK_ALLOW_MOCK_ATTESTATION=1 cargo run -p ttk-root --features auth-test --bin auth-test -- \
+    --ca-cert TTK_Root_CA.pem --ca-key TTK_Root_CA.key
+
+Nodes trust only the built-in TTK root CA: a newly created CA is refused by them.
 ";
 
 /// What an `auth-test` invocation should do.
@@ -102,10 +106,10 @@ fn load_or_create_ca(cert: &Path, key: &Path) -> Result<CertificateAuthority, Bo
             std::fs::write(cert, ca.cert_pem())?;
             write_private(key, &ca.key_pem())?;
             info!(
-                "Created a new CA: certificate {}, key {} (start the node with TTK_CA_ROOTS={})",
+                "Created a new CA: certificate {}, key {} (nodes trust only the built-in TTK \
+                 root CA, so they will refuse it)",
                 cert.display(),
-                key.display(),
-                cert.display()
+                key.display()
             );
             Ok(ca)
         }

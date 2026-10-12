@@ -112,7 +112,7 @@ impl CertificateAuthority {
         })
     }
 
-    /// The CA certificate, PEM-encoded (for the node's `TTK_CA_ROOTS`).
+    /// The CA certificate, PEM-encoded.
     pub fn cert_pem(&self) -> String {
         pem(std::slice::from_ref(&self.cert_der))
     }

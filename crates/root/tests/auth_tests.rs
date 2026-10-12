@@ -46,11 +46,18 @@ fn ra_tls_store(evidence: &[u8]) -> CertificateStore {
     CertificateStore::new(cert, &private_key).unwrap()
 }
 
-/// Starts a root node on a free local port trusting `ca` (if any); returns its address.
+/// Starts a root node on a free local port trusting `ca` (if any; otherwise the built-in TTK
+/// root CA); returns its address.
 fn start_node(ca: Option<&CertificateAuthority>) -> SocketAddr {
+    start_node_with_roots(ca.map(roots))
+}
+
+/// Starts a root node on a free local port trusting `roots` (if any; otherwise the built-in TTK
+/// root CA); returns its address.
+fn start_node_with_roots(roots: Option<RootCertStore>) -> SocketAddr {
     let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    if let Some(ca) = ca {
-        server.set_trusted_roots(roots(ca)).unwrap();
+    if let Some(roots) = roots {
+        server.set_trusted_roots(roots).unwrap();
     }
     let root = Root::new(server);
     let addr = root.local_addr().unwrap();
@@ -383,9 +390,20 @@ async fn authorize_fails_when_the_node_does_not_trust_the_ca() {
 }
 
 #[tokio::test]
-async fn authorize_fails_when_the_node_trusts_no_ca() {
+async fn authorize_fails_when_the_node_trusts_only_the_builtin_root() {
     let ca = CertificateAuthority::generate("Test CA").unwrap();
     let addr = start_node(None);
+
+    let err = authorize(addr, "localhost", &ca, &mock_options())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("403"), "{err}");
+}
+
+#[tokio::test]
+async fn authorize_fails_when_the_node_trusts_no_ca() {
+    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let addr = start_node_with_roots(Some(RootCertStore::empty()));
 
     let err = authorize(addr, "localhost", &ca, &mock_options())
         .await
