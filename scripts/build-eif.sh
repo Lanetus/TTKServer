@@ -7,7 +7,8 @@
 #
 # s3-server (a terminal storing files in S3) needs TTK_S3_BUCKET and AWS_REGION, which are baked
 # into the image (so they are part of the measurements); TTK_S3_VSOCK_PORT (default 8001) must
-# match the parent's vsock-proxy-tcp.
+# match the parent's vsock-proxy-tcp, and TTK_IMDS_VSOCK_PORT (default 8002; empty = no instance
+# role credentials) the parent's vsock-proxy-imds.
 #
 # TTK_DEBUG=1 builds a debug image (suffix _debug): RUST_LOG=info and
 # TTK_ALLOW_MOCK_ATTESTATION=1 baked in, for running with `nitro-cli run-enclave --debug-mode`
@@ -52,6 +53,7 @@ if [ "$node" = s3-server ]; then
     fi
     node_args="--build-arg TTK_S3_BUCKET=$TTK_S3_BUCKET --build-arg AWS_REGION=$AWS_REGION"
     node_args="$node_args --build-arg TTK_S3_VSOCK_PORT=${TTK_S3_VSOCK_PORT:-8001}"
+    node_args="$node_args --build-arg TTK_IMDS_VSOCK_PORT=${TTK_IMDS_VSOCK_PORT-8002}"
 fi
 
 version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)

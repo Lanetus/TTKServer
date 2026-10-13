@@ -19,88 +19,10 @@ use crate::storage::BlobStore;
 use crate::EvalError;
 use crate::Evaluator;
 use log::debug;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ttk_ra_client::hex_encode;
 
-/// Length of a SHA-256 digest, the `body` of a download and the reply to an upload.
-pub const SHA256_LEN: usize = 32;
-
-/// A `/faf` message to the file service.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "body", rename_all = "lowercase")]
-pub enum FileRequest {
-    /// Stores the file; answered with its SHA-256.
-    Upload(#[serde(with = "serde_bytes")] Vec<u8>),
-    /// Retrieves the file with this SHA-256; answered with the file.
-    Download(#[serde(with = "serde_bytes")] Vec<u8>),
-}
-
-impl FileRequest {
-    /// Encodes as CBOR, the message a client seals to the terminal.
-    pub fn to_cbor(&self) -> Result<Vec<u8>, EvalError> {
-        to_cbor(self)
-    }
-
-    /// Decodes a CBOR message.
-    pub fn from_cbor(message: &[u8]) -> Result<Self, EvalError> {
-        Ok(ciborium::from_reader(message)?)
-    }
-}
-
-/// The file service's reply: a CBOR map with a single key, `response` or `error`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FileResponse {
-    /// The SHA-256 for an upload, the file for a download.
-    Response(#[serde(with = "serde_bytes")] Vec<u8>),
-    /// The request could not be served.
-    Error(FileError),
-}
-
-/// Why a [`FileRequest`] could not be served, sent as a CBOR text string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FileError {
-    /// No file with the requested SHA-256 is stored (`"not_found"`).
-    NotFound,
-}
-
-impl std::fmt::Display for FileError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotFound => f.write_str("file not found"),
-        }
-    }
-}
-
-impl std::error::Error for FileError {}
-
-impl FileResponse {
-    /// Encodes as CBOR, the reply the terminal seals to the sender.
-    pub fn to_cbor(&self) -> Result<Vec<u8>, EvalError> {
-        to_cbor(self)
-    }
-
-    /// Decodes a CBOR reply.
-    pub fn from_cbor(reply: &[u8]) -> Result<Self, EvalError> {
-        Ok(ciborium::from_reader(reply)?)
-    }
-
-    /// Returns the response bytes, or the [`FileError`].
-    pub fn into_result(self) -> Result<Vec<u8>, FileError> {
-        match self {
-            Self::Response(response) => Ok(response),
-            Self::Error(e) => Err(e),
-        }
-    }
-}
-
-fn to_cbor(value: &impl Serialize) -> Result<Vec<u8>, EvalError> {
-    let mut out = Vec::new();
-    ciborium::into_writer(value, &mut out)?;
-    Ok(out)
-}
+pub use ttk_core::file_message::{FileError, FileRequest, FileResponse, SHA256_LEN};
 
 /// An [`Evaluator`] answering [`FileRequest`]s from a content-addressed [`BlobStore`].
 #[derive(Debug)]

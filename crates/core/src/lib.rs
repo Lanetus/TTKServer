@@ -5,6 +5,7 @@
 //! - [`media_type`]: the CMW types naming the TEE behind the wrapped Evidence.
 //! - [`image_trust`]: the accepted enclave images ([`ImageTrustStore`]) and the root node's
 //!   `GET /root-attestation` format.
+//! - [`file_message`]: the file service's `/faf` messages and replies ([`file_message::FileRequest`]).
 //! - [`fresh_evidence`]: the `POST /evidence` response ([`FreshEvidence`]).
 //! - [`egress`]: the egress policy for peer-chosen destinations ([`egress::classify_hop_address`]).
 //! - `vsock` (Linux): QUIC datagram sockets over vsock, the enclave's only way out.
@@ -16,6 +17,7 @@
 
 pub mod cmw;
 pub mod egress;
+pub mod file_message;
 pub mod fresh_evidence;
 pub mod image_trust;
 #[cfg(target_os = "linux")]

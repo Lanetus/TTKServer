@@ -8,6 +8,9 @@
 //! connection, and an address the egress policy refuses (link-local, including the instance
 //! metadata and DNS endpoints, multicast, broadcast, unspecified; loopback or private unless
 //! `--allow-private`) is never connected to (see `ttk_core::egress::classify_hop_address`).
+//! The one exception is the EC2 instance metadata service with `--allow-imds`, so a second
+//! instance (`--remote 169.254.169.254:80`, vsock port `8002`) can give the enclave the instance
+//! role's credentials.
 //!
 //! The proxy only moves opaque bytes: TLS terminates inside the enclave, end to end with the
 //! remote. It runs in the foreground; run it as a daemon under a service manager such as
@@ -58,7 +61,7 @@ mod imp {
     use std::time::Duration;
     use tokio::net::TcpStream;
     use tokio_vsock::{SockAddr, VsockListener, VsockStream};
-    use ttk_core::egress::{classify_hop_address, HopAddressClass};
+    use ttk_core::egress::{classify_hop_address, is_instance_metadata_address, HopAddressClass};
 
     /// `VMADDR_CID_ANY`: accept vsock connections addressed to any CID of this instance.
     const VMADDR_CID_ANY: u32 = u32::MAX;
@@ -116,7 +119,7 @@ mod imp {
     async fn forward(mut vsock: VsockStream, config: &TcpProxyConfig) {
         let mut tcp = match tokio::time::timeout(
             CONNECT_TIMEOUT,
-            connect(&config.remote, config.allow_private),
+            connect(&config.remote, config.allow_private, config.allow_imds),
         )
         .await
         {
@@ -134,11 +137,16 @@ mod imp {
     }
 
     /// Resolves `remote` and connects to the first address the egress policy permits that
-    /// accepts.
-    async fn connect(remote: &str, allow_private: bool) -> std::io::Result<TcpStream> {
+    /// accepts. With `allow_imds`, the instance metadata service is permitted too.
+    async fn connect(
+        remote: &str,
+        allow_private: bool,
+        allow_imds: bool,
+    ) -> std::io::Result<TcpStream> {
         let mut last_error = None;
         for addr in tokio::net::lookup_host(remote).await? {
             let permitted = match classify_hop_address(addr.ip()) {
+                _ if allow_imds && is_instance_metadata_address(addr.ip()) => true,
                 HopAddressClass::Public => true,
                 HopAddressClass::Private => allow_private,
                 HopAddressClass::Forbidden => false,
