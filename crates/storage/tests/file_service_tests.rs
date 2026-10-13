@@ -138,9 +138,11 @@ async fn faf(client: &TtkClient, message: &[u8]) -> Vec<u8> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn terminal_with_the_file_service_uploads_and_downloads_over_faf() {
-    let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap())
-        .unwrap()
-        .with_evaluator(FileService::new(MemoryStore::new()));
+    let terminal = Terminal::bind(
+        "127.0.0.1:0".parse().unwrap(),
+        FileService::new(MemoryStore::new()),
+    )
+    .unwrap();
     terminal.server().sign_for_tests().unwrap();
     let addr: SocketAddr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });

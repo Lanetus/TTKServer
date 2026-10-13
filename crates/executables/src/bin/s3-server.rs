@@ -12,5 +12,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = S3Store::from_env()
         .await
         .map_err(|e| e as Box<dyn std::error::Error>)?;
-    ttk_storage::run_with(FileService::new(store)).await
+    ttk_storage::run(FileService::new(store)).await
 }

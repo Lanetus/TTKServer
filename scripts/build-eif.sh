@@ -2,7 +2,7 @@
 # Builds a TTKServer Nitro Enclave image file (EIF) locally with Docker, mirroring the
 # "Build EIF" steps of .github/workflows/build.yml.
 #
-# Usage: scripts/build-eif.sh [amd64|arm64] [relay|terminal|s3-server|root]
+# Usage: scripts/build-eif.sh [amd64|arm64] [relay|s3-server|root]
 #        (defaults: this machine's architecture, and the relay node)
 #
 # s3-server (a terminal storing files in S3) needs TTK_S3_BUCKET and AWS_REGION, which are baked
@@ -38,9 +38,9 @@ esac
 platform="linux/$arch"
 
 case "${2:-relay}" in
-    relay | terminal | s3-server | root) node="${2:-relay}" ;;
+    relay | s3-server | root) node="${2:-relay}" ;;
     *)
-        echo "error: unknown node '$2' (expected relay, terminal, s3-server or root)" >&2
+        echo "error: unknown node '$2' (expected relay, s3-server or root)" >&2
         exit 2
         ;;
 esac

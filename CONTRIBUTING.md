@@ -34,7 +34,7 @@ No TEE hardware is required for development: the `mock` attestation provider is 
 | `ttk-relay` (`crates/relay/`)       | Relay node library.                                                       |
 | `ttk-storage` (`crates/storage/`) | Terminal node library, the last hop of `POST /faf`.                       |
 | `ttk-root` (`crates/root/`)         | Root node library (`GET /root-attestation`).                              |
-| `ttk-executables` (`crates/executables/`) | Every binary (`relay`, `terminal`, `s3-server`, `root`, `vsock-proxy`, `vsock-proxy-tcp`, the **test-only** `client` and `auth-test`). All other crates are libraries only. |
+| `ttk-executables` (`crates/executables/`) | Every binary (`relay`, `s3-server`, `root`, `vsock-proxy`, `vsock-proxy-tcp`, the **test-only** `client` and `auth-test`). All other crates are libraries only. |
 
 Please keep code in the crate it belongs to — for example, client-side logic goes in `ttk-ra-client`, not `ttk-ra-server`.
 
@@ -44,7 +44,7 @@ Shared dependency versions live in `[workspace.dependencies]` in the root `Cargo
 
 ```sh
 TTK_USE_UDP=1 RUST_LOG=info cargo run --bin relay                              # UDP :4433
-TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 RUST_LOG=info cargo run --bin terminal
+TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 RUST_LOG=info cargo run --bin s3-server --features s3
 cargo run --bin client -- <args>                                             # see parse_client_args() in crates/executables/src/bin/client.rs
 ```
 
@@ -82,7 +82,7 @@ CI additionally runs `cargo audit` and collects coverage with `cargo llvm-cov ne
 
 Also:
 
-- **Test your change.** Add unit tests next to the code, or integration tests under the crate's `tests/` (end-to-end client/relay/terminal tests live in `crates/ra-client/tests/client_bin_tests.rs`).
+- **Test your change.** Add unit tests next to the code, or integration tests under the crate's `tests/` (end-to-end client/relay/terminal tests live in `crates/executables/tests/client_bin_tests.rs`).
 - **Check every feature combination you affect.** `nitro` and `mock` are default; `sev-snp` and `tdx` are optional. Features are additive, so code must build with any subset.
 - **Document public items** with `//!` / `///` comments, in the existing style that references the relevant RFCs (RFC 9334 RATS, RFC 9711 EAT, RFC 9180 HPKE).
 - **Update `CHANGELOG.md`** under `## [Unreleased]` for user-visible changes, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).

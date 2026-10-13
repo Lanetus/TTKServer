@@ -2,16 +2,28 @@
 //! on a free local port with mock attestation.
 
 use rcgen::KeyPair;
+use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use ttk_ra_client::faf::{FafBody, FafRelay, FafRequest};
 use ttk_ra_client::seal::{self, NodePublicKey, NodeSecretKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
+use ttk_storage::file_service::{FileRequest, FileResponse, FileService};
+use ttk_storage::storage::MemoryStore;
 use ttk_storage::Terminal;
 
-/// Starts a terminal node (unlocked with a test CA certificate) on a free local port and returns
-/// its address.
+/// Binds a file service terminal node (in-memory store) to a free local port.
+fn bind_terminal() -> Terminal<FileService<MemoryStore>> {
+    Terminal::bind(
+        "127.0.0.1:0".parse().unwrap(),
+        FileService::new(MemoryStore::new()),
+    )
+    .unwrap()
+}
+
+/// Starts a file service terminal node (unlocked with a test CA certificate) on a free local port
+/// and returns its address.
 fn start_terminal() -> SocketAddr {
-    let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let terminal = bind_terminal();
     terminal.server().sign_for_tests().unwrap();
     let addr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });
@@ -32,17 +44,23 @@ async fn node_key(addr: SocketAddr) -> NodePublicKey {
     key
 }
 
+/// The message the tests seal to the terminal: a file service upload of `hello terminal`.
+fn message() -> Vec<u8> {
+    FileRequest::Upload(b"hello terminal".to_vec())
+        .to_cbor()
+        .unwrap()
+}
+
 fn body_for(last: &NodePublicKey) -> FafBody {
-    seal::seal_body(last, b"hello terminal").unwrap()
+    seal::seal_body(last, &message()).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn faf_without_relays_answers_hello_sealed_to_the_sender() {
+async fn faf_without_relays_answers_the_evaluators_reply_sealed_to_the_sender() {
     let terminal = start_terminal();
     let client = connect(terminal).await;
 
-    let (body, key) =
-        seal::seal_body_with_key(&node_key(terminal).await, b"hello terminal").unwrap();
+    let (body, key) = seal::seal_body_with_key(&node_key(terminal).await, &message()).unwrap();
     let request = FafRequest {
         relays: vec![],
         body,
@@ -50,9 +68,10 @@ async fn faf_without_relays_answers_hello_sealed_to_the_sender() {
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 200);
     let sealed = response.text().unwrap();
+    let reply = FileResponse::from_cbor(&seal::open_response(&key, &sealed).unwrap()).unwrap();
     assert_eq!(
-        seal::open_response(&key, &sealed).unwrap(),
-        b"hello terminal"
+        reply,
+        FileResponse::Response(Sha256::digest(b"hello terminal").to_vec())
     );
     client.close().await.unwrap();
 }
@@ -106,7 +125,7 @@ async fn faf_with_relays_left_is_rejected() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn faf_is_locked_until_the_certificate_is_replaced() {
-    let node = Terminal::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let node = bind_terminal();
     let addr = node.local_addr().unwrap();
     tokio::spawn(async move { node.serve().await.unwrap() });
     let client = connect(addr).await;

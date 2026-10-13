@@ -5,8 +5,8 @@
 # vsock-proxy.service, which relays traffic between the network and the enclave's vsock.
 #
 # Install:
-#   scripts/build-eif.sh amd64 terminal   # or arm64, matching the instance
-#   sudo install -D -m 0644 out/ttk-terminal_v<version>_<arch>.eif /opt/ttkserver/ttk-terminal.eif
+#   scripts/build-eif.sh amd64 s3-server   # or arm64, matching the instance
+#   sudo install -D -m 0644 out/ttk-s3-server_v<version>_<arch>.eif /opt/ttkserver/ttk-terminal.eif
 #   sudo install -m 0644 deploy/systemd/ttk-terminal-enclave.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now ttk-terminal-enclave
 #

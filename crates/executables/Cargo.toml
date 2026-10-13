@@ -1,6 +1,6 @@
 [package]
 name = "ttk-executables"
-description = "TTKServer executables: the enclave nodes (relay, terminal, s3-server, root), the parent-instance vsock proxies and the test-only client and auth-test tools"
+description = "TTKServer executables: the enclave nodes (relay, s3-server, root), the parent-instance vsock proxies and the test-only client and auth-test tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,11 +13,6 @@ categories.workspace = true
 [[bin]]
 name = "relay"
 path = "src/bin/relay.rs"
-
-# The terminal node, run inside the enclave.
-[[bin]]
-name = "terminal"
-path = "src/bin/terminal.rs"
 
 # The S3 file node: a terminal whose `/faf` messages upload / download files in S3.
 [[bin]]

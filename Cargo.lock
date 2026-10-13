@@ -3286,6 +3286,7 @@ dependencies = [
  "axum",
  "log",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
  "ttk-ra-client",
  "ttk-ra-server",
