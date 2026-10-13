@@ -68,6 +68,26 @@ fn help_and_errors() {
     assert!(parse_relay_args(&args(&["--bogus"]), no_env).is_err());
 }
 
+#[test]
+fn rejects_invalid_listen_addresses_and_ports() {
+    let error = parse_relay_args(&args(&["-c", "16", "-l", "0.0.0.0"]), no_env).unwrap_err();
+    assert!(error.contains("listen"), "{error}");
+    for port in ["-p", "--vsock-port", "-o", "--outbound-port"] {
+        let error = parse_relay_args(&args(&["-c", "16", port, "x"]), no_env).unwrap_err();
+        assert!(error.contains("vsock port"), "{port}: {error}");
+    }
+    let env = |name: &str| (name == "TTK_VSOCK_PORT").then(|| "-1".to_string());
+    assert!(parse_relay_args(&args(&["-c", "16"]), env).is_err());
+}
+
+#[test]
+fn reports_the_option_missing_its_value() {
+    for option in ["-l", "-p", "-o"] {
+        let error = parse_relay_args(&args(&["-c", "16", option]), no_env).unwrap_err();
+        assert!(error.contains(option), "{error}");
+    }
+}
+
 mod tcp {
     use super::{args, no_env};
     use ttk_core::vsock_proxy_tcp::{parse_tcp_proxy_args, DEFAULT_TCP_VSOCK_PORT};
@@ -164,6 +184,24 @@ mod tcp {
                 .unwrap();
         assert!(from_flag.allow_imds);
         assert!(!from_flag.allow_private);
+    }
+
+    #[test]
+    fn rejects_invalid_cids_and_missing_values() {
+        let error = parse_tcp_proxy_args(&args(&["-c", "x", "-r", REMOTE]), no_env).unwrap_err();
+        assert!(error.contains("CID"), "{error}");
+        for option in ["-c", "-r", "-p"] {
+            let error = parse_tcp_proxy_args(&args(&[option]), no_env).unwrap_err();
+            assert!(error.contains(option), "{error}");
+        }
+    }
+
+    #[test]
+    fn accepts_ipv6_remotes() {
+        let config = parse_tcp_proxy_args(&args(&["-c", "17", "-r", "[fd00:ec2::254]:80"]), no_env)
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.remote, "[fd00:ec2::254]:80");
     }
 
     #[test]
