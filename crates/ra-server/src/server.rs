@@ -19,7 +19,7 @@
 
 use super::router::{build_router, CertificatePhase};
 use crate::attestation::{self, AttestationProvider};
-use crate::certificate::{CertificateStore, CERT_DNS_NAME};
+use crate::certificate::{CertificateError, CertificateStore, CERT_DNS_NAME};
 use crate::AttestationParams;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -106,8 +106,7 @@ fn wrap_in_asn1_octet_string(data: &[u8]) -> Vec<u8> {
     encoded
 }
 
-/// Boxed error type used by the server functions.
-pub type BoxError = Box<dyn std::error::Error>;
+pub use ttk_core::BoxError;
 
 /// Boxed error type that can cross task boundaries.
 type SendError = Box<dyn std::error::Error + Send + Sync>;
@@ -204,7 +203,7 @@ pub struct Server {
     evidence: Arc<Evidence>,
     provider: Arc<dyn AttestationProvider>,
     private_key: Vec<u8>,
-    pub(crate) certificates: Arc<CertificateStore>,
+    certificates: Arc<CertificateStore>,
 }
 
 /// Setup and serving.
@@ -293,6 +292,16 @@ impl Server {
     /// replacements.
     pub fn set_trusted_roots(&self, roots: RootCertStore) -> Result<(), BoxError> {
         self.certificates.set_trusted_roots(roots)
+    }
+
+    /// Replaces the presented RA-TLS chain (leaf first) like `POST /certificate`: it must be for
+    /// the current key and attestation extension and chain to the trusted roots; succeeds at
+    /// most once (see [`CertificateStore::replace`]).
+    pub fn replace_certificate(
+        &self,
+        chain: Vec<CertificateDer<'static>>,
+    ) -> Result<(), CertificateError> {
+        self.certificates.replace(chain)
     }
 
     /// Accepts QUIC connections and serves the base routes over HTTP/3 until the endpoint

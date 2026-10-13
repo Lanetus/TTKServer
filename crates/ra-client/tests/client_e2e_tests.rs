@@ -1,6 +1,10 @@
 //! End-to-end tests: the `ttk-ra-server` server on a free local port (mock attestation), queried by the
 //! `TtkClient` library.
 
+#[path = "../../ra-server/tests/support/test_ca.rs"]
+mod test_ca;
+use test_ca::SignForTests;
+
 use base64::Engine as _;
 use std::net::SocketAddr;
 use ttk_ra_client::verifier::TeeKind;

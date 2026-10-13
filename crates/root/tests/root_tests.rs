@@ -3,6 +3,10 @@
 //! The root node does not depend on `ttk-ra-client`, so these tests use a minimal HTTP/3 client
 //! that skips RA-TLS verification: they check the routes, not the attestation.
 
+#[path = "../../ra-server/tests/support/test_ca.rs"]
+mod test_ca;
+use test_ca::SignForTests;
+
 use axum::http::{HeaderMap, Request, StatusCode};
 use bytes::{Buf, Bytes};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};

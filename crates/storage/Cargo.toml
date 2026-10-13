@@ -41,6 +41,9 @@ s3 = [
 
 [dev-dependencies]
 axum.workspace = true
-ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }
+ttk-ra-server = { workspace = true, features = ["mock"] }
 ttk-ra-client = { workspace = true }
 rcgen.workspace = true
+# `ttk-ra-server/tests/support/test_ca.rs` (`sign_for_tests`).
+rustls.workspace = true
+x509-parser.workspace = true

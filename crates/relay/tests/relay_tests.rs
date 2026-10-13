@@ -1,6 +1,10 @@
 //! Tests of the relay node's `POST /faf`: onion-routing a sealed message through attested relay
 //! nodes to a terminal node, on free local ports with mock attestation.
 
+#[path = "../../ra-server/tests/support/test_ca.rs"]
+mod test_ca;
+use test_ca::SignForTests;
+
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use ttk_ra_client::seal::{self, NodePublicKey};
@@ -8,8 +12,8 @@ use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_ra_client::{FafBody, FafRelay, FafRequest};
 use ttk_ra_server::terminal::Terminal;
 use ttk_relay::{Relay, MAX_RELAYS};
-use ttk_storage::file_service::{FileRequest, FileResponse, FileService};
 use ttk_storage::storage::MemoryStore;
+use ttk_storage::{FileRequest, FileResponse, FileService};
 
 /// Starts a relay node that accepts mock-attested next hops on local addresses, and returns its
 /// address.
