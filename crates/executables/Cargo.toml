@@ -20,6 +20,11 @@ name = "s3-server"
 path = "src/bin/s3-server.rs"
 required-features = ["s3"]
 
+# A terminal that answers every `/faf` message with the message itself.
+[[bin]]
+name = "echo"
+path = "src/bin/echo.rs"
+
 # The root node, run inside the enclave.
 [[bin]]
 name = "root"
@@ -40,12 +45,22 @@ path = "src/bin/vsock-proxy-tcp.rs"
 name = "client"
 path = "src/bin/client.rs"
 
+# Command-line client for testing that sends a text message (e.g. to the `echo` terminal); the
+# enclave images never include it.
+[[bin]]
+name = "client-m"
+path = "src/bin/client-m.rs"
+
 # Test CA client: attests a node, checks fresh Evidence (`POST /evidence`) and installs a
 # certificate it issues for the node's RA-TLS key (`POST /certificate`). Never in enclave images.
 [[bin]]
-name = "auth-test"
-path = "src/bin/auth-test.rs"
-required-features = ["auth-test"]
+name = "certify-server"
+path = "src/bin/certify-server.rs"
+
+[[bin]]
+name = "local-mem-server"
+path = "src/bin/local-mem-server.rs"
+
 
 [dependencies]
 ttk-core.workspace = true
@@ -73,8 +88,6 @@ sev-snp = ["ttk-ra-server/sev-snp", "ttk-relay/sev-snp", "ttk-storage/sev-snp", 
 tdx = ["ttk-ra-server/tdx", "ttk-relay/tdx", "ttk-storage/tdx", "ttk-root/tdx"]
 # The `s3-server` bin (`ttk-storage` feature `s3`).
 s3 = ["ttk-storage/s3"]
-# The `auth-test` bin (`ttk-root` feature `auth-test`).
-auth-test = ["ttk-root/auth-test"]
 
 [dev-dependencies]
 ttk-ra-server = { workspace = true, features = ["mock"] }

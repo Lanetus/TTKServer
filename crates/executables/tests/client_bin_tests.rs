@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::Output;
 use ttk_ra_server::terminal::Terminal;
 use ttk_relay::Relay;
-use ttk_storage::storage::MemoryStore;
+use ttk_storage::adaptors::local_memory::MemoryStore;
 use ttk_storage::FileService;
 
 /// Starts a relay node that accepts mock-attested next hops on a free local port and returns
