@@ -25,7 +25,7 @@ TTK_ALLOW_PRIVATE_NEXT_HOPS=1 and TTK_TCP_ALLOW_IMDS=1 set the same options; fla
 precedence. RUST_LOG=info enables logs.
 ";
 
-/// Default vsock port the TCP proxy listens on, matching `S3Store`'s default in `ttk-terminal`.
+/// Default vsock port the TCP proxy listens on, matching `S3Store`'s default in `ttk-storage`.
 pub const DEFAULT_TCP_VSOCK_PORT: u32 = 8001;
 
 /// Conventional vsock port of the `vsock-proxy-tcp` instance forwarding to the instance metadata

@@ -208,7 +208,7 @@ jobs:
 
       # Production build: the enclave nodes and the parent's vsock-proxy, not the test-only `client`.
       - name: Build release
-        run: cargo build --release --locked -p ttk-executables --bin relay --bin terminal --bin root --bin vsock-proxy --bin vsock-proxy-tcp
+        run: cargo build --release --locked -p ttk-executables --bin relay --bin root --bin vsock-proxy --bin vsock-proxy-tcp
 
       - name: Upload node binaries
         uses: actions/upload-artifact@v4
@@ -216,7 +216,6 @@ jobs:
           name: TTKServer-${{ github.sha }}
           path: |
             target/release/relay
-            target/release/terminal
             target/release/root
             target/release/vsock-proxy
           if-no-files-found: error
@@ -235,7 +234,7 @@ jobs:
     needs: test
     strategy:
       matrix:
-        node: [ relay, terminal, root ]
+        node: [ relay, root ]
         include:
           - arch: amd64
             platform: linux/amd64

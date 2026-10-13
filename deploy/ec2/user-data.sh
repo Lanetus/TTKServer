@@ -39,7 +39,7 @@ set -euo pipefail
 
 # ---- Configuration ----------------------------------------------------------------------------
 TTK_BASE_URL="https://aptrepo.move.ai/ttkserver"   # no trailing slash
-TTK_NODE=s3-server                # enclave node to run: relay, terminal or s3-server (<node> above)
+TTK_NODE=s3-server                # enclave node to run: relay or s3-server (<node> above)
 # SHA-256 of the downloads; leave empty to skip the check (not recommended over plain HTTP).
 TTK_EIF_SHA256=""
 TTK_VSOCK_PROXY_SHA256=""
@@ -66,10 +66,10 @@ echo "==> TTKServer user data starting at $(date -Is)"
 # s3-server is a terminal node: it runs under the terminal's enclave unit, and needs the TCP
 # proxy to S3 alongside the UDP one.
 case "$TTK_NODE" in
-    relay | terminal) enclave_unit="ttk-$TTK_NODE-enclave"; with_s3=0 ;;
+    relay) enclave_unit="ttk-$TTK_NODE-enclave"; with_s3=0 ;;
     s3-server) enclave_unit=ttk-terminal-enclave; with_s3=1 ;;
     *)
-        echo "error: unknown TTK_NODE '$TTK_NODE' (expected relay, terminal or s3-server)" >&2
+        echo "error: unknown TTK_NODE '$TTK_NODE' (expected relay or s3-server)" >&2
         exit 1
         ;;
 esac

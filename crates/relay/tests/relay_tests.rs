@@ -1,12 +1,15 @@
 //! Tests of the relay node's `POST /faf`: onion-routing a sealed message through attested relay
 //! nodes to a terminal node, on free local ports with mock attestation.
 
+use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use ttk_ra_client::faf::{FafBody, FafRelay, FafRequest};
 use ttk_ra_client::seal::{self, NodePublicKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
+use ttk_ra_server::terminal::Terminal;
 use ttk_relay::{Relay, MAX_RELAYS};
-use ttk_terminal::Terminal;
+use ttk_storage::file_service::{FileRequest, FileResponse, FileService};
+use ttk_storage::storage::MemoryStore;
 
 /// Starts a relay node that accepts mock-attested next hops on local addresses, and returns its
 /// address.
@@ -24,10 +27,14 @@ fn start(configure: impl FnOnce(Relay) -> Relay) -> SocketAddr {
     addr
 }
 
-/// Starts a terminal node (unlocked with a test CA certificate) on a free local port and returns
-/// its address.
+/// Starts a file service terminal node (in-memory store, unlocked with a test CA certificate) on
+/// a free local port and returns its address.
 fn start_terminal() -> SocketAddr {
-    let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let terminal = Terminal::bind(
+        "127.0.0.1:0".parse().unwrap(),
+        FileService::new(MemoryStore::new()),
+    )
+    .unwrap();
     terminal.server().sign_for_tests().unwrap();
     let addr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });
@@ -64,8 +71,22 @@ fn sealed(reader: &NodePublicKey, addr: SocketAddr) -> FafRelay {
     }
 }
 
+/// The message the tests seal to the terminal: a file service upload of `hello relay`.
+fn message() -> Vec<u8> {
+    FileRequest::Upload(b"hello relay".to_vec())
+        .to_cbor()
+        .unwrap()
+}
+
+/// The file service's reply to [`message`]: the uploaded file's SHA-256.
+fn expected_reply() -> Vec<u8> {
+    FileResponse::Response(Sha256::digest(b"hello relay").to_vec())
+        .to_cbor()
+        .unwrap()
+}
+
 fn body_for(last: &NodePublicKey) -> FafBody {
-    seal::seal_body(last, b"hello relay").unwrap()
+    seal::seal_body(last, &message()).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -73,7 +94,7 @@ async fn faf_relays_to_an_attested_terminal_and_answers_200() {
     let terminal = start_terminal();
     let client = connect(start_relay()).await;
 
-    let (body, key) = seal::seal_body_with_key(&node_key(terminal).await, b"hello relay").unwrap();
+    let (body, key) = seal::seal_body_with_key(&node_key(terminal).await, &message()).unwrap();
     let request = FafRequest {
         relays: vec![plain(terminal)],
         body,
@@ -82,7 +103,7 @@ async fn faf_relays_to_an_attested_terminal_and_answers_200() {
     assert_eq!(response.status, 200, "{:?}", response.text());
     // The terminal's sealed reply comes back through the relay unchanged.
     let reply = seal::open_response(&key, &response.text().unwrap()).unwrap();
-    assert_eq!(reply, b"hello relay");
+    assert_eq!(reply, expected_reply());
     client.close().await.unwrap();
 }
 
@@ -93,7 +114,7 @@ async fn faf_routes_through_plain_and_sealed_relays_to_the_terminal() {
     let client = connect(entry).await;
 
     // entry reads `middle` in the clear; middle opens the address of `last`; last opens the body.
-    let (body, key) = seal::seal_body_with_key(&node_key(last).await, b"hello relay").unwrap();
+    let (body, key) = seal::seal_body_with_key(&node_key(last).await, &message()).unwrap();
     let request = FafRequest {
         relays: vec![plain(middle), sealed(&middle_key, last)],
         body,
@@ -101,7 +122,7 @@ async fn faf_routes_through_plain_and_sealed_relays_to_the_terminal() {
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 200, "{:?}", response.text());
     let reply = seal::open_response(&key, &response.text().unwrap()).unwrap();
-    assert_eq!(reply, b"hello relay");
+    assert_eq!(reply, expected_reply());
     client.close().await.unwrap();
 }
 

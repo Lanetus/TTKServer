@@ -5,10 +5,10 @@ use sha2::Digest;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Output;
+use ttk_ra_server::terminal::Terminal;
 use ttk_relay::Relay;
-use ttk_terminal::file_service::FileService;
-use ttk_terminal::storage::MemoryStore;
-use ttk_terminal::Terminal;
+use ttk_storage::file_service::FileService;
+use ttk_storage::storage::MemoryStore;
 
 /// Starts a relay node that accepts mock-attested next hops on a free local port and returns
 /// its address. It serves (unlocked with a test CA certificate) until the test's runtime shuts
@@ -24,22 +24,14 @@ fn start_relay() -> SocketAddr {
     addr
 }
 
-/// Starts a terminal node (unlocked with a test CA certificate) on a free local port and returns
-/// its address.
-fn start_terminal() -> SocketAddr {
-    let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap()).expect("terminal should start");
-    terminal.server().sign_for_tests().unwrap();
-    let addr = terminal.local_addr().unwrap();
-    tokio::spawn(async move { terminal.serve().await.unwrap() });
-    addr
-}
-
 /// Starts a file service terminal node (in-memory store, unlocked with a test CA certificate) on
 /// a free local port and returns its address.
-fn start_file_terminal() -> SocketAddr {
-    let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap())
-        .expect("terminal should start")
-        .with_evaluator(FileService::new(MemoryStore::new()));
+fn start_terminal() -> SocketAddr {
+    let terminal = Terminal::bind(
+        "127.0.0.1:0".parse().unwrap(),
+        FileService::new(MemoryStore::new()),
+    )
+    .expect("terminal should start");
     terminal.server().sign_for_tests().unwrap();
     let addr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });
@@ -52,6 +44,19 @@ fn temp_dir(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+/// A `--download` of a file nobody uploaded: parses, but is never found.
+fn missing_download() -> [String; 2] {
+    ["--download".to_string(), "00".repeat(32)]
+}
+
+/// Writes a small file to upload for the test `name`, returning its directory and path.
+fn upload_file(name: &str) -> (PathBuf, PathBuf) {
+    let dir = temp_dir(name);
+    let file = dir.join("upload.bin");
+    std::fs::write(&file, b"hello").unwrap();
+    (dir, file)
 }
 
 async fn run_client_binary(args: &[&str], allow_mock: bool) -> Output {
@@ -82,11 +87,22 @@ async fn client_binary_sends_a_faf_request_through_two_relays() {
     let addr = start_relay().to_string();
     let relay = start_relay().to_string();
     let terminal = start_terminal().to_string();
+    let (dir, file) = upload_file("two-relays");
     let output = run_client_binary(
-        &["--addr", &addr, "--relay", &relay, "--terminal", &terminal],
+        &[
+            "--addr",
+            &addr,
+            "--relay",
+            &relay,
+            "--terminal",
+            &terminal,
+            "--upload",
+            file.to_str().unwrap(),
+        ],
         true,
     )
     .await;
+    std::fs::remove_dir_all(&dir).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(output.status.success(), "{stderr}");
@@ -97,8 +113,9 @@ async fn client_binary_sends_a_faf_request_through_two_relays() {
         "{stderr}"
     );
     assert!(stderr.contains("Response Status: 200"), "{stderr}");
+    let sha256 = ttk_ra_client::hex_encode(&sha2::Sha256::digest(b"hello"));
     assert!(
-        stderr.contains("Terminal reply (decrypted): hello"),
+        stderr.contains(&format!("Uploaded, SHA-256: {sha256}")),
         "{stderr}"
     );
     assert!(
@@ -121,6 +138,8 @@ async fn client_binary_fails_when_the_second_relay_is_a_terminal() {
             &terminal,
             "--terminal",
             &terminal,
+            &missing_download()[0],
+            &missing_download()[1],
         ],
         true,
     )
@@ -134,7 +153,8 @@ async fn client_binary_fails_when_the_second_relay_is_a_terminal() {
 async fn client_binary_defaults_to_the_second_relay_on_port_4434() {
     let addr = start_relay();
     let url = format!("https://127.0.0.1:{}", addr.port());
-    let output = run_client_binary(&[&url], true).await;
+    let download = missing_download();
+    let output = run_client_binary(&[&url, &download[0], &download[1]], true).await;
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // Nothing listens there, so the relay can't be attested and nothing is sent.
@@ -154,7 +174,19 @@ async fn client_binary_defaults_to_the_second_relay_on_port_4434() {
 async fn client_binary_defaults_to_the_terminal_on_port_4444() {
     let addr = start_relay().to_string();
     let relay = start_relay().to_string();
-    let output = run_client_binary(&["--addr", &addr, "--relay", &relay], true).await;
+    let download = missing_download();
+    let output = run_client_binary(
+        &[
+            "--addr",
+            &addr,
+            "--relay",
+            &relay,
+            &download[0],
+            &download[1],
+        ],
+        true,
+    )
+    .await;
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // Nothing listens there, so the terminal can't be attested and nothing is sent.
@@ -173,7 +205,8 @@ async fn client_binary_defaults_to_the_terminal_on_port_4444() {
 #[tokio::test(flavor = "multi_thread")]
 async fn client_binary_fails_against_the_mock_server_without_opt_in() {
     let addr = start_relay().to_string();
-    let output = run_client_binary(&["-a", &addr], false).await;
+    let download = missing_download();
+    let output = run_client_binary(&["-a", &addr, &download[0], &download[1]], false).await;
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(output.status.code(), Some(1), "{stderr}");
@@ -193,12 +226,23 @@ async fn client_binary_logs_the_verified_certificate() {
     let addr = start_relay().to_string();
     let relay = start_relay().to_string();
     let terminal = start_terminal().to_string();
+    let (dir, file) = upload_file("logs-cert");
     let output = run_client_binary_with_env(
-        &["--addr", &addr, "--relay", &relay, "--terminal", &terminal],
+        &[
+            "--addr",
+            &addr,
+            "--relay",
+            &relay,
+            "--terminal",
+            &terminal,
+            "--upload",
+            file.to_str().unwrap(),
+        ],
         true,
         &[("RUST_LOG", "info")],
     )
     .await;
+    std::fs::remove_dir_all(&dir).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(output.status.success(), "{stderr}");
@@ -212,7 +256,7 @@ async fn client_binary_logs_the_verified_certificate() {
 async fn client_binary_uploads_and_downloads_a_file() {
     let addr = start_relay().to_string();
     let relay = start_relay().to_string();
-    let terminal = start_file_terminal().to_string();
+    let terminal = start_terminal().to_string();
     let dir = temp_dir("upload-download");
     let file = dir.join("upload.bin");
     let contents: Vec<u8> = (0..=255u8).cycle().take(10_000).collect();
@@ -253,7 +297,7 @@ async fn client_binary_uploads_and_downloads_a_file() {
 async fn client_binary_fails_to_download_a_missing_file() {
     let addr = start_relay().to_string();
     let relay = start_relay().to_string();
-    let terminal = start_file_terminal().to_string();
+    let terminal = start_terminal().to_string();
     let dir = temp_dir("missing");
     let out = dir.join("missing.bin");
     let output = run_client_binary(
@@ -283,7 +327,7 @@ async fn client_binary_fails_to_download_a_missing_file() {
 #[tokio::test]
 async fn client_binary_rejects_invalid_file_arguments() {
     for args in [
-        &["--message", "hi", "--upload", "x"][..],
+        &[][..],
         &["--upload", "x", "--download", &"00".repeat(32)][..],
         &["--download", "abcd"][..],
         &["--download", &"zz".repeat(32)][..],
