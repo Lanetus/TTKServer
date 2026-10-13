@@ -2,7 +2,7 @@
 
 Crate reference for `crates/relay`. For the system-level picture, see the [workspace architecture](ARCHITECTURE.md).
 
-Other crates: [`ttk-core`](core.md) · [`ttk-ra-server`](ra-server.md) · [`ttk-ra-client`](ra-client.md) · [`ttk-terminal`](terminal.md) · [`ttk-root`](root.md)
+Other crates: [`ttk-core`](core.md) · [`ttk-ra-server`](ra-server.md) · [`ttk-ra-client`](ra-client.md) · [`ttk-root`](root.md) · [`ttk-storage`](storage.md) · [`ttk-executables`](executables.md)
 
 > **Role:** an attested node that forwards `POST /faf` one hop, and is itself a **Relying Party** for the next hop: it only forwards to next hops whose attestation (and enclave image) verifies, on addresses its egress policy permits.
 
@@ -11,9 +11,10 @@ Other crates: [`ttk-core`](core.md) · [`ttk-ra-server`](ra-server.md) · [`ttk-
 | File | Responsibility |
 |---|---|
 | `crates/relay/src/lib.rs` | `Relay`, `run()`, `/faf` handler, `RelayPool`, egress check |
-| `crates/relay/src/main.rs` | `relay` binary: `env_logger::init()` + `ttk_relay::run()` |
 
-(`vsock-proxy` now lives in [`ttk-core`](core.md#3-vsock-proxy).)
+Library only: the `relay` binary (`env_logger::init()` + `ttk_relay::run()`) and `vsock-proxy` live in [`ttk-executables`](executables.md).
+
+Like every node, the relay serves nothing but `POST /evidence` and `POST /certificate` until a CA has installed its CA-issued certificate (see [route gating](ra-server.md#3-certificate-replacement-and-route-gating)); `POST /faf` answers `404` before that. A next hop that is not authorized answers `404` too, which the relay turns into `502 relay failed`.
 
 ## 2. Public API
 
@@ -26,7 +27,7 @@ Other crates: [`ttk-core`](core.md) · [`ttk-ra-server`](ra-server.md) · [`ttk-
 | `Relay::allow_mock()` | fn | Accept mock-attested next hops |
 | `Relay::allow_private_next_hops()` | fn | Also accept loopback/private next hops |
 | `Relay::with_transport(transport)` | fn | `Udp`, or `Vsock { cid, port }` from inside an enclave |
-| `Relay::local_addr()` / `serve()` | fn | Bound address; serve base routes + `POST /faf` |
+| `Relay::local_addr()` / `server()` / `serve()` | fn | Bound address; the wrapped `Server` (e.g. for `sign_for_tests`); serve base routes + `POST /faf` |
 | `RelayVerifierFactory` | type | `Arc<dyn Fn() -> EnclaveCertVerifier + Send + Sync>` |
 | `RELAY_TIMEOUT` | const | 10 s to forward, handshake included |
 | `MAX_RELAYS` | const | 8 relay entries per request |
@@ -64,8 +65,9 @@ flowchart TD
 |---|---|
 | `200` | Next hop answered `200`; its body (the terminal's sealed reply) is passed back unchanged |
 | `400` | No relays left, more than `MAX_RELAYS`, or the first entry can't be opened or parsed |
+| `404` | Relay not authorized yet, or connection opened with the self-signed cert (gating) |
 | `408` / `413` | Body too slow / > 1 MiB (server) |
-| `502 relay failed` | Next hop has a refused address, can't be resolved or reached, fails attestation, answers non-`200` or a non-UTF-8 body, or exceeds `RELAY_TIMEOUT`. All look the same to the client; the reason is only logged |
+| `502 relay failed` | Next hop has a refused address, can't be resolved or reached, fails attestation, answers non-`200` (including `404` from a node not yet authorized) or a non-UTF-8 body, or exceeds `RELAY_TIMEOUT`. All look the same to the client; the reason is only logged |
 | `503` | `MAX_CONCURRENT_FORWARDS` already in flight |
 
 ## 4. Egress policy and pool
@@ -98,4 +100,4 @@ Features `nitro`, `mock` (default), `sev-snp`, `tdx` forward to `ttk-ra-server`.
 
 | File | Covers |
 |---|---|
-| `crates/relay/tests/relay_tests.rs` | Plain and sealed routes through relays to a terminal; `400` (no relays, too many, bad/foreign-sealed address, malformed), `413`, `502` (wrong body key, route ending at a relay, failed attestation); loopback refused by default and link-local always; connection reuse (mock attestation) |
+| `crates/relay/tests/relay_tests.rs` | Plain and sealed routes through relays to a file service terminal (`Terminal` + `FileService<MemoryStore>`); `400` (no relays, too many, bad/foreign-sealed address, malformed), `413`, `502` (wrong body key, route ending at a relay, failed attestation); loopback refused by default and link-local always; connection reuse; `/faf` locked until the certificate is replaced (mock attestation, nodes unlocked with `sign_for_tests`) |

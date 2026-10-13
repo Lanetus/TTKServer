@@ -1,7 +1,7 @@
 //! Tests of the root node's `GET /root-attestation`, on a free local port with mock attestation.
 //!
-//! The root node does not depend on `ttk-ra-client`, so these tests use a minimal HTTP/3 client
-//! that skips RA-TLS verification: they check the routes, not the attestation.
+//! These tests use a minimal HTTP/3 client that skips RA-TLS verification: they check the
+//! routes, not the attestation (covered by `ttk-ra-client`'s `images_tests.rs`).
 
 #[path = "../../ra-server/tests/support/test_ca.rs"]
 mod test_ca;
