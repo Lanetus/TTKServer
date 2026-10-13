@@ -8,8 +8,8 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 
 # The enclave node to build: `relay` (forwards /faf requests), `s3-server` (the last hop, a
-# terminal storing files in S3, feature `s3`) or `root`
-# (serves the accepted enclave image checksums at /root-attestation).
+# terminal storing files in S3, feature `s3`), `root` (serves the accepted enclave image
+# checksums at /root-attestation) or `echo` (a terminal replying with each decrypted message).
 ARG NODE=relay
 
 COPY Cargo.toml Cargo.lock ./
