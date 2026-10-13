@@ -49,17 +49,21 @@ COPY --from=builder /app/node /app/node
 #
 # s3-server: the bucket and its region are baked in too (so they are part of the measurements),
 # and S3 is reached over vsock port TTK_S3_VSOCK_PORT through the parent's vsock-proxy-tcp.
+# Credentials come from the parent's instance role, through the instance metadata service over
+# vsock port TTK_IMDS_VSOCK_PORT (the parent's vsock-proxy-imds); empty = the standard AWS chain.
 # Other nodes ignore these.
 ARG RUST_LOG=error
 ARG TTK_ALLOW_MOCK_ATTESTATION=0
 ARG TTK_S3_BUCKET=
 ARG AWS_REGION=
 ARG TTK_S3_VSOCK_PORT=8001
+ARG TTK_IMDS_VSOCK_PORT=8002
 ENV RUST_LOG=$RUST_LOG \
     TTK_ALLOW_MOCK_ATTESTATION=$TTK_ALLOW_MOCK_ATTESTATION \
     TTK_S3_BUCKET=$TTK_S3_BUCKET \
     AWS_REGION=$AWS_REGION \
-    TTK_S3_VSOCK_PORT=$TTK_S3_VSOCK_PORT
+    TTK_S3_VSOCK_PORT=$TTK_S3_VSOCK_PORT \
+    TTK_IMDS_VSOCK_PORT=$TTK_IMDS_VSOCK_PORT
 
 # The node listens for QUIC / HTTP/3 directly on vsock port 5000 (length-framed datagrams from
 # the parent-side vsock-proxy). Set TTK_USE_UDP=1 to listen on UDP TTK_LISTEN_ADDR (0.0.0.0:4433) instead.

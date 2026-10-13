@@ -1,9 +1,13 @@
 //! End-to-end tests of the `client` binary against real relay and terminal nodes on free local
 //! ports (mock attestation).
 
+use sha2::Digest;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::Output;
 use ttk_relay::Relay;
+use ttk_terminal::file_service::FileService;
+use ttk_terminal::storage::MemoryStore;
 use ttk_terminal::Terminal;
 
 /// Starts a relay node that accepts mock-attested next hops on a free local port and returns
@@ -28,6 +32,26 @@ fn start_terminal() -> SocketAddr {
     let addr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });
     addr
+}
+
+/// Starts a file service terminal node (in-memory store, unlocked with a test CA certificate) on
+/// a free local port and returns its address.
+fn start_file_terminal() -> SocketAddr {
+    let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap())
+        .expect("terminal should start")
+        .with_evaluator(FileService::new(MemoryStore::new()));
+    terminal.server().sign_for_tests().unwrap();
+    let addr = terminal.local_addr().unwrap();
+    tokio::spawn(async move { terminal.serve().await.unwrap() });
+    addr
+}
+
+/// A fresh, empty directory for the test `name`'s files.
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ttk-client-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 async fn run_client_binary(args: &[&str], allow_mock: bool) -> Output {
@@ -182,4 +206,90 @@ async fn client_binary_logs_the_verified_certificate() {
         stderr.contains("Server Certificate SHA-256 fingerprint"),
         "{stderr}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_binary_uploads_and_downloads_a_file() {
+    let addr = start_relay().to_string();
+    let relay = start_relay().to_string();
+    let terminal = start_file_terminal().to_string();
+    let dir = temp_dir("upload-download");
+    let file = dir.join("upload.bin");
+    let contents: Vec<u8> = (0..=255u8).cycle().take(10_000).collect();
+    std::fs::write(&file, &contents).unwrap();
+    let route = ["--addr", &addr, "--relay", &relay, "--terminal", &terminal];
+
+    let output = run_client_binary(
+        &[&route[..], &["--upload", file.to_str().unwrap()]].concat(),
+        true,
+    )
+    .await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let sha256 = ttk_ra_client::hex_encode(&sha2::Sha256::digest(&contents));
+    assert!(
+        stderr.contains(&format!("Uploaded, SHA-256: {sha256}")),
+        "{stderr}"
+    );
+
+    let out = dir.join("download.bin");
+    let output = run_client_binary(
+        &[
+            &route[..],
+            &["--download", &sha256, "--out", out.to_str().unwrap()],
+        ]
+        .concat(),
+        true,
+    )
+    .await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("SHA-256 verified"), "{stderr}");
+    assert_eq!(std::fs::read(&out).unwrap(), contents);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_binary_fails_to_download_a_missing_file() {
+    let addr = start_relay().to_string();
+    let relay = start_relay().to_string();
+    let terminal = start_file_terminal().to_string();
+    let dir = temp_dir("missing");
+    let out = dir.join("missing.bin");
+    let output = run_client_binary(
+        &[
+            "--addr",
+            &addr,
+            "--relay",
+            &relay,
+            "--terminal",
+            &terminal,
+            "--download",
+            &"ab".repeat(32),
+            "--out",
+            out.to_str().unwrap(),
+        ],
+        true,
+    )
+    .await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("file service: file not found"), "{stderr}");
+    assert!(!out.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn client_binary_rejects_invalid_file_arguments() {
+    for args in [
+        &["--message", "hi", "--upload", "x"][..],
+        &["--upload", "x", "--download", &"00".repeat(32)][..],
+        &["--download", "abcd"][..],
+        &["--download", &"zz".repeat(32)][..],
+        &["--out", "x"][..],
+    ] {
+        let output = run_client_binary(args, true).await;
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+    }
 }

@@ -1,0 +1,72 @@
+# systemd unit for a second TTKServer `vsock-proxy-tcp` on the Nitro Enclave's parent instance:
+# forwards TCP connections from the enclave (vsock) to the EC2 instance metadata service, so the
+# `s3-server` node gets the parent instance role's credentials (the enclave sets
+# TTK_IMDS_VSOCK_PORT to the same port). `--allow-imds` (TTK_TCP_ALLOW_IMDS=1) opens exactly
+# 169.254.169.254 / fd00:ec2::254; every other link-local address stays refused.
+#
+# The credentials pass through this (untrusted) parent, which holds the role anyway: scope the
+# instance role to the bucket rather than e.g. AmazonS3FullAccess.
+#
+# Install (after vsock-proxy-tcp, same binary):
+#   sudo install -m 0644 deploy/systemd/vsock-proxy-imds.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now vsock-proxy-imds
+#
+# Configure in /etc/default/vsock-proxy-imds (optional; overrides the defaults below), e.g.
+#   TTK_ENCLAVE_CID=17                                # must match `nitro-cli run-enclave --enclave-cid`
+#   TTK_TCP_VSOCK_PORT=8002                           # must match the enclave's TTK_IMDS_VSOCK_PORT
+#   RUST_LOG=info
+#
+# Logs: journalctl -u vsock-proxy-imds -f
+
+[Unit]
+Description=TTKServer vsock-proxy-tcp (Nitro Enclave vsock -> instance metadata service)
+Documentation=https://github.com/Lanetus/TTKServer
+Wants=network-online.target
+After=network-online.target nitro-enclaves-allocator.service
+
+[Service]
+Type=exec
+Environment=TTK_ENCLAVE_CID=17
+Environment=TTK_TCP_REMOTE=169.254.169.254:80
+Environment=TTK_TCP_VSOCK_PORT=8002
+Environment=TTK_TCP_ALLOW_IMDS=1
+Environment=RUST_LOG=info
+EnvironmentFile=-/etc/default/vsock-proxy-imds
+ExecStart=/usr/local/bin/vsock-proxy-tcp
+Restart=always
+RestartSec=2
+
+# One vsock and one TCP connection per forwarded connection, up to 1024.
+LimitNOFILE=4096
+
+# Unprivileged: the proxy binds only a vsock port and connects out.
+DynamicUser=yes
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+
+# Sandboxing: the proxy needs no files, only TCP, vsock and DNS (AF_UNIX for the resolver).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_VSOCK AF_UNIX
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
