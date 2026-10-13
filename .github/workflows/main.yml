@@ -208,7 +208,7 @@ jobs:
 
       # Production build: the enclave nodes and the parent's vsock-proxy, not the test-only `client`.
       - name: Build release
-        run: cargo build --release --locked -p ttk-core -p ttk-relay -p ttk-terminal -p ttk-root
+        run: cargo build --release --locked -p ttk-executables --bin relay --bin terminal --bin root --bin vsock-proxy --bin vsock-proxy-tcp
 
       - name: Upload node binaries
         uses: actions/upload-artifact@v4
