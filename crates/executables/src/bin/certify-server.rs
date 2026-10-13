@@ -1,4 +1,4 @@
-//! `auth-test` binary: test certificate authority for a TTKServer node, for testing only.
+//! `certify-server` binary: test certificate authority for a TTKServer node, for testing only.
 //!
 //! Thin entry point over [`ttk_root::auth::authorize`]: attests the node over RA-TLS, sends a
 //! random nonce to `POST /evidence` and appraises the fresh Evidence, then signs a certificate
@@ -16,8 +16,8 @@ use ttk_ra_server::server::BoxError;
 use ttk_root::auth::{authorize, AuthorizeOptions, CertificateAuthority, DEFAULT_CA_NAME};
 
 /// Usage text of this binary.
-const AUTH_TEST_USAGE: &str = "\
-Usage: auth-test [OPTIONS]
+const CERTIFY_SERVER_USAGE: &str = "\
+Usage: certify-server [OPTIONS]
 
 Options:
   -a, --addr <ADDR>         Node socket address (default: 127.0.0.1:4433)
@@ -32,15 +32,15 @@ TTK_ALLOW_MOCK_ATTESTATION=1 accepts mock attestation (local development).
 
 Example:
   TTK_USE_UDP=1 cargo run --bin root
-  TTK_ALLOW_MOCK_ATTESTATION=1 cargo run -p ttk-executables --features auth-test --bin auth-test -- \
+  TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --bin certify-server -- \
     --ca-cert TTK_Root_CA.pem --ca-key TTK_Root_CA.key
 
 Nodes trust only the built-in TTK root CA: a newly created CA is refused by them.
 ";
 
-/// What an `auth-test` invocation should do.
+/// What a `certify-server` invocation should do.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AuthTestArgs {
+struct CertifyServerArgs {
     /// Node socket address.
     addr: SocketAddr,
     /// SNI server name.
@@ -53,10 +53,10 @@ struct AuthTestArgs {
     out: Option<PathBuf>,
 }
 
-/// Parses `auth-test` arguments (without the program name). Returns `Ok(None)` if help was
+/// Parses `certify-server` arguments (without the program name). Returns `Ok(None)` if help was
 /// requested.
-fn parse_auth_test_args(args: &[String]) -> Result<Option<AuthTestArgs>, String> {
-    let mut parsed = AuthTestArgs {
+fn parse_certify_server_args(args: &[String]) -> Result<Option<CertifyServerArgs>, String> {
+    let mut parsed = CertifyServerArgs {
         addr: "127.0.0.1:4433".parse().expect("valid address"),
         server_name: "localhost".to_string(),
         ca_cert: PathBuf::from("auth-test-ca.pem"),
@@ -131,20 +131,20 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     std::io::Write::write_all(&mut options.open(path)?, contents.as_bytes())
 }
 
-/// Entry point for the `auth-test` binary.
+/// Entry point for the `certify-server` binary.
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let args = match parse_auth_test_args(&args) {
+    let args = match parse_certify_server_args(&args) {
         Ok(Some(args)) => args,
         Ok(None) => {
-            info!("\n{AUTH_TEST_USAGE}");
+            info!("\n{CERTIFY_SERVER_USAGE}");
             return;
         }
         Err(e) => {
-            error!("{e}\n{AUTH_TEST_USAGE}");
+            error!("{e}\n{CERTIFY_SERVER_USAGE}");
             std::process::exit(2);
         }
     };

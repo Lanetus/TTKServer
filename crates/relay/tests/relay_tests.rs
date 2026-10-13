@@ -12,7 +12,7 @@ use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_ra_client::{FafBody, FafRelay, FafRequest};
 use ttk_ra_server::terminal::Terminal;
 use ttk_relay::{Relay, MAX_RELAYS};
-use ttk_storage::storage::MemoryStore;
+use ttk_storage::adaptors::local_memory::MemoryStore;
 use ttk_storage::{FileRequest, FileResponse, FileService};
 
 /// Starts a relay node that accepts mock-attested next hops on local addresses, and returns its

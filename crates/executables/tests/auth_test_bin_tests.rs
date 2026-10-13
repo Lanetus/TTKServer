@@ -1,6 +1,5 @@
-//! End-to-end tests of the `auth-test` binary against a root node on a free local port (mock
+//! End-to-end tests of the `certify-server` binary against a root node on a free local port (mock
 //! attestation) trusting a throwaway CA.
-#![cfg(feature = "auth-test")]
 
 use rustls::RootCertStore;
 use std::net::SocketAddr;
@@ -43,7 +42,7 @@ fn write_ca(dir: &Path) -> (CertificateAuthority, PathBuf, PathBuf) {
 }
 
 async fn run_auth_test(args: &[&str], allow_mock: bool) -> Output {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_auth-test"));
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_certify-server"));
     command
         .args(args)
         .env_remove("TTK_ALLOW_MOCK_ATTESTATION")
@@ -51,7 +50,10 @@ async fn run_auth_test(args: &[&str], allow_mock: bool) -> Output {
     if allow_mock {
         command.env("TTK_ALLOW_MOCK_ATTESTATION", "1");
     }
-    command.output().await.expect("auth-test binary should run")
+    command
+        .output()
+        .await
+        .expect("certify-server binary should run")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -214,7 +216,7 @@ async fn auth_test_binary_prints_usage() {
         let output = run_auth_test(&[flag], false).await;
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "{stderr}");
-        assert!(stderr.contains("Usage: auth-test"), "{stderr}");
+        assert!(stderr.contains("Usage: certify-server"), "{stderr}");
     }
 }
 
@@ -229,6 +231,6 @@ async fn auth_test_binary_rejects_invalid_arguments() {
         let output = run_auth_test(args, false).await;
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
-        assert!(stderr.contains("Usage: auth-test"), "{stderr}");
+        assert!(stderr.contains("Usage: certify-server"), "{stderr}");
     }
 }

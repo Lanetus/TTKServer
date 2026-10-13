@@ -12,10 +12,10 @@ use axum::Router;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
-use ttk_storage::storage::s3::{
+use ttk_storage::adaptors::s3::{
     LoopbackResolver, S3Store, BUCKET_ENV, ENDPOINT_ENV, IMDS_VSOCK_PORT_ENV, VSOCK_PORT_ENV,
 };
-use ttk_storage::storage::BlobStore;
+use ttk_storage::adaptors::BlobStore;
 
 /// Bucket the fake serves.
 const BUCKET: &str = "ttk-test-bucket";

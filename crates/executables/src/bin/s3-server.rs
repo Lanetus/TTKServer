@@ -5,7 +5,7 @@
 use ttk_ra_server::server::{BoxError, Listener, Server};
 use ttk_ra_server::terminal::Terminal;
 use ttk_ra_server::Evaluator;
-use ttk_storage::storage::s3::S3Store;
+use ttk_storage::adaptors::s3::S3Store;
 use ttk_storage::FileService;
 
 /// Runs a terminal node answering `/faf` messages with `evaluator`: attests, builds the RA-TLS

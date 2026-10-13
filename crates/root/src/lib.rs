@@ -19,7 +19,6 @@
 //! their own [`ImageTrustStore`] and check Evidence against them. Clients reach the root node
 //! over RA-TLS, so the list is bound to an attested enclave.
 
-#[cfg(feature = "auth-test")]
 pub mod auth;
 
 use axum::routing::get;

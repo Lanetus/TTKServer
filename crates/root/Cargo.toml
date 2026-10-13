@@ -14,18 +14,17 @@ name = "ttk_root"
 
 [dependencies]
 ttk-ra-server.workspace = true
+ttk-ra-client.workspace = true
 ttk-core.workspace = true
 axum.workspace = true
-# `auth` module only.
-base64 = { workspace = true, optional = true }
-log = { workspace = true, optional = true }
-rand_core = { workspace = true, optional = true }
-rcgen = { workspace = true, optional = true }
-rustls-pki-types = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
-time = { workspace = true, optional = true }
-ttk-ra-client = { workspace = true, optional = true }
-x509-parser = { workspace = true, optional = true }
+base64 = { workspace = true, optional = false }
+log = { workspace = true, optional = false }
+rand_core = { workspace = true, optional = false }
+rcgen = { workspace = true, optional = false }
+rustls-pki-types = { workspace = true, optional = false }
+sha2 = { workspace = true, optional = false }
+time = { workspace = true, optional = false }
+x509-parser = { workspace = true, optional = false }
 
 [features]
 default = ["nitro", "mock"]
@@ -34,18 +33,6 @@ nitro = ["ttk-ra-server/nitro"]
 mock = ["ttk-ra-server/mock"]
 sev-snp = ["ttk-ra-server/sev-snp"]
 tdx = ["ttk-ra-server/tdx"]
-# The `auth` module (test certificate authority), used by the `auth-test` bin in `ttk-executables`.
-auth-test = [
-    "dep:base64",
-    "dep:log",
-    "dep:rand_core",
-    "dep:rcgen",
-    "dep:rustls-pki-types",
-    "dep:sha2",
-    "dep:time",
-    "dep:ttk-ra-client",
-    "dep:x509-parser",
-]
 
 [dev-dependencies]
 tokio.workspace = true

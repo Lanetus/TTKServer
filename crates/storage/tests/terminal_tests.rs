@@ -12,7 +12,7 @@ use ttk_ra_client::seal::{self, NodePublicKey, NodeSecretKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_ra_client::{FafBody, FafRelay, FafRequest};
 use ttk_ra_server::terminal::Terminal;
-use ttk_storage::storage::MemoryStore;
+use ttk_storage::adaptors::local_memory::MemoryStore;
 use ttk_storage::{FileRequest, FileResponse, FileService};
 
 /// Binds a file service terminal node (in-memory store) to a free local port.

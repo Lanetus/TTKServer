@@ -1,4 +1,4 @@
-//! Content storage behind [`FileService`](crate::FileService):
+//! Content adaptors behind [`FileService`](crate::FileService):
 //! named blobs, in memory ([`MemoryStore`]) or in S3 (`s3::S3Store`, feature `s3`).
 
 use crate::EvalError;
@@ -7,8 +7,6 @@ use std::future::Future;
 pub mod local_memory;
 #[cfg(feature = "s3")]
 pub mod s3;
-
-pub use local_memory::MemoryStore;
 
 /// A store of blobs by name.
 pub trait BlobStore: Send + Sync + 'static {
