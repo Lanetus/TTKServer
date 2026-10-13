@@ -7,9 +7,9 @@ use std::net::SocketAddr;
 use ttk_ra_client::faf::FafRequest;
 use ttk_ra_client::seal::{self, NodePublicKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
-use ttk_terminal::file_service::{blob_name, FileError, FileRequest, FileResponse, FileService};
-use ttk_terminal::storage::{BlobStore, MemoryStore};
-use ttk_terminal::{Evaluator, Terminal};
+use ttk_storage::file_service::{blob_name, FileError, FileRequest, FileResponse, FileService};
+use ttk_storage::storage::{BlobStore, MemoryStore};
+use ttk_storage::{Evaluator, Terminal};
 
 /// Lowercase hex SHA-256 of `hello world`: the stored blob's name.
 const HELLO_NAME: &str = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";

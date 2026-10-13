@@ -1,5 +1,5 @@
 [package]
-name = "ttk-terminal"
+name = "ttk-storage"
 description = "TTKServer terminal node: an attested enclave server that is the last hop of onion-routed /faf requests"
 version.workspace = true
 edition.workspace = true
@@ -10,7 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [lib]
-name = "ttk_terminal"
+name = "ttk_storage"
 
 [dependencies]
 ttk-core.workspace = true

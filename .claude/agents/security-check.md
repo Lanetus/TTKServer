@@ -22,7 +22,7 @@ You are a security reviewer for TTKServer, a Rust workspace of HTTP/3 (QUIC) nod
 | RA-TLS cert verifier, client transport | `crates/ra-client/src/client.rs` (`EnclaveCertVerifier`, `TtkClient`) |
 | Onion encryption (HPKE) | `crates/ra-client/src/seal.rs`, `crates/ra-client/src/faf.rs` |
 | Relay forwarding + connection pool | `crates/relay/src/lib.rs` (`faf`, `forward_to_hop`, `run`) |
-| Terminal last hop | `crates/terminal/src/lib.rs` |
+| Terminal last hop | `crates/storage/src/lib.rs` |
 | Parent-side proxy | `crates/relay/src/bin/vsock-proxy.rs` |
 | Image build and deployment | `Dockerfile`, `scripts/build-eif.sh`, `deploy/ec2/user-data.sh`, `deploy/systemd/*.service` |
 

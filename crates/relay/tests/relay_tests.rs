@@ -6,7 +6,7 @@ use ttk_ra_client::faf::{FafBody, FafRelay, FafRequest};
 use ttk_ra_client::seal::{self, NodePublicKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_relay::{Relay, MAX_RELAYS};
-use ttk_terminal::Terminal;
+use ttk_storage::Terminal;
 
 /// Starts a relay node that accepts mock-attested next hops on local addresses, and returns its
 /// address.

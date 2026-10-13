@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use ttk_ra_client::faf::{FafBody, FafRelay, FafRequest};
 use ttk_ra_client::seal::{self, NodePublicKey, NodeSecretKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
-use ttk_terminal::Terminal;
+use ttk_storage::Terminal;
 
 /// Starts a terminal node (unlocked with a test CA certificate) on a free local port and returns
 /// its address.

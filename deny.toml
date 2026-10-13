@@ -24,7 +24,7 @@ allow = [
 ]
 confidence-threshold = 0.8
 # foldhash is Zlib (permissive, OSI approved). It is pulled in by hashbrown, via h2 in the AWS
-# SDK's HTTP client (ttk-terminal feature `s3`). Allowed for this crate only, so any other Zlib
+# SDK's HTTP client (ttk-storage feature `s3`). Allowed for this crate only, so any other Zlib
 # crate is still reviewed.
 exceptions = [
     { allow = ["Zlib"], crate = "foldhash" },

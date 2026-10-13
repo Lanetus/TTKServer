@@ -3217,7 +3217,7 @@ dependencies = [
  "ttk-ra-server",
  "ttk-relay",
  "ttk-root",
- "ttk-terminal",
+ "ttk-storage",
 ]
 
 [[package]]
@@ -3250,7 +3250,7 @@ dependencies = [
  "ttk-ra-server",
  "ttk-relay",
  "ttk-root",
- "ttk-terminal",
+ "ttk-storage",
  "x509-parser",
 ]
 
@@ -3289,7 +3289,7 @@ dependencies = [
  "tokio",
  "ttk-ra-client",
  "ttk-ra-server",
- "ttk-terminal",
+ "ttk-storage",
 ]
 
 [[package]]
@@ -3318,7 +3318,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ttk-terminal"
+name = "ttk-storage"
 version = "6.0.0"
 dependencies = [
  "aws-config",

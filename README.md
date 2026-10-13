@@ -24,7 +24,7 @@ The project is a Cargo workspace of these crates:
 | `ttk-ra-server` (`crates/ra-server/`)      | library     | The attested server: TEE attestation providers, RA-TLS identity and certificate, QUIC / HTTP/3 serving (`GET /`, `GET /evidence.cmw`, `POST /evidence`) |
 | `ttk-ra-client` (`crates/ra-client/`)  | library     | The RA-TLS client (`TtkClient`, `EnclaveCertVerifier`), the Evidence verifier for all supported TEEs, the `POST /faf` request format and its HPKE sealing |
 | `ttk-relay` (`crates/relay/`)    | library     | The **relay node** (enclave): forwards `POST /faf` to the next hop |
-| `ttk-terminal` (`crates/terminal/`) | library     | The **terminal node** (enclave): the last hop of `POST /faf`, decrypting the message |
+| `ttk-storage` (`crates/storage/`) | library     | The **terminal node** (enclave): the last hop of `POST /faf`, decrypting the message |
 | `ttk-root` (`crates/root/`)      | library     | The **root node** (enclave): serves the accepted enclave image checksums |
 | `ttk-executables` (`crates/executables/`) | binaries | Every executable: `relay`, `terminal`, `s3-server` (feature `s3`), `root`, the parent-instance `vsock-proxy` / `vsock-proxy-tcp`, and the test-only `client` and `auth-test` (feature `auth-test`) |
 
@@ -63,7 +63,7 @@ cargo build --release -p ttk-executables --bin relay  # one binary
 | `sev-snp`     |         | AMD SEV-SNP provider                                                                     |
 | `tdx`         |         | Intel TDX provider                                                                       |
 
-These features belong to `ttk-ra-server`; `ttk-relay`, `ttk-terminal`, `ttk-root` and `ttk-executables` forward them. Features are additive, so one binary can support several TEEs, e.g. `cargo build --release -p ttk-executables --bin terminal --features sev-snp,tdx`.
+These features belong to `ttk-ra-server`; `ttk-relay`, `ttk-storage`, `ttk-root` and `ttk-executables` forward them. Features are additive, so one binary can support several TEEs, e.g. `cargo build --release -p ttk-executables --bin terminal --features sev-snp,tdx`.
 
 The test `client` binary lives in its own crate (`ttk-ra-client`), so the enclave images, which build only `relay` or `terminal`, never include it.
 
@@ -222,8 +222,8 @@ crates/ra-client/src/
   faf.rs, seal.rs       the POST /faf request format and its HPKE sealing
 crates/relay/src/
   lib.rs                `ttk_relay`: forwards POST /faf
-crates/terminal/src/
-  lib.rs                `ttk_terminal`: last hop of POST /faf
+crates/storage/src/
+  lib.rs                `ttk_storage`: last hop of POST /faf
 crates/root/src/
   lib.rs                `ttk_root`: GET /root-attestation
 crates/executables/src/bin/

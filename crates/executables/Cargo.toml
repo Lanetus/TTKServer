@@ -57,7 +57,7 @@ ttk-core.workspace = true
 ttk-ra-server.workspace = true
 ttk-ra-client.workspace = true
 ttk-relay.workspace = true
-ttk-terminal.workspace = true
+ttk-storage.workspace = true
 ttk-root.workspace = true
 axum.workspace = true
 env_logger.workspace = true
@@ -72,12 +72,12 @@ tokio-vsock.workspace = true
 [features]
 default = ["nitro", "mock"]
 
-nitro = ["ttk-ra-server/nitro", "ttk-relay/nitro", "ttk-terminal/nitro", "ttk-root/nitro"]
-mock = ["ttk-ra-server/mock", "ttk-relay/mock", "ttk-terminal/mock", "ttk-root/mock"]
-sev-snp = ["ttk-ra-server/sev-snp", "ttk-relay/sev-snp", "ttk-terminal/sev-snp", "ttk-root/sev-snp"]
-tdx = ["ttk-ra-server/tdx", "ttk-relay/tdx", "ttk-terminal/tdx", "ttk-root/tdx"]
-# The `s3-server` bin (`ttk-terminal` feature `s3`).
-s3 = ["ttk-terminal/s3"]
+nitro = ["ttk-ra-server/nitro", "ttk-relay/nitro", "ttk-storage/nitro", "ttk-root/nitro"]
+mock = ["ttk-ra-server/mock", "ttk-relay/mock", "ttk-storage/mock", "ttk-root/mock"]
+sev-snp = ["ttk-ra-server/sev-snp", "ttk-relay/sev-snp", "ttk-storage/sev-snp", "ttk-root/sev-snp"]
+tdx = ["ttk-ra-server/tdx", "ttk-relay/tdx", "ttk-storage/tdx", "ttk-root/tdx"]
+# The `s3-server` bin (`ttk-storage` feature `s3`).
+s3 = ["ttk-storage/s3"]
 # The `auth-test` bin (`ttk-root` feature `auth-test`).
 auth-test = ["ttk-root/auth-test"]
 
