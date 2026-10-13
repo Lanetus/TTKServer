@@ -29,10 +29,10 @@ No TEE hardware is required for development: the `mock` attestation provider is 
 | Crate (directory)                   | Contents                                                                 |
 |-------------------------------------|--------------------------------------------------------------------------|
 | `ttk-core` (`crates/core/`)         | Shared by server and client: EAT data model, `submod` labels, RA-TLS OID, mock root CA, egress policy, vsock transport. |
-| `ttk-ra-server` (`crates/ra-server/`)         | Server library (attestation providers, RA-TLS cert, QUIC/HTTP/3 serving). No relay/message logic, no client code. |
+| `ttk-ra-server` (`crates/ra-server/`)         | Server library (attestation providers, RA-TLS cert, QUIC/HTTP/3 serving) and the terminal node (`terminal`, `Evaluator`). No relay logic, no client code. |
 | `ttk-ra-client` (`crates/ra-client/`)     | Client library (`TtkClient`, `EnclaveCertVerifier`, evidence verifier, `/faf` format, HPKE sealing). |
 | `ttk-relay` (`crates/relay/`)       | Relay node library.                                                       |
-| `ttk-storage` (`crates/storage/`) | Terminal node library, the last hop of `POST /faf`.                       |
+| `ttk-storage` (`crates/storage/`) | The terminal's storage: file service evaluator and blob stores.           |
 | `ttk-root` (`crates/root/`)         | Root node library (`GET /root-attestation`).                              |
 | `ttk-executables` (`crates/executables/`) | Every binary (`relay`, `s3-server`, `root`, `vsock-proxy`, `vsock-proxy-tcp`, the **test-only** `client` and `auth-test`). All other crates are libraries only. |
 
@@ -90,7 +90,7 @@ Also:
 
 ### Dev-dependency cycle
 
-`ttk-ra-client` dev-depends on `ttk-relay` and `ttk-storage`, which depend on `ttk-ra-client`. In client tests, don't pass `ttk_ra_client` types into relay/terminal APIs — they are distinct types from the dev-dependency's copy. Use e.g. `Relay::allow_mock()` rather than `with_verifier(...)`.
+`ttk-ra-client` dev-depends on `ttk-ra-server`, `ttk-relay` and `ttk-storage`, which depend on `ttk-ra-client`. In client tests, don't pass `ttk_ra_client` types into relay/terminal APIs — they are distinct types from the dev-dependency's copy. Use e.g. `Relay::allow_mock()` rather than `with_verifier(...)`.
 
 ## Commit messages
 

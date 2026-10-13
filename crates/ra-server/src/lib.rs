@@ -10,6 +10,7 @@
 //! - [`evaluator`]: the [`Evaluator`] trait, what a node does with a delivered message.
 //! - [`egress`]: the egress policy for peer-chosen destinations (re-exported from [`ttk_core`]).
 //! - [`server`]: the HTTP/3 Attester endpoint, serving Evidence from inside the TEE.
+//! - [`terminal`]: the terminal node, the last hop of `POST /faf`, answered by an [`Evaluator`].
 //! - [`router`]: the server's base HTTP routes (`GET /`, `GET /evidence.cmw`, `POST /evidence`,
 //!   `POST /certificate`) and the gating of every route on the certificate replacement.
 //! - `testing` (feature `test-ca`, tests only): unlocks a server with a throwaway CA.
@@ -25,6 +26,7 @@ pub use ttk_core::egress;
 pub mod evaluator;
 pub mod router;
 pub mod server;
+pub mod terminal;
 #[cfg(feature = "test-ca")]
 pub mod testing;
 #[cfg(target_os = "linux")]

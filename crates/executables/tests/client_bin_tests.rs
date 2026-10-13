@@ -5,10 +5,10 @@ use sha2::Digest;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Output;
+use ttk_ra_server::terminal::Terminal;
 use ttk_relay::Relay;
 use ttk_storage::file_service::FileService;
 use ttk_storage::storage::MemoryStore;
-use ttk_storage::Terminal;
 
 /// Starts a relay node that accepts mock-attested next hops on a free local port and returns
 /// its address. It serves (unlocked with a test CA certificate) until the test's runtime shuts

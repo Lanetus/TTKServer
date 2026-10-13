@@ -1,6 +1,6 @@
 [package]
 name = "ttk-storage"
-description = "TTKServer terminal node: an attested enclave server that is the last hop of onion-routed /faf requests"
+description = "TTKServer storage for the terminal node: the file service evaluator and its blob stores (in memory, S3)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,7 +16,6 @@ name = "ttk_storage"
 ttk-core.workspace = true
 ttk-ra-server.workspace = true
 ttk-ra-client.workspace = true
-axum.workspace = true
 ciborium.workspace = true
 log.workspace = true
 sha2.workspace = true

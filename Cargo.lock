@@ -3276,6 +3276,7 @@ dependencies = [
  "tokio",
  "tower-service",
  "ttk-core",
+ "ttk-ra-client",
  "x509-parser",
 ]
 
@@ -3326,7 +3327,6 @@ dependencies = [
  "aws-sdk-s3",
  "aws-smithy-http-client",
  "aws-smithy-runtime-api",
- "axum",
  "ciborium",
  "log",
  "rcgen",

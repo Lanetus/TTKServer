@@ -7,9 +7,9 @@ use std::net::SocketAddr;
 use ttk_ra_client::faf::{FafBody, FafRelay, FafRequest};
 use ttk_ra_client::seal::{self, NodePublicKey, NodeSecretKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
+use ttk_ra_server::terminal::Terminal;
 use ttk_storage::file_service::{FileRequest, FileResponse, FileService};
 use ttk_storage::storage::MemoryStore;
-use ttk_storage::Terminal;
 
 /// Binds a file service terminal node (in-memory store) to a free local port.
 fn bind_terminal() -> Terminal<FileService<MemoryStore>> {
