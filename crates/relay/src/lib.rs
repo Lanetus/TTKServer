@@ -34,12 +34,12 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
-use ttk_ra_client::faf::{classify_hop_address, connect_to_node_filtered, HopAddressClass};
-use ttk_ra_client::faf::{parse_relay_address, parse_relay_server};
-use ttk_ra_client::faf::{FafRelay, FafRequest, FAF_PATH};
 use ttk_ra_client::images::set_root_transport;
 use ttk_ra_client::seal::{self, NodeSecretKey};
+use ttk_ra_client::{classify_hop_address, connect_to_node_filtered, HopAddressClass};
+use ttk_ra_client::{parse_relay_address, parse_relay_server};
 use ttk_ra_client::{ClientResponse, ClientTransport, EnclaveCertVerifier, TtkClient};
+use ttk_ra_client::{FafRelay, FafRequest, FAF_PATH};
 use ttk_ra_server::server::{env_u32, BoxError, Listener, Server, PARENT_CID};
 
 /// Boxed error type that can cross task boundaries.

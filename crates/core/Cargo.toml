@@ -1,6 +1,6 @@
 [package]
 name = "ttk-core"
-description = "TTKServer core: the CMW evidence wrapper, RA-TLS constants, egress policy and vsock transport shared by the attested server and its client"
+description = "TTKServer core: the CMW evidence wrapper, RA-TLS constants, egress policy, /faf format and onion sealing, and vsock transport shared by the attested server and its client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,10 +13,16 @@ categories.workspace = true
 name = "ttk_core"
 
 [dependencies]
+base64.workspace = true
 ciborium.workspace = true
+hpke.workspace = true
 log.workspace = true
+p256.workspace = true
+rand_core.workspace = true
+ring.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
+x509-parser.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bytes.workspace = true
@@ -25,4 +31,5 @@ tokio.workspace = true
 tokio-vsock.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
 serde_json.workspace = true
