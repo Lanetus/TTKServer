@@ -1,6 +1,6 @@
 [package]
 name = "ttk-core"
-description = "TTKServer core: the CMW evidence wrapper, RA-TLS constants, egress policy and vsock transport shared by the attested server and its client, plus the parent-instance vsock proxy"
+description = "TTKServer core: the CMW evidence wrapper, RA-TLS constants, egress policy and vsock transport shared by the attested server and its client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,19 +12,8 @@ categories.workspace = true
 [lib]
 name = "ttk_core"
 
-# Parent-instance daemon relaying QUIC between public UDP and the enclave's vsock, both ways. Linux only.
-[[bin]]
-name = "vsock-proxy"
-path = "src/bin/vsock-proxy.rs"
-
-# Parent-instance daemon forwarding TCP from the enclave's vsock to one fixed remote (e.g. S3). Linux only.
-[[bin]]
-name = "vsock-proxy-tcp"
-path = "src/bin/vsock-proxy-tcp.rs"
-
 [dependencies]
 ciborium.workspace = true
-env_logger.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true

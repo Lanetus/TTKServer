@@ -12,16 +12,10 @@ categories.workspace = true
 [lib]
 name = "ttk_relay"
 
-# The relay node, run inside the enclave.
-[[bin]]
-name = "relay"
-path = "src/main.rs"
-
 [dependencies]
 ttk-ra-server.workspace = true
 ttk-ra-client.workspace = true
 axum.workspace = true
-env_logger.workspace = true
 log.workspace = true
 tokio.workspace = true
 

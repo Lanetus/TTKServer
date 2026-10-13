@@ -3193,13 +3193,31 @@ version = "6.0.0"
 dependencies = [
  "bytes 1.12.1",
  "ciborium",
- "env_logger",
  "log",
  "quinn",
  "serde",
  "serde_bytes",
  "tokio",
  "tokio-vsock",
+]
+
+[[package]]
+name = "ttk-executables"
+version = "6.0.0"
+dependencies = [
+ "axum",
+ "bytes 1.12.1",
+ "env_logger",
+ "log",
+ "sha2 0.11.0",
+ "tokio",
+ "tokio-vsock",
+ "ttk-core",
+ "ttk-ra-client",
+ "ttk-ra-server",
+ "ttk-relay",
+ "ttk-root",
+ "ttk-terminal",
 ]
 
 [[package]]
@@ -3212,7 +3230,6 @@ dependencies = [
  "bytes 1.12.1",
  "ciborium",
  "der-parser",
- "env_logger",
  "h3",
  "h3-quinn",
  "hpke",
@@ -3267,7 +3284,6 @@ name = "ttk-relay"
 version = "6.0.0"
 dependencies = [
  "axum",
- "env_logger",
  "log",
  "serde_json",
  "tokio",
@@ -3283,7 +3299,6 @@ dependencies = [
  "axum",
  "base64 0.21.7",
  "bytes 1.12.1",
- "env_logger",
  "h3",
  "h3-quinn",
  "log",
@@ -3312,7 +3327,6 @@ dependencies = [
  "aws-smithy-runtime-api",
  "axum",
  "ciborium",
- "env_logger",
  "log",
  "rcgen",
  "sha2 0.11.0",

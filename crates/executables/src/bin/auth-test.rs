@@ -32,7 +32,7 @@ TTK_ALLOW_MOCK_ATTESTATION=1 accepts mock attestation (local development).
 
 Example:
   TTK_USE_UDP=1 cargo run --bin root
-  TTK_ALLOW_MOCK_ATTESTATION=1 cargo run -p ttk-root --features auth-test --bin auth-test -- \
+  TTK_ALLOW_MOCK_ATTESTATION=1 cargo run -p ttk-executables --features auth-test --bin auth-test -- \
     --ca-cert TTK_Root_CA.pem --ca-key TTK_Root_CA.key
 
 Nodes trust only the built-in TTK root CA: a newly created CA is refused by them.

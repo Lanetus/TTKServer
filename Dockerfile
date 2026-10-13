@@ -8,7 +8,7 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 
 # The enclave node to build: `relay` (forwards /faf requests), `terminal` (the last hop),
-# `s3-server` (a terminal storing files in S3, crate ttk-terminal with feature `s3`) or `root`
+# `s3-server` (a terminal storing files in S3, feature `s3`) or `root`
 # (serves the accepted enclave image checksums at /root-attestation).
 ARG NODE=relay
 
@@ -20,10 +20,10 @@ COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     case "$NODE" in \
-        s3-server) package=ttk-terminal features="--features s3" ;; \
-        *) package="ttk-$NODE" features="" ;; \
+        s3-server) features="--features s3" ;; \
+        *) features="" ;; \
     esac && \
-    cargo build --release --locked -p "$package" --bin "$NODE" $features && \
+    cargo build --release --locked -p ttk-executables --bin "$NODE" $features && \
     cp "/app/target/release/$NODE" /app/node
 
 ############################
