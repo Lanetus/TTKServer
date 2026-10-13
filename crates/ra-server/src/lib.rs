@@ -45,7 +45,7 @@ pub struct AttestationParams {
     pub public_key: Option<Vec<u8>>,
 }
 
-/// Error of an [`Evaluator`] (or the storage behind it): unlike
+/// Error of an [`Evaluator`] (or the adaptors behind it): unlike
 /// [`BoxError`](crate::server::BoxError), `Send + Sync`, so it can be held across `.await` in
 /// their `Send` futures.
 pub type EvalError = Box<dyn std::error::Error + Send + Sync>;

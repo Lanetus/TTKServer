@@ -31,7 +31,7 @@ nitro = ["ttk-ra-server/nitro"]
 mock = ["ttk-ra-server/mock"]
 sev-snp = ["ttk-ra-server/sev-snp"]
 tdx = ["ttk-ra-server/tdx"]
-# `storage::s3::S3Store`, used by the `s3-server` bin in `ttk-executables`.
+# `adaptors::s3::S3Store`, used by the `s3-server` bin in `ttk-executables`.
 s3 = [
     "dep:aws-config",
     "dep:aws-sdk-s3",

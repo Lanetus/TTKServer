@@ -1,5 +1,5 @@
-//! TTKServer storage for the terminal node: the file service [`Evaluator`] ([`FileService`], bin
-//! `s3-server`) and the [`storage::BlobStore`]s it keeps files in. The terminal node itself is
+//! TTKServer adaptors for the terminal node: the file service [`Evaluator`] ([`FileService`], bin
+//! `s3-server`) and the [`adaptors::BlobStore`]s it keeps files in. The terminal node itself is
 //! [`ttk_ra_server::terminal::Terminal`].
 //!
 //! The file service answers `/faf` messages that upload or download files, stored by content
@@ -21,9 +21,9 @@
 
 pub use ttk_ra_server::{EvalError, Evaluator};
 
-pub mod storage;
+pub mod adaptors;
 
-use crate::storage::BlobStore;
+use crate::adaptors::BlobStore;
 use log::debug;
 use sha2::{Digest, Sha256};
 

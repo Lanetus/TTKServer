@@ -12,7 +12,8 @@ use ttk_ra_client::seal::{self, NodePublicKey};
 use ttk_ra_client::FafRequest;
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_ra_server::terminal::Terminal;
-use ttk_storage::storage::{BlobStore, MemoryStore};
+use ttk_storage::adaptors::local_memory::MemoryStore;
+use ttk_storage::adaptors::BlobStore;
 use ttk_storage::Evaluator;
 use ttk_storage::{blob_name, FileError, FileRequest, FileResponse, FileService};
 
