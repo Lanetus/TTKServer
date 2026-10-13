@@ -7,6 +7,8 @@
 //!   `GET /root-attestation` format.
 //! - [`file_message`]: the file service's `/faf` messages and replies ([`file_message::FileRequest`]).
 //! - [`fresh_evidence`]: the `POST /evidence` response ([`FreshEvidence`]).
+//! - [`faf`]: the `POST /faf` onion-routed request format ([`faf::FafRequest`]).
+//! - [`seal`]: onion encryption of `POST /faf` requests to the nodes' RA-TLS keys (RFC 9180 HPKE).
 //! - [`egress`]: the egress policy for peer-chosen destinations ([`egress::classify_hop_address`]).
 //! - `vsock` (Linux): QUIC datagram sockets over vsock, the enclave's only way out.
 //! - [`vsock_proxy`]: configuration of the parent-instance `vsock-proxy` binary.
@@ -17,9 +19,11 @@
 
 pub mod cmw;
 pub mod egress;
+pub mod faf;
 pub mod file_message;
 pub mod fresh_evidence;
 pub mod image_trust;
+pub mod seal;
 #[cfg(target_os = "linux")]
 pub mod vsock;
 pub mod vsock_proxy;

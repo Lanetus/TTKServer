@@ -8,8 +8,8 @@
 //! An [`EnclaveCertVerifier`] without an explicit image trust store fetches the list lazily,
 //! the first time it appraises non-debug Nitro Evidence, and shares it process-wide.
 
-use crate::faf::{connect_to_node, parse_relay_server};
 use crate::trust::{ImageTrustStore, RootSignerTrustStore};
+use crate::{connect_to_node, parse_relay_server};
 use crate::{ClientTransport, EnclaveCertVerifier};
 use log::{error, info, warn};
 use std::sync::{Arc, Mutex, OnceLock};

@@ -25,8 +25,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Instant;
 use ttk_core::file_message::{FileRequest, FileResponse, SHA256_LEN};
-use ttk_ra_client::faf::{connect_to_node, parse_relay_server, FafRelay, FafRequest, FAF_PATH};
 use ttk_ra_client::seal::{self, NodePublicKey};
+use ttk_ra_client::{connect_to_node, parse_relay_server, FafRelay, FafRequest, FAF_PATH};
 use ttk_ra_client::{hex_encode, ClientTransport, EnclaveCertVerifier, TtkClient};
 
 /// Second relay node, which the entry relay forwards the `FafRequest` to unless `--relay`

@@ -4,9 +4,9 @@
 use rcgen::KeyPair;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
-use ttk_ra_client::faf::{FafBody, FafRelay, FafRequest};
 use ttk_ra_client::seal::{self, NodePublicKey, NodeSecretKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
+use ttk_ra_client::{FafBody, FafRelay, FafRequest};
 use ttk_ra_server::terminal::Terminal;
 use ttk_storage::file_service::{FileRequest, FileResponse, FileService};
 use ttk_storage::storage::MemoryStore;

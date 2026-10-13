@@ -27,8 +27,8 @@ use axum::{Json, Router};
 use log::{debug, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use ttk_ra_client::faf::{FafRequest, FAF_PATH};
-use ttk_ra_client::seal::{self, NodeSecretKey};
+use ttk_core::faf::{FafRequest, FAF_PATH};
+use ttk_core::seal::{self, NodeSecretKey};
 
 /// A terminal node: an attested [`Server`] that also receives `POST /faf`, answered by its
 /// [`Evaluator`] `E`.

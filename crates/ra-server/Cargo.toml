@@ -14,8 +14,6 @@ name = "ttk_ra_server"
 
 [dependencies]
 ttk-core.workspace = true
-# `terminal`: the `/faf` request format and its HPKE sealing.
-ttk-ra-client.workspace = true
 aws-nitro-enclaves-nsm-api = { workspace = true, optional = true }
 axum.workspace = true
 base64.workspace = true
