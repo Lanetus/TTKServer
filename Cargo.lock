@@ -3191,15 +3191,22 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 name = "ttk-core"
 version = "6.0.0"
 dependencies = [
+ "base64 0.21.7",
  "bytes 1.12.1",
  "ciborium",
+ "hpke",
  "log",
+ "p256 0.14.0",
  "quinn",
+ "rand_core 0.6.4",
+ "rcgen",
+ "ring",
  "serde",
  "serde_bytes",
  "serde_json",
  "tokio",
  "tokio-vsock",
+ "x509-parser",
 ]
 
 [[package]]
@@ -3234,11 +3241,8 @@ dependencies = [
  "der-parser",
  "h3",
  "h3-quinn",
- "hpke",
  "log",
- "p256 0.14.0",
  "quinn",
- "rand_core 0.6.4",
  "rcgen",
  "ring",
  "rustls",
@@ -3278,7 +3282,6 @@ dependencies = [
  "tokio",
  "tower-service",
  "ttk-core",
- "ttk-ra-client",
  "x509-parser",
 ]
 

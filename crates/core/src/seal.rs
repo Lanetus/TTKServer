@@ -76,8 +76,8 @@ pub struct NodePublicKey(<Kem as hpke::Kem>::PublicKey);
 
 /// Construction from the node's certificate or raw key.
 impl NodePublicKey {
-    /// Takes the key from a node's RA-TLS certificate (DER), e.g.
-    /// [`TtkClient::peer_cert`](crate::TtkClient::peer_cert) after attesting the node.
+    /// Takes the key from a node's RA-TLS certificate (DER), e.g. the peer certificate of an
+    /// RA-TLS connection after attesting the node.
     pub fn from_certificate(cert_der: &[u8]) -> Result<Self, SealError> {
         let (_, cert) = X509Certificate::from_der(cert_der)
             .map_err(|e| SealError::new(format!("invalid certificate: {e}")))?;

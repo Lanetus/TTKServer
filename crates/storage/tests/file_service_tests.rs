@@ -4,8 +4,8 @@
 use ciborium::Value;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
-use ttk_ra_client::faf::FafRequest;
 use ttk_ra_client::seal::{self, NodePublicKey};
+use ttk_ra_client::FafRequest;
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_ra_server::terminal::Terminal;
 use ttk_storage::file_service::{blob_name, FileError, FileRequest, FileResponse, FileService};
