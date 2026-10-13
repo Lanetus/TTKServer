@@ -40,6 +40,7 @@ s3 = [
 ]
 
 [dev-dependencies]
+axum.workspace = true
 ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }
 ttk-ra-client = { workspace = true }
 rcgen.workspace = true
