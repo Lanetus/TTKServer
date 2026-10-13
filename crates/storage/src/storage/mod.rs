@@ -2,12 +2,13 @@
 //! named blobs, in memory ([`MemoryStore`]) or in S3 (`s3::S3Store`, feature `s3`).
 
 use crate::EvalError;
-use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Mutex;
 
+pub mod local_memory;
 #[cfg(feature = "s3")]
 pub mod s3;
+
+pub use local_memory::MemoryStore;
 
 /// A store of blobs by name.
 pub trait BlobStore: Send + Sync + 'static {
@@ -16,36 +17,4 @@ pub trait BlobStore: Send + Sync + 'static {
 
     /// Returns the blob stored under `name`, or `None` if there is none.
     fn get(&self, name: &str) -> impl Future<Output = Result<Option<Vec<u8>>, EvalError>> + Send;
-}
-
-/// An in-process [`BlobStore`], lost on exit: for tests and local runs.
-#[derive(Debug, Default)]
-pub struct MemoryStore {
-    blobs: Mutex<HashMap<String, Vec<u8>>>,
-}
-
-impl MemoryStore {
-    /// An empty store.
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl BlobStore for MemoryStore {
-    async fn put(&self, name: &str, data: Vec<u8>) -> Result<(), EvalError> {
-        self.blobs
-            .lock()
-            .map_err(|_| "memory store poisoned")?
-            .insert(name.to_string(), data);
-        Ok(())
-    }
-
-    async fn get(&self, name: &str) -> Result<Option<Vec<u8>>, EvalError> {
-        Ok(self
-            .blobs
-            .lock()
-            .map_err(|_| "memory store poisoned")?
-            .get(name)
-            .cloned())
-    }
 }
