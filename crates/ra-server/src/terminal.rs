@@ -19,7 +19,7 @@
 //! `FileService` (bin `s3-server`) storing and retrieving files.
 
 use crate::evaluator::Evaluator;
-use crate::server::{BoxError, Listener, Server};
+use crate::server::{BoxError, Server};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -29,15 +29,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use ttk_ra_client::faf::{FafRequest, FAF_PATH};
 use ttk_ra_client::seal::{self, NodeSecretKey};
-
-/// Runs a terminal node answering `/faf` messages with `evaluator`: attests, builds the RA-TLS
-/// identity, then serves HTTP/3 until the endpoint closes. Listens as configured by
-/// [`Listener::from_env`].
-pub async fn run<E: Evaluator>(evaluator: E) -> Result<(), BoxError> {
-    Terminal::new(Server::listen(Listener::from_env()?)?, evaluator)
-        .serve()
-        .await
-}
 
 /// A terminal node: an attested [`Server`] that also receives `POST /faf`, answered by its
 /// [`Evaluator`] `E`.
