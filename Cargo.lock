@@ -3197,6 +3197,7 @@ dependencies = [
  "quinn",
  "serde",
  "serde_bytes",
+ "serde_json",
  "tokio",
  "tokio-vsock",
 ]
