@@ -1,4 +1,4 @@
-//! Content storage behind [`file_service::FileService`](crate::file_service::FileService):
+//! Content storage behind [`FileService`](crate::FileService):
 //! named blobs, in memory ([`MemoryStore`]) or in S3 (`s3::S3Store`, feature `s3`).
 
 use crate::EvalError;

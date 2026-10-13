@@ -1,6 +1,10 @@
 //! Tests of the `s3-server` file service ([`FileService`]) on an in-memory store: directly, and
 //! as a terminal node's `/faf` evaluator on a free local port with mock attestation.
 
+#[path = "../../ra-server/tests/support/test_ca.rs"]
+mod test_ca;
+use test_ca::SignForTests;
+
 use ciborium::Value;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
@@ -8,9 +12,9 @@ use ttk_ra_client::seal::{self, NodePublicKey};
 use ttk_ra_client::FafRequest;
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_ra_server::terminal::Terminal;
-use ttk_storage::file_service::{blob_name, FileError, FileRequest, FileResponse, FileService};
 use ttk_storage::storage::{BlobStore, MemoryStore};
 use ttk_storage::Evaluator;
+use ttk_storage::{blob_name, FileError, FileRequest, FileResponse, FileService};
 
 /// Lowercase hex SHA-256 of `hello world`: the stored blob's name.
 const HELLO_NAME: &str = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";

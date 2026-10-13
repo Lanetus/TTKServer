@@ -3217,6 +3217,7 @@ dependencies = [
  "bytes 1.12.1",
  "env_logger",
  "log",
+ "rcgen",
  "rustls",
  "sha2 0.11.0",
  "tokio",
@@ -3227,6 +3228,7 @@ dependencies = [
  "ttk-relay",
  "ttk-root",
  "ttk-storage",
+ "x509-parser",
 ]
 
 [[package]]
@@ -3291,12 +3293,15 @@ version = "6.0.0"
 dependencies = [
  "axum",
  "log",
+ "rcgen",
+ "rustls",
  "serde_json",
  "sha2 0.11.0",
  "tokio",
  "ttk-ra-client",
  "ttk-ra-server",
  "ttk-storage",
+ "x509-parser",
 ]
 
 [[package]]
@@ -3336,11 +3341,13 @@ dependencies = [
  "ciborium",
  "log",
  "rcgen",
+ "rustls",
  "sha2 0.11.0",
  "tokio",
  "ttk-core",
  "ttk-ra-client",
  "ttk-ra-server",
+ "x509-parser",
 ]
 
 [[package]]

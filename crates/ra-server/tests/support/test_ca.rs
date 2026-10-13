@@ -1,24 +1,29 @@
-//! Test support (feature `test-ca`, never enabled in enclave images): unlocks a [`Server`]'s
-//! routes by replacing its self-signed RA-TLS certificate with one issued by a throwaway CA,
-//! through the same [`CertificateStore::replace`](crate::certificate::CertificateStore::replace)
-//! path as `POST /certificate` (see [`crate::router`] for the route gating).
+//! Test support shared by the workspace's tests (included with `#[path]`, never built into a
+//! library or an enclave image): unlocks a [`Server`]'s routes by replacing its self-signed RA-TLS
+//! certificate with one issued by a throwaway CA, through the same
+//! [`Server::replace_certificate`] path as `POST /certificate` (see [`ttk_ra_server::router`]
+//! for the route gating).
 
-use crate::certificate::CERT_DNS_NAME;
-use crate::server::{BoxError, Server, ATTESTATION_OID};
 use rcgen::{
     BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, IsCa, KeyPair, SanType,
 };
 use rustls::pki_types::CertificateDer;
 use rustls::RootCertStore;
+use ttk_ra_server::certificate::CERT_DNS_NAME;
+use ttk_ra_server::server::{BoxError, Server, ATTESTATION_OID};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
-/// Test-only setup.
-impl Server {
+/// Test-only setup of a [`Server`].
+pub trait SignForTests {
     /// Generates a self-signed CA, makes it the only trusted root, issues a certificate for the
     /// RA-TLS key with the same attestation extension and installs it. Afterwards new connections
     /// get the CA-issued certificate (still accepted by RA-TLS clients) and every route but
     /// `POST /evidence` and `POST /certificate` is served. Returns the installed chain.
-    pub fn sign_for_tests(&self) -> Result<Vec<CertificateDer<'static>>, BoxError> {
+    fn sign_for_tests(&self) -> Result<Vec<CertificateDer<'static>>, BoxError>;
+}
+
+impl SignForTests for Server {
+    fn sign_for_tests(&self) -> Result<Vec<CertificateDer<'static>>, BoxError> {
         let ca_key = KeyPair::generate()?;
         let mut ca_params = CertificateParams::default();
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -55,7 +60,7 @@ impl Server {
         roots.add(ca_cert.der().clone())?;
         self.set_trusted_roots(roots)?;
         let chain = vec![leaf.der().clone()];
-        self.certificates.replace(chain.clone())?;
+        self.replace_certificate(chain.clone())?;
         Ok(chain)
     }
 }

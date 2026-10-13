@@ -1,6 +1,10 @@
 //! Fetching the accepted enclave images from root nodes (`ttk_root`) running locally with mock
 //! attestation.
 
+#[path = "../../ra-server/tests/support/test_ca.rs"]
+mod test_ca;
+use test_ca::SignForTests;
+
 use std::net::SocketAddr;
 use ttk_ra_client::images::RootImageTrustStore;
 use ttk_ra_client::trust::{parse_image_allowlist, ImageTrustStore};

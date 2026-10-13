@@ -77,6 +77,9 @@ s3 = ["ttk-storage/s3"]
 auth-test = ["ttk-root/auth-test"]
 
 [dev-dependencies]
-ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }
+ttk-ra-server = { workspace = true, features = ["mock"] }
 # `auth-test` tests: a node trusting a throwaway CA (`Server::set_trusted_roots`).
 rustls.workspace = true
+# `ttk-ra-server/tests/support/test_ca.rs` (`sign_for_tests`).
+rcgen.workspace = true
+x509-parser.workspace = true

@@ -18,8 +18,8 @@
 //! What the terminal does with a message is its [`Evaluator`], such as `ttk-storage`'s
 //! `FileService` (bin `s3-server`) storing and retrieving files.
 
-use crate::evaluator::Evaluator;
 use crate::server::{BoxError, Server};
+use crate::Evaluator;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
