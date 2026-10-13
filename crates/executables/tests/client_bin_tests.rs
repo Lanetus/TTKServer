@@ -1,14 +1,18 @@
 //! End-to-end tests of the `client` binary against real relay and terminal nodes on free local
 //! ports (mock attestation).
 
+#[path = "../../ra-server/tests/support/test_ca.rs"]
+mod test_ca;
+use test_ca::SignForTests;
+
 use sha2::Digest;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Output;
 use ttk_ra_server::terminal::Terminal;
 use ttk_relay::Relay;
-use ttk_storage::file_service::FileService;
 use ttk_storage::storage::MemoryStore;
+use ttk_storage::FileService;
 
 /// Starts a relay node that accepts mock-attested next hops on a free local port and returns
 /// its address. It serves (unlocked with a test CA certificate) until the test's runtime shuts

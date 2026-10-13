@@ -1,4 +1,4 @@
-//! Wire format of the file service (`ttk_storage::file_service`, bin `s3-server`): the `/faf`
+//! Wire format of the file service (`ttk_storage`, bin `s3-server`): the `/faf`
 //! messages that upload or download files and their replies, shared by the terminal and the
 //! client.
 //!

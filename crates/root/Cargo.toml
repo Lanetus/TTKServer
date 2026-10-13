@@ -51,7 +51,7 @@ auth-test = [
 tokio.workspace = true
 rcgen.workspace = true
 sha2.workspace = true
-ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }
+ttk-ra-server = { workspace = true, features = ["mock"] }
 bytes.workspace = true
 h3.workspace = true
 h3-quinn.workspace = true
@@ -59,3 +59,5 @@ quinn.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 serde_json.workspace = true
+# `ttk-ra-server/tests/support/test_ca.rs` (`sign_for_tests`).
+x509-parser.workspace = true

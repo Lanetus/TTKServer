@@ -34,7 +34,7 @@ x509-parser.workspace = true
 
 [dev-dependencies]
 # Attested servers for the end-to-end tests, with every attestation provider compiled in.
-ttk-ra-server = { workspace = true, features = ["mock", "sev-snp", "tdx", "test-ca"] }
+ttk-ra-server = { workspace = true, features = ["mock", "sev-snp", "tdx"] }
 ttk-relay.workspace = true
 ttk-storage.workspace = true
 ttk-root.workspace = true

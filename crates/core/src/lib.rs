@@ -14,8 +14,8 @@
 //! - [`vsock_proxy`]: configuration of the parent-instance `vsock-proxy` binary.
 //! - [`vsock_proxy_tcp`]: configuration of the parent-instance `vsock-proxy-tcp` binary.
 //! - The RA-TLS certificate extension OID ([`ATTESTATION_OID`]), the parent instance's vsock CID
-//!   ([`PARENT_CID`]), the mock root CA ([`MOCK_NITRO_ROOT_CERT`]) and the TTK root authority
-//!   ([`TTK_ROOT_CA_PEM`]).
+//!   ([`PARENT_CID`]), the mock root CA ([`MOCK_NITRO_ROOT_CERT`]), the TTK root authority
+//!   ([`TTK_ROOT_CA_PEM`]) and the boxed error type ([`BoxError`]).
 
 pub mod cmw;
 pub mod egress;
@@ -32,6 +32,10 @@ pub mod vsock_proxy_tcp;
 pub use cmw::{Cmw, CmwCollection, CmwRecord, CmwType};
 pub use fresh_evidence::FreshEvidence;
 pub use image_trust::ImageTrustStore;
+
+/// Boxed error type used by the server functions (not `Send + Sync`; see `ttk_ra_server::EvalError`
+/// for one that crosses `.await` in `Send` futures).
+pub type BoxError = Box<dyn std::error::Error>;
 
 /// CMW types of the TEE Evidence carried in the RA-TLS certificate and served over HTTP.
 ///
