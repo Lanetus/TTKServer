@@ -1,4 +1,4 @@
-//! Tests of the test certificate authority ([`ttk_root::auth`], bin `auth-test`): issuing
+//! Tests of the test certificate authority ([`ttk_root::auth`], bin `certify-server`): issuing
 //! certificates for RA-TLS keys, appraising fresh Evidence, and the end-to-end
 //! `POST /evidence` + `POST /certificate` flow against a root node with mock attestation.
 
