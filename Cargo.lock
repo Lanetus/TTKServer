@@ -3210,6 +3210,7 @@ dependencies = [
  "bytes 1.12.1",
  "env_logger",
  "log",
+ "rustls",
  "sha2 0.11.0",
  "tokio",
  "tokio-vsock",

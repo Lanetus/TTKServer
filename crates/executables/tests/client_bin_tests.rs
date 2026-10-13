@@ -337,3 +337,57 @@ async fn client_binary_rejects_invalid_file_arguments() {
         assert_eq!(output.status.code(), Some(2), "{args:?}");
     }
 }
+
+#[tokio::test]
+async fn client_binary_fails_to_read_the_upload() {
+    let dir = temp_dir("unreadable-upload");
+    let file = dir.join("missing.bin");
+    let output = run_client_binary(&["--upload", file.to_str().unwrap()], true).await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("cannot read"), "{stderr}");
+    assert!(!stderr.contains("connecting to"), "{stderr}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_binary_takes_the_server_name_from_the_command_line() {
+    let addr = start_relay().to_string();
+    let download = missing_download();
+    // Mock attestation is refused, so it stops after connecting.
+    let output = run_client_binary(
+        &[
+            "--addr",
+            &addr,
+            "-s",
+            "relay.test",
+            &download[0],
+            &download[1],
+        ],
+        false,
+    )
+    .await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains(&format!("connecting to {addr} (SNI: relay.test)")),
+        "{stderr}"
+    );
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn client_binary_takes_the_server_name_from_the_url_host() {
+    let download = missing_download();
+    // Nothing listens there (the port is reserved), so it stops after connecting.
+    let output =
+        run_client_binary(&["https://[::1]:9/faf", &download[0], &download[1]], false).await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("connecting to [::1]:9 (SNI: [::1])"),
+        "{stderr}"
+    );
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+}
