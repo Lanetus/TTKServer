@@ -3217,7 +3217,7 @@ dependencies = [
  "ttk-ra-server",
  "ttk-relay",
  "ttk-root",
- "ttk-terminal",
+ "ttk-storage",
 ]
 
 [[package]]
@@ -3250,7 +3250,7 @@ dependencies = [
  "ttk-ra-server",
  "ttk-relay",
  "ttk-root",
- "ttk-terminal",
+ "ttk-storage",
  "x509-parser",
 ]
 
@@ -3276,6 +3276,7 @@ dependencies = [
  "tokio",
  "tower-service",
  "ttk-core",
+ "ttk-ra-client",
  "x509-parser",
 ]
 
@@ -3286,10 +3287,11 @@ dependencies = [
  "axum",
  "log",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
  "ttk-ra-client",
  "ttk-ra-server",
- "ttk-terminal",
+ "ttk-storage",
 ]
 
 [[package]]
@@ -3318,14 +3320,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "ttk-terminal"
+name = "ttk-storage"
 version = "6.0.0"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "aws-smithy-http-client",
  "aws-smithy-runtime-api",
- "axum",
  "ciborium",
  "log",
  "rcgen",

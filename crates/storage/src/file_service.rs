@@ -20,7 +20,6 @@ use crate::EvalError;
 use crate::Evaluator;
 use log::debug;
 use sha2::{Digest, Sha256};
-use ttk_ra_client::hex_encode;
 
 pub use ttk_core::file_message::{FileError, FileRequest, FileResponse, SHA256_LEN};
 
@@ -73,4 +72,9 @@ pub fn blob_name(hash: &[u8]) -> Result<String, EvalError> {
         return Err(format!("invalid SHA-256: expected {SHA256_LEN} bytes").into());
     }
     Ok(hex_encode(hash))
+}
+
+/// Helper function to format bytes as a hex string.
+pub fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }

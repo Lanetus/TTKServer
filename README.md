@@ -24,9 +24,9 @@ The project is a Cargo workspace of these crates:
 | `ttk-ra-server` (`crates/ra-server/`)      | library     | The attested server: TEE attestation providers, RA-TLS identity and certificate, QUIC / HTTP/3 serving (`GET /`, `GET /evidence.cmw`, `POST /evidence`) |
 | `ttk-ra-client` (`crates/ra-client/`)  | library     | The RA-TLS client (`TtkClient`, `EnclaveCertVerifier`), the Evidence verifier for all supported TEEs, the `POST /faf` request format and its HPKE sealing |
 | `ttk-relay` (`crates/relay/`)    | library     | The **relay node** (enclave): forwards `POST /faf` to the next hop |
-| `ttk-terminal` (`crates/terminal/`) | library     | The **terminal node** (enclave): the last hop of `POST /faf`, decrypting the message |
+| `ttk-storage` (`crates/storage/`) | library     | The terminal node's storage: the file service evaluator and its blob stores (in memory, S3) |
 | `ttk-root` (`crates/root/`)      | library     | The **root node** (enclave): serves the accepted enclave image checksums |
-| `ttk-executables` (`crates/executables/`) | binaries | Every executable: `relay`, `terminal`, `s3-server` (feature `s3`), `root`, the parent-instance `vsock-proxy` / `vsock-proxy-tcp`, and the test-only `client` and `auth-test` (feature `auth-test`) |
+| `ttk-executables` (`crates/executables/`) | binaries | Every executable: `relay`, `s3-server` (feature `s3`), `root`, the parent-instance `vsock-proxy` / `vsock-proxy-tcp`, and the test-only `client` and `auth-test` (feature `auth-test`) |
 
 Supported TEEs:
 
@@ -63,9 +63,9 @@ cargo build --release -p ttk-executables --bin relay  # one binary
 | `sev-snp`     |         | AMD SEV-SNP provider                                                                     |
 | `tdx`         |         | Intel TDX provider                                                                       |
 
-These features belong to `ttk-ra-server`; `ttk-relay`, `ttk-terminal`, `ttk-root` and `ttk-executables` forward them. Features are additive, so one binary can support several TEEs, e.g. `cargo build --release -p ttk-executables --bin terminal --features sev-snp,tdx`.
+These features belong to `ttk-ra-server`; `ttk-relay`, `ttk-storage`, `ttk-root` and `ttk-executables` forward them. Features are additive, so one binary can support several TEEs, e.g. `cargo build --release -p ttk-executables --bin relay --features sev-snp,tdx`.
 
-The test `client` binary lives in its own crate (`ttk-ra-client`), so the enclave images, which build only `relay` or `terminal`, never include it.
+The enclave images build only their node binary (`relay`, `s3-server` or `root`), so they never include the test-only `client` or `auth-test`.
 
 ## Usage
 
@@ -73,7 +73,7 @@ The test `client` binary lives in its own crate (`ttk-ra-client`), so the enclav
 
 ```sh
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4433 cargo run --release --bin relay
-TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --release --bin terminal
+TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --release --bin s3-server --features s3
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4455 cargo run --release --bin root
 ```
 
@@ -90,7 +90,7 @@ At startup a node picks an attestation provider: it probes the compiled-in hardw
 Logging is via [`env_logger`](https://docs.rs/env_logger); set `RUST_LOG` to control verbosity (no output by default):
 
 ```sh
-RUST_LOG=info cargo run --release --bin terminal
+RUST_LOG=info cargo run --release --bin relay
 ```
 
 ### Endpoints
@@ -164,7 +164,7 @@ Each node also limits what a peer can make it hold: 1024 connections, 16 concurr
 
 ### Test client
 
-The `client` binary (crate `ttk-ra-client`) is for testing only. It routes a message through two relay nodes to a terminal node: it connects to the entry relay (`--addr`) over HTTP/3 verifying its certificate's embedded Evidence, attests the second relay (`--relay`) and the terminal (`--terminal`), seals each hop's address to the relay that reads it and the message to the terminal, sends the request to the entry relay with `POST /faf` and prints the response:
+The `client` binary (crate `ttk-executables`) is for testing only. It routes a message through two relay nodes to a terminal node: it connects to the entry relay (`--addr`) over HTTP/3 verifying its certificate's embedded Evidence, attests the second relay (`--relay`) and the terminal (`--terminal`), seals each hop's address to the relay that reads it and the message to the terminal, sends the request to the entry relay with `POST /faf` and prints the response:
 
 ```sh
 # Two relays and a terminal (they fall back to mock attestation off-TEE), with
@@ -172,9 +172,9 @@ The `client` binary (crate `ttk-ra-client`) is for testing only. It routes a mes
 # mock next hops on 127.0.0.1:
 TTK_ALLOW_MOCK_ATTESTATION=1 TTK_ALLOW_PRIVATE_NEXT_HOPS=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4433 cargo run --bin relay
 TTK_ALLOW_MOCK_ATTESTATION=1 TTK_ALLOW_PRIVATE_NEXT_HOPS=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4434 cargo run --bin relay
-TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --bin terminal
-# Then the client, accepting mock Evidence:
-TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --bin client -- --addr 127.0.0.1:4433 --relay 127.0.0.1:4434 --terminal 127.0.0.1:4444
+TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --bin s3-server --features s3
+# Then the client, accepting mock Evidence, uploading a file to the terminal:
+TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --bin client -- --addr 127.0.0.1:4433 --relay 127.0.0.1:4434 --terminal 127.0.0.1:4444 --upload ./report.pdf
 ```
 
 Run `cargo run --bin client -- --help` for all options.
@@ -216,18 +216,21 @@ crates/ra-server/src/
   identity.rs           generate_identity() / AttestationParams
   server.rs             attestation, RA-TLS certificate, QUIC / HTTP/3 serving, Listener
   router.rs             base routes (GET /, GET /evidence.cmw, POST /evidence)
+  evaluator.rs          the Evaluator trait: what a node does with a delivered message
+  terminal.rs           the terminal node: last hop of POST /faf
 crates/ra-client/src/
   lib.rs, client.rs     `ttk_ra_client`: TtkClient, EnclaveCertVerifier
   verifier/             Evidence verification for Nitro, SEV-SNP and TDX/SGX (DCAP)
   faf.rs, seal.rs       the POST /faf request format and its HPKE sealing
 crates/relay/src/
   lib.rs                `ttk_relay`: forwards POST /faf
-crates/terminal/src/
-  lib.rs                `ttk_terminal`: last hop of POST /faf
+crates/storage/src/
+  file_service.rs       `ttk_storage`: the file service evaluator
+  storage/              blob stores (in memory, S3)
 crates/root/src/
   lib.rs                `ttk_root`: GET /root-attestation
 crates/executables/src/bin/
-  relay.rs, terminal.rs, s3-server.rs, root.rs      the enclave nodes
+  relay.rs, s3-server.rs, root.rs                  the enclave nodes
   vsock-proxy.rs, vsock-proxy-tcp.rs                parent-instance proxies (Linux)
   client.rs, auth-test.rs                           test-only tools
 crates/*/tests/         each crate's integration and end-to-end tests
@@ -284,7 +287,7 @@ A record is the CBOR array `[type, value, ind]`; a collection is a map from labe
 
 ## Docker
 
-The `Dockerfile` builds one enclave node, `relay` (default), `terminal` or `root` (`--build-arg NODE=terminal`, `NODE=root`), in release mode with the default features and packages it in a `debian:bookworm-slim` image. The test-only `client` binary is not included. `scripts/build-eif.sh [amd64|arm64] [relay|terminal|root]` turns the image into an EIF. The CD pipeline builds and pushes the image to a private Amazon ECR repository.
+The `Dockerfile` builds one enclave node, `relay` (default), `s3-server` or `root` (`--build-arg NODE=s3-server`, `NODE=root`), in release mode with the default features and packages it in a `debian:bookworm-slim` image. The test-only `client` binary is not included. `scripts/build-eif.sh [amd64|arm64] [relay|s3-server|root]` turns the image into an EIF. The CD pipeline builds and pushes the image to a private Amazon ECR repository.
 
 ## License
 

@@ -7,8 +7,8 @@ FROM rust:1-bookworm AS builder
 
 WORKDIR /app
 
-# The enclave node to build: `relay` (forwards /faf requests), `terminal` (the last hop),
-# `s3-server` (a terminal storing files in S3, feature `s3`) or `root`
+# The enclave node to build: `relay` (forwards /faf requests), `s3-server` (the last hop, a
+# terminal storing files in S3, feature `s3`) or `root`
 # (serves the accepted enclave image checksums at /root-attestation).
 ARG NODE=relay
 

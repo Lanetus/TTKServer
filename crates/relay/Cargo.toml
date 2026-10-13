@@ -29,5 +29,6 @@ tdx = ["ttk-ra-server/tdx"]
 
 [dev-dependencies]
 ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }
-ttk-terminal.workspace = true
+ttk-storage.workspace = true
 serde_json.workspace = true
+sha2.workspace = true

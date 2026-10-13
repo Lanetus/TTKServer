@@ -19,7 +19,7 @@ Security vulnerabilities: do not open a public PR. See SECURITY.md.
 - [ ] `ttk-ra-server`
 - [ ] `ttk-ra-client`
 - [ ] `ttk-relay`
-- [ ] `ttk-terminal`
+- [ ] `ttk-storage`
 - [ ] Deployment / build (`Dockerfile`, `scripts/`, `deploy/`, workflows)
 - [ ] Docs only
 

@@ -7,9 +7,10 @@ use std::net::SocketAddr;
 use ttk_ra_client::faf::FafRequest;
 use ttk_ra_client::seal::{self, NodePublicKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
-use ttk_terminal::file_service::{blob_name, FileError, FileRequest, FileResponse, FileService};
-use ttk_terminal::storage::{BlobStore, MemoryStore};
-use ttk_terminal::{Evaluator, Terminal};
+use ttk_ra_server::terminal::Terminal;
+use ttk_storage::file_service::{blob_name, FileError, FileRequest, FileResponse, FileService};
+use ttk_storage::storage::{BlobStore, MemoryStore};
+use ttk_storage::Evaluator;
 
 /// Lowercase hex SHA-256 of `hello world`: the stored blob's name.
 const HELLO_NAME: &str = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
@@ -138,9 +139,11 @@ async fn faf(client: &TtkClient, message: &[u8]) -> Vec<u8> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn terminal_with_the_file_service_uploads_and_downloads_over_faf() {
-    let terminal = Terminal::bind("127.0.0.1:0".parse().unwrap())
-        .unwrap()
-        .with_evaluator(FileService::new(MemoryStore::new()));
+    let terminal = Terminal::bind(
+        "127.0.0.1:0".parse().unwrap(),
+        FileService::new(MemoryStore::new()),
+    )
+    .unwrap();
     terminal.server().sign_for_tests().unwrap();
     let addr: SocketAddr = terminal.local_addr().unwrap();
     tokio::spawn(async move { terminal.serve().await.unwrap() });

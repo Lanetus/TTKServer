@@ -19,7 +19,7 @@ Report them privately through GitHub's [security advisories](https://github.com/
 
 Please include as much of the following as you can:
 
-- The affected crate(s) (`ttk-core`, `ttk-ra-server`, `ttk-ra-client`, `ttk-relay`, `ttk-terminal`), version or commit, and enabled Cargo features
+- The affected crate(s) (`ttk-core`, `ttk-ra-server`, `ttk-ra-client`, `ttk-relay`, `ttk-storage`), version or commit, and enabled Cargo features
 - The TEE involved (AWS Nitro, AMD SEV-SNP, Intel TDX / SGX, or none)
 - A description of the issue and its impact: what an attacker can do, and from what position (network, parent instance, malicious host, compromised enclave, ...)
 - Steps to reproduce, or a proof of concept
