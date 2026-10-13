@@ -27,6 +27,7 @@ ciborium.workspace = true
 env_logger.workspace = true
 log.workspace = true
 serde.workspace = true
+serde_bytes.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bytes.workspace = true

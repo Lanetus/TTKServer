@@ -12,16 +12,22 @@
 //! ([`DEFAULT_TERMINAL_SERVER`]) to learn their RA-TLS keys, and builds an onion-routed
 //! [`FafRequest`]: each hop's address is sealed to the relay that reads it, and the message is
 //! sealed to the terminal. It sends the request to the entry relay's `POST /faf`, prints the
-//! response and decrypts the terminal's reply (`hello:<message>`, sealed under the message key).
+//! response and decrypts the terminal's reply (sealed under the message key).
+//!
+//! The message is either text for the echo terminal (`--message`) or, with `--upload` /
+//! `--download`, a [`FileRequest`] (CBOR) for the file service terminal (bin `s3-server`).
 //! The enclave images never include it.
 
 use axum::http::Uri;
 use log::{error, info, warn};
+use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Instant;
+use ttk_core::file_message::{FileRequest, FileResponse, SHA256_LEN};
 use ttk_ra_client::faf::{connect_to_node, parse_relay_server, FafRelay, FafRequest, FAF_PATH};
 use ttk_ra_client::seal::{self, NodePublicKey};
-use ttk_ra_client::{ClientTransport, EnclaveCertVerifier, TtkClient};
+use ttk_ra_client::{hex_encode, ClientTransport, EnclaveCertVerifier, TtkClient};
 
 /// Second relay node, which the entry relay forwards the `FafRequest` to unless `--relay`
 /// overrides it.
@@ -39,14 +45,31 @@ Options:
   -a, --addr <ADDR>         Entry relay node socket address (default: 127.0.0.1:4433)
   -r, --relay <RELAY>       Second relay node, forwarded to by the entry relay (default: 127.0.0.1:4434)
   -t, --terminal <TERMINAL> Terminal node, the last hop (default: 127.0.0.1:4444)
-  -m, --message <MESSAGE>   Message to send, encrypted to the terminal (default: hello)
+  -m, --message <MESSAGE>   Text message for the echo terminal, encrypted to it (default: hello)
+  -u, --upload <PATH>       Upload the file at PATH to the file service terminal; prints its SHA-256
+  -d, --download <SHA256>   Download the file with this SHA-256 (64 hex digits) from the file service terminal
+  -o, --out <PATH>          Where --download writes the file (default: ./<SHA256>)
   -h, --help                Print help information
 
 Examples:
   client
   client https://127.0.0.1:4433
   client --addr 127.0.0.1:4433 --relay 127.0.0.1:4434 --terminal 127.0.0.1:4444 --message hi
+  client --terminal 127.0.0.1:4444 --upload ./report.pdf
+  client --terminal 127.0.0.1:4444 --download <SHA256> --out ./report.pdf
 ";
+
+/// What a `client` invocation sends to the terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Payload {
+    /// Text for the echo terminal (`--message`), sent as its UTF-8 bytes.
+    Message(String),
+    /// A file for the file service to store (`--upload`), sent as [`FileRequest::Upload`].
+    Upload(PathBuf),
+    /// A file to fetch from the file service (`--download`), sent as [`FileRequest::Download`],
+    /// and the path the file is written to (`--out`).
+    Download { sha256: Vec<u8>, out: PathBuf },
+}
 
 /// What a `client` invocation should connect to and send.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,8 +82,8 @@ struct ClientTarget {
     relay_server: String,
     /// Terminal node the request is routed to, as `host[:port]` or `https://host[:port]`.
     terminal_server: String,
-    /// The message, sealed to the terminal before sending.
-    message: String,
+    /// What is sealed to the terminal and sent.
+    payload: Payload,
 }
 
 /// Parses `client` arguments (without the program name).
@@ -68,23 +91,28 @@ struct ClientTarget {
 /// `default_addr` and `default_name` come from `TTK_SERVER_ADDR` and `TTK_SERVER_NAME`; they
 /// fall back to `127.0.0.1:4433` and `localhost`. An unparsable address falls back
 /// to `127.0.0.1:4433`. The second relay defaults to [`DEFAULT_RELAY_SERVER`] and the terminal
-/// to [`DEFAULT_TERMINAL_SERVER`]. Returns `None` if help was requested.
+/// to [`DEFAULT_TERMINAL_SERVER`]. Returns `Ok(None)` if help was requested, and an error if
+/// more than one of `--message` / `--upload` / `--download` is given, `--out` is given without
+/// `--download`, or the `--download` SHA-256 is not 64 hex digits.
 fn parse_client_args(
     args: &[String],
     default_addr: Option<String>,
     default_name: Option<String>,
-) -> Option<ClientTarget> {
+) -> Result<Option<ClientTarget>, String> {
     let mut server_addr_str = default_addr.unwrap_or_else(|| "127.0.0.1:4433".to_string());
     let mut server_name = default_name.unwrap_or_else(|| "localhost".to_string());
     let mut relay_server = DEFAULT_RELAY_SERVER.to_string();
     let mut terminal_server = DEFAULT_TERMINAL_SERVER.to_string();
-    let mut message = "hello".to_string();
+    let mut message = None;
+    let mut upload = None;
+    let mut download = None;
+    let mut out = None;
 
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
         if arg == "--help" || arg == "-h" {
-            return None;
+            return Ok(None);
         } else if (arg == "--server-name" || arg == "-s") && i + 1 < args.len() {
             i += 1;
             server_name = args[i].clone();
@@ -96,7 +124,16 @@ fn parse_client_args(
             terminal_server = args[i].clone();
         } else if (arg == "--message" || arg == "-m") && i + 1 < args.len() {
             i += 1;
-            message = args[i].clone();
+            message = Some(args[i].clone());
+        } else if (arg == "--upload" || arg == "-u") && i + 1 < args.len() {
+            i += 1;
+            upload = Some(PathBuf::from(&args[i]));
+        } else if (arg == "--download" || arg == "-d") && i + 1 < args.len() {
+            i += 1;
+            download = Some(args[i].clone());
+        } else if (arg == "--out" || arg == "-o") && i + 1 < args.len() {
+            i += 1;
+            out = Some(PathBuf::from(&args[i]));
         } else if (arg == "--addr" || arg == "-a") && i + 1 < args.len() {
             i += 1;
             server_addr_str = args[i].clone();
@@ -121,27 +158,133 @@ fn parse_client_args(
         .parse()
         .unwrap_or_else(|_| "127.0.0.1:4433".parse().unwrap());
 
-    Some(ClientTarget {
+    let payload = match (message, upload, download) {
+        (_, _, None) if out.is_some() => return Err("--out requires --download".into()),
+        (message, None, None) => Payload::Message(message.unwrap_or_else(|| "hello".into())),
+        (None, Some(path), None) => Payload::Upload(path),
+        (None, None, Some(hex)) => {
+            let sha256 = parse_sha256_hex(&hex)?;
+            let out = out.unwrap_or_else(|| PathBuf::from(hex_encode(&sha256)));
+            Payload::Download { sha256, out }
+        }
+        _ => return Err("--message, --upload and --download are mutually exclusive".into()),
+    };
+
+    Ok(Some(ClientTarget {
         server_addr,
         server_name,
         relay_server,
         terminal_server,
-        message,
-    })
+        payload,
+    }))
 }
 
-/// Parses the process arguments and environment, printing usage and exiting on `--help`.
+/// Parses a SHA-256 given as 64 hex digits (either case).
+fn parse_sha256_hex(hex: &str) -> Result<Vec<u8>, String> {
+    let invalid = || {
+        format!(
+            "--download expects a SHA-256 as {} hex digits",
+            2 * SHA256_LEN
+        )
+    };
+    if hex.len() != 2 * SHA256_LEN || !hex.is_ascii() {
+        return Err(invalid());
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| invalid()))
+        .collect()
+}
+
+/// Parses the process arguments and environment, printing usage and exiting on `--help`, and
+/// exiting with an error on invalid arguments.
 fn parse_args() -> ClientTarget {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    parse_client_args(
+    match parse_client_args(
         &args,
         std::env::var("TTK_SERVER_ADDR").ok(),
         std::env::var("TTK_SERVER_NAME").ok(),
-    )
-    .unwrap_or_else(|| {
-        print!("{CLIENT_USAGE}");
-        std::process::exit(0);
-    })
+    ) {
+        Ok(Some(target)) => target,
+        Ok(None) => {
+            print!("{CLIENT_USAGE}");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            error!("{e} (see --help)");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// The message sealed to the terminal for `payload`, and the SHA-256 the file service's reply is
+/// checked against (the uploaded file's, or the requested one), if any.
+fn build_message(payload: &Payload) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+    match payload {
+        Payload::Message(message) => Ok((message.as_bytes().to_vec(), None)),
+        Payload::Upload(path) => {
+            let file =
+                std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            let sha256 = Sha256::digest(&file).to_vec();
+            info!("--> Uploading {} ({} bytes)", path.display(), file.len());
+            let message = FileRequest::Upload(file)
+                .to_cbor()
+                .map_err(|e| e.to_string())?;
+            Ok((message, Some(sha256)))
+        }
+        Payload::Download { sha256, .. } => {
+            info!("--> Downloading {}", hex_encode(sha256));
+            let message = FileRequest::Download(sha256.clone())
+                .to_cbor()
+                .map_err(|e| e.to_string())?;
+            Ok((message, Some(sha256.clone())))
+        }
+    }
+}
+
+/// Acts on the terminal's decrypted `reply` to `payload`: logs the echo terminal's text, or
+/// decodes the file service's [`FileResponse`], checks it against `expected_sha256` and, for a
+/// download, writes the file.
+fn handle_reply(
+    payload: &Payload,
+    expected_sha256: Option<&[u8]>,
+    reply: &[u8],
+) -> Result<(), String> {
+    if let Payload::Message(_) = payload {
+        info!(
+            "<-- Terminal reply (decrypted): {}",
+            String::from_utf8_lossy(reply)
+        );
+        return Ok(());
+    }
+    let response = FileResponse::from_cbor(reply)
+        .map_err(|e| format!("invalid file service reply: {e}"))?
+        .into_result()
+        .map_err(|e| format!("file service: {e}"))?;
+    let expected = expected_sha256.unwrap_or_default();
+    match payload {
+        Payload::Download { out, .. } => {
+            if Sha256::digest(&response).as_slice() != expected {
+                return Err("downloaded file does not match the requested SHA-256".into());
+            }
+            std::fs::write(out, &response)
+                .map_err(|e| format!("cannot write {}: {e}", out.display()))?;
+            info!(
+                "<-- Downloaded {} bytes (SHA-256 verified) to {}",
+                response.len(),
+                out.display()
+            );
+        }
+        _ if response != expected => {
+            return Err(format!(
+                "file service returned SHA-256 {}, expected {}",
+                hex_encode(&response),
+                hex_encode(expected)
+            ));
+        }
+        _ => info!("<-- Uploaded, SHA-256: {}", hex_encode(&response)),
+    }
+    Ok(())
 }
 
 /// Entry point for the `client` binary.
@@ -154,8 +297,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         server_name,
         relay_server,
         terminal_server,
-        message,
+        payload,
     } = parse_args();
+    let (message, expected_sha256) = match build_message(&payload) {
+        Ok(built) => built,
+        Err(e) => {
+            error!("{e}");
+            std::process::exit(1);
+        }
+    };
 
     info!("TTKServer HTTP/3 client (RFC 9114) connecting to {server_addr} (SNI: {server_name})");
 
@@ -200,7 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Each hop's address is sealed to the relay that reads it: the entry relay learns only the
     // second relay, which learns only the terminal. Only the terminal can open the body.
-    let (body, message_key) = seal::seal_body_with_key(&terminal_key, message.as_bytes())?;
+    let (body, message_key) = seal::seal_body_with_key(&terminal_key, &message)?;
     let request = FafRequest {
         relays: vec![
             FafRelay {
@@ -233,18 +383,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Err(_) => info!("<-- Body (binary, {} bytes)", resp.body.len()),
             }
             if resp.status == 200 {
-                let reply = resp.text().map_err(|e| e.to_string()).and_then(|sealed| {
-                    seal::open_response(&message_key, &sealed).map_err(|e| e.to_string())
-                });
-                match reply {
-                    Ok(reply) => info!(
-                        "<-- Terminal reply (decrypted): {}",
-                        String::from_utf8_lossy(&reply)
-                    ),
-                    Err(e) => {
-                        error!("Failed to decrypt the terminal's reply: {e}");
-                        std::process::exit(1);
-                    }
+                let reply = resp
+                    .text()
+                    .map_err(|e| e.to_string())
+                    .and_then(|sealed| {
+                        seal::open_response(&message_key, &sealed).map_err(|e| e.to_string())
+                    })
+                    .map_err(|e| format!("Failed to decrypt the terminal's reply: {e}"))
+                    .and_then(|reply| handle_reply(&payload, expected_sha256.as_deref(), &reply));
+                if let Err(e) = reply {
+                    error!("{e}");
+                    std::process::exit(1);
                 }
             }
         }

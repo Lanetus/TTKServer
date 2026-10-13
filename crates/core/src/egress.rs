@@ -35,6 +35,22 @@ pub fn classify_hop_address(ip: IpAddr) -> HopAddressClass {
     }
 }
 
+/// The EC2 instance metadata service (IMDS) address over IPv4.
+pub const IMDS_V4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
+
+/// The EC2 instance metadata service (IMDS) address over IPv6 (Nitro instances).
+pub const IMDS_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
+
+/// Whether `ip` is the EC2 instance metadata service ([`IMDS_V4`] or [`IMDS_V6`]), which only
+/// a parent operator may open to the enclave (`vsock-proxy-tcp --allow-imds`), never a peer.
+/// IPv4-mapped IPv6 addresses are checked as their IPv4 address.
+pub fn is_instance_metadata_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4 == IMDS_V4,
+        IpAddr::V6(v6) => v6 == IMDS_V6 || v6.to_ipv4_mapped() == Some(IMDS_V4),
+    }
+}
+
 /// [`classify_hop_address`] for IPv4.
 fn classify_v4(ip: Ipv4Addr) -> HopAddressClass {
     let [a, b, ..] = ip.octets();

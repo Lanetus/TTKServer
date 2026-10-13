@@ -24,14 +24,13 @@ path = "src/bin/s3_server.rs"
 required-features = ["s3"]
 
 [dependencies]
+ttk-core.workspace = true
 ttk-ra-server.workspace = true
 ttk-ra-client.workspace = true
 axum.workspace = true
 ciborium.workspace = true
 env_logger.workspace = true
 log.workspace = true
-serde.workspace = true
-serde_bytes.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 aws-config = { workspace = true, optional = true }

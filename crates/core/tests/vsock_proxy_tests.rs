@@ -147,6 +147,26 @@ mod tcp {
     }
 
     #[test]
+    fn allow_imds_from_flag_or_env_only() {
+        let base = ["-c", "17", "-r", "169.254.169.254:80"];
+        let default = parse_tcp_proxy_args(&args(&base), no_env).unwrap().unwrap();
+        assert!(!default.allow_imds);
+        let env = |name: &str| (name == "TTK_TCP_ALLOW_IMDS").then(|| "1".to_string());
+        assert!(
+            parse_tcp_proxy_args(&args(&base), env)
+                .unwrap()
+                .unwrap()
+                .allow_imds
+        );
+        let from_flag =
+            parse_tcp_proxy_args(&args(&[&base[..], &["--allow-imds"]].concat()), no_env)
+                .unwrap()
+                .unwrap();
+        assert!(from_flag.allow_imds);
+        assert!(!from_flag.allow_private);
+    }
+
+    #[test]
     fn help() {
         assert_eq!(parse_tcp_proxy_args(&args(&["-h"]), no_env).unwrap(), None);
     }
