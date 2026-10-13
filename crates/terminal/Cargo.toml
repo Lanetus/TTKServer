@@ -12,24 +12,12 @@ categories.workspace = true
 [lib]
 name = "ttk_terminal"
 
-# The terminal node, run inside the enclave.
-[[bin]]
-name = "terminal"
-path = "src/main.rs"
-
-# The S3 file node: a terminal whose `/faf` messages upload / download files in S3.
-[[bin]]
-name = "s3-server"
-path = "src/bin/s3_server.rs"
-required-features = ["s3"]
-
 [dependencies]
 ttk-core.workspace = true
 ttk-ra-server.workspace = true
 ttk-ra-client.workspace = true
 axum.workspace = true
 ciborium.workspace = true
-env_logger.workspace = true
 log.workspace = true
 sha2.workspace = true
 tokio.workspace = true
@@ -45,7 +33,7 @@ nitro = ["ttk-ra-server/nitro"]
 mock = ["ttk-ra-server/mock"]
 sev-snp = ["ttk-ra-server/sev-snp"]
 tdx = ["ttk-ra-server/tdx"]
-# `storage::s3::S3Store` and the `s3-server` bin.
+# `storage::s3::S3Store`, used by the `s3-server` bin in `ttk-executables`.
 s3 = [
     "dep:aws-config",
     "dep:aws-sdk-s3",

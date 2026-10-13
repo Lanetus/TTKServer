@@ -28,11 +28,13 @@ No TEE hardware is required for development: the `mock` attestation provider is 
 
 | Crate (directory)                   | Contents                                                                 |
 |-------------------------------------|--------------------------------------------------------------------------|
-| `ttk-core` (`crates/core/`)         | Shared by server and client: EAT data model, `submod` labels, RA-TLS OID, mock root CA, egress policy, vsock transport; and the parent-instance `vsock-proxy` bin. |
+| `ttk-core` (`crates/core/`)         | Shared by server and client: EAT data model, `submod` labels, RA-TLS OID, mock root CA, egress policy, vsock transport. |
 | `ttk-ra-server` (`crates/ra-server/`)         | Server library (attestation providers, RA-TLS cert, QUIC/HTTP/3 serving). No relay/message logic, no client code. |
-| `ttk-ra-client` (`crates/ra-client/`)     | Client library (`TtkClient`, `EnclaveCertVerifier`, evidence verifier, `/faf` format, HPKE sealing) and the **test-only** `client` binary. |
-| `ttk-relay` (`crates/relay/`)       | Relay node (`relay` bin).                                                 |
-| `ttk-terminal` (`crates/terminal/`) | Terminal node (`terminal` bin), the last hop of `POST /faf`.              |
+| `ttk-ra-client` (`crates/ra-client/`)     | Client library (`TtkClient`, `EnclaveCertVerifier`, evidence verifier, `/faf` format, HPKE sealing). |
+| `ttk-relay` (`crates/relay/`)       | Relay node library.                                                       |
+| `ttk-terminal` (`crates/terminal/`) | Terminal node library, the last hop of `POST /faf`.                       |
+| `ttk-root` (`crates/root/`)         | Root node library (`GET /root-attestation`).                              |
+| `ttk-executables` (`crates/executables/`) | Every binary (`relay`, `terminal`, `s3-server`, `root`, `vsock-proxy`, `vsock-proxy-tcp`, the **test-only** `client` and `auth-test`). All other crates are libraries only. |
 
 Please keep code in the crate it belongs to — for example, client-side logic goes in `ttk-ra-client`, not `ttk-ra-server`.
 
@@ -43,7 +45,7 @@ Shared dependency versions live in `[workspace.dependencies]` in the root `Cargo
 ```sh
 TTK_USE_UDP=1 RUST_LOG=info cargo run --bin relay                              # UDP :4433
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 RUST_LOG=info cargo run --bin terminal
-cargo run --bin client -- <args>                                             # see parse_client_args() in crates/ra-client/src/main.rs
+cargo run --bin client -- <args>                                             # see parse_client_args() in crates/executables/src/bin/client.rs
 ```
 
 ## Branches

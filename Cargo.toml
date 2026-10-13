@@ -15,9 +15,9 @@ categories = ["cryptography", "network-programming"]
 ttk-core = { path = "crates/core", version = "6.0.0" }
 ttk-ra-server = { path = "crates/ra-server", version = "6.0.0", default-features = false }
 ttk-ra-client = { path = "crates/ra-client", version = "6.0.0" }
-ttk-relay = { path = "crates/relay", version = "6.0.0" }
-ttk-terminal = { path = "crates/terminal", version = "6.0.0" }
-ttk-root = { path = "crates/root", version = "6.0.0" }
+ttk-relay = { path = "crates/relay", version = "6.0.0", default-features = false }
+ttk-terminal = { path = "crates/terminal", version = "6.0.0", default-features = false }
+ttk-root = { path = "crates/root", version = "6.0.0", default-features = false }
 
 aws-config = { version = "1.12", default-features = false, features = ["rt-tokio", "behavior-version-latest"] }
 aws-nitro-enclaves-nsm-api = "0.4"

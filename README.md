@@ -20,11 +20,13 @@ The project is a Cargo workspace of these crates:
 
 | Crate (directory)         | Kind        | Contents                                                                                 |
 |---------------------------|-------------|------------------------------------------------------------------------------------------|
-| `ttk-core` (`crates/core/`)      | lib + `vsock-proxy` bin | What the server and client share: the CMW evidence wrapper and its media types, the RA-TLS extension OID, the mock root CA, the egress policy and the vsock transport; and the parent-instance UDP <-> vsock proxy |
+| `ttk-core` (`crates/core/`)      | library     | What the server and client share: the CMW evidence wrapper and its media types, the RA-TLS extension OID, the mock root CA, the egress policy and the vsock transport |
 | `ttk-ra-server` (`crates/ra-server/`)      | library     | The attested server: TEE attestation providers, RA-TLS identity and certificate, QUIC / HTTP/3 serving (`GET /`, `GET /evidence.cmw`, `POST /evidence`) |
-| `ttk-ra-client` (`crates/ra-client/`)  | lib + `client` bin | The RA-TLS client (`TtkClient`, `EnclaveCertVerifier`), the Evidence verifier for all supported TEEs, the `POST /faf` request format and its HPKE sealing; the test `client` binary |
-| `ttk-relay` (`crates/relay/`)    | lib + `relay` bin | The **relay node** (enclave): forwards `POST /faf` to the next hop |
-| `ttk-terminal` (`crates/terminal/`) | lib + `terminal` bin | The **terminal node** (enclave): the last hop of `POST /faf`, decrypting the message |
+| `ttk-ra-client` (`crates/ra-client/`)  | library     | The RA-TLS client (`TtkClient`, `EnclaveCertVerifier`), the Evidence verifier for all supported TEEs, the `POST /faf` request format and its HPKE sealing |
+| `ttk-relay` (`crates/relay/`)    | library     | The **relay node** (enclave): forwards `POST /faf` to the next hop |
+| `ttk-terminal` (`crates/terminal/`) | library     | The **terminal node** (enclave): the last hop of `POST /faf`, decrypting the message |
+| `ttk-root` (`crates/root/`)      | library     | The **root node** (enclave): serves the accepted enclave image checksums |
+| `ttk-executables` (`crates/executables/`) | binaries | Every executable: `relay`, `terminal`, `s3-server` (feature `s3`), `root`, the parent-instance `vsock-proxy` / `vsock-proxy-tcp`, and the test-only `client` and `auth-test` (feature `auth-test`) |
 
 Supported TEEs:
 
@@ -48,8 +50,8 @@ The verifier also accepts Intel SGX DCAP quotes.
 ```sh
 git clone https://github.com/Lanetus/TTKServer.git
 cd TTKServer
-cargo build --release              # all crates
-cargo build --release -p ttk-relay # one crate
+cargo build --release                                 # all crates
+cargo build --release -p ttk-executables --bin relay  # one binary
 ```
 
 ### Cargo features
@@ -61,7 +63,7 @@ cargo build --release -p ttk-relay # one crate
 | `sev-snp`     |         | AMD SEV-SNP provider                                                                     |
 | `tdx`         |         | Intel TDX provider                                                                       |
 
-These features belong to `ttk-ra-server`; `ttk-relay` and `ttk-terminal` forward them. Features are additive, so one binary can support several TEEs, e.g. `cargo build --release -p ttk-terminal --features sev-snp,tdx`.
+These features belong to `ttk-ra-server`; `ttk-relay`, `ttk-terminal`, `ttk-root` and `ttk-executables` forward them. Features are additive, so one binary can support several TEEs, e.g. `cargo build --release -p ttk-executables --bin terminal --features sev-snp,tdx`.
 
 The test `client` binary lives in its own crate (`ttk-ra-client`), so the enclave images, which build only `relay` or `terminal`, never include it.
 
@@ -208,7 +210,6 @@ crates/core/src/
   cmw.rs                the RATS Conceptual Message Wrapper (CBOR)
   egress.rs             egress policy for peer-chosen destinations
   vsock.rs              QUIC datagram sockets over vsock (Linux)
-  bin/vsock-proxy.rs    parent-instance UDP <-> vsock proxy (Linux)
 crates/ra-server/src/
   lib.rs                crate root of `ttk_ra_server`
   attestation/          TEE providers (nitro, sev_snp, tdx, mock)
@@ -219,11 +220,16 @@ crates/ra-client/src/
   lib.rs, client.rs     `ttk_ra_client`: TtkClient, EnclaveCertVerifier
   verifier/             Evidence verification for Nitro, SEV-SNP and TDX/SGX (DCAP)
   faf.rs, seal.rs       the POST /faf request format and its HPKE sealing
-  main.rs               test `client` binary
 crates/relay/src/
-  lib.rs, main.rs       `ttk_relay` and the `relay` binary: forwards POST /faf
+  lib.rs                `ttk_relay`: forwards POST /faf
 crates/terminal/src/
-  lib.rs, main.rs       `ttk_terminal` and the `terminal` binary: last hop of POST /faf
+  lib.rs                `ttk_terminal`: last hop of POST /faf
+crates/root/src/
+  lib.rs                `ttk_root`: GET /root-attestation
+crates/executables/src/bin/
+  relay.rs, terminal.rs, s3-server.rs, root.rs      the enclave nodes
+  vsock-proxy.rs, vsock-proxy-tcp.rs                parent-instance proxies (Linux)
+  client.rs, auth-test.rs                           test-only tools
 crates/*/tests/         each crate's integration and end-to-end tests
 ```
 

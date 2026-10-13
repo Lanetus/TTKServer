@@ -12,25 +12,11 @@ categories.workspace = true
 [lib]
 name = "ttk_root"
 
-# The root node, run inside the enclave.
-[[bin]]
-name = "root"
-path = "src/main.rs"
-
-# Test CA client: attests a node, checks fresh Evidence (`POST /evidence`) and installs a
-# certificate it issues for the node's RA-TLS key (`POST /certificate`). Never in enclave images.
-[[bin]]
-name = "auth-test"
-path = "src/bin/auth-test.rs"
-required-features = ["auth-test"]
-
 [dependencies]
 ttk-ra-server.workspace = true
 ttk-core.workspace = true
 axum.workspace = true
-env_logger.workspace = true
-tokio.workspace = true
-# `auth` module and the `auth-test` bin only.
+# `auth` module only.
 base64 = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
 rand_core = { workspace = true, optional = true }
@@ -48,7 +34,7 @@ nitro = ["ttk-ra-server/nitro"]
 mock = ["ttk-ra-server/mock"]
 sev-snp = ["ttk-ra-server/sev-snp"]
 tdx = ["ttk-ra-server/tdx"]
-# The `auth` module (test certificate authority) and the `auth-test` bin.
+# The `auth` module (test certificate authority), used by the `auth-test` bin in `ttk-executables`.
 auth-test = [
     "dep:base64",
     "dep:log",
@@ -62,6 +48,7 @@ auth-test = [
 ]
 
 [dev-dependencies]
+tokio.workspace = true
 rcgen.workspace = true
 sha2.workspace = true
 ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }

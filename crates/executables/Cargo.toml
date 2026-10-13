@@ -1,0 +1,85 @@
+[package]
+name = "ttk-executables"
+description = "TTKServer executables: the enclave nodes (relay, terminal, s3-server, root), the parent-instance vsock proxies and the test-only client and auth-test tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+# The relay node, run inside the enclave.
+[[bin]]
+name = "relay"
+path = "src/bin/relay.rs"
+
+# The terminal node, run inside the enclave.
+[[bin]]
+name = "terminal"
+path = "src/bin/terminal.rs"
+
+# The S3 file node: a terminal whose `/faf` messages upload / download files in S3.
+[[bin]]
+name = "s3-server"
+path = "src/bin/s3-server.rs"
+required-features = ["s3"]
+
+# The root node, run inside the enclave.
+[[bin]]
+name = "root"
+path = "src/bin/root.rs"
+
+# Parent-instance daemon relaying QUIC between public UDP and the enclave's vsock, both ways. Linux only.
+[[bin]]
+name = "vsock-proxy"
+path = "src/bin/vsock-proxy.rs"
+
+# Parent-instance daemon forwarding TCP from the enclave's vsock to one fixed remote (e.g. S3). Linux only.
+[[bin]]
+name = "vsock-proxy-tcp"
+path = "src/bin/vsock-proxy-tcp.rs"
+
+# Command-line client for testing; the enclave images never include it.
+[[bin]]
+name = "client"
+path = "src/bin/client.rs"
+
+# Test CA client: attests a node, checks fresh Evidence (`POST /evidence`) and installs a
+# certificate it issues for the node's RA-TLS key (`POST /certificate`). Never in enclave images.
+[[bin]]
+name = "auth-test"
+path = "src/bin/auth-test.rs"
+required-features = ["auth-test"]
+
+[dependencies]
+ttk-core.workspace = true
+ttk-ra-server.workspace = true
+ttk-ra-client.workspace = true
+ttk-relay.workspace = true
+ttk-terminal.workspace = true
+ttk-root.workspace = true
+axum.workspace = true
+env_logger.workspace = true
+log.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bytes.workspace = true
+tokio-vsock.workspace = true
+
+[features]
+default = ["nitro", "mock"]
+
+nitro = ["ttk-ra-server/nitro", "ttk-relay/nitro", "ttk-terminal/nitro", "ttk-root/nitro"]
+mock = ["ttk-ra-server/mock", "ttk-relay/mock", "ttk-terminal/mock", "ttk-root/mock"]
+sev-snp = ["ttk-ra-server/sev-snp", "ttk-relay/sev-snp", "ttk-terminal/sev-snp", "ttk-root/sev-snp"]
+tdx = ["ttk-ra-server/tdx", "ttk-relay/tdx", "ttk-terminal/tdx", "ttk-root/tdx"]
+# The `s3-server` bin (`ttk-terminal` feature `s3`).
+s3 = ["ttk-terminal/s3"]
+# The `auth-test` bin (`ttk-root` feature `auth-test`).
+auth-test = ["ttk-root/auth-test"]
+
+[dev-dependencies]
+ttk-ra-server = { workspace = true, features = ["mock", "test-ca"] }
