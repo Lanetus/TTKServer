@@ -1,4 +1,4 @@
-//! Test certificate authority for attested nodes (feature `auth-test`, bin `auth-test`).
+//! Test certificate authority for attested nodes (bin `certify-server` in `ttk-executables`).
 //!
 //! Acts as a Verifier and a CA for one TTKServer node:
 //!
