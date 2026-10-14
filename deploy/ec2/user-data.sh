@@ -5,6 +5,7 @@
 # With TTK_NODE=s3-server it also installs `vsock-proxy-tcp`, through which the enclave reaches
 # the S3 endpoint of TTK_S3_REGION, and a second instance of it (vsock-proxy-imds) through which
 # the enclave gets the instance role's credentials from the instance metadata service.
+# TTK_NODE=echo runs the echo terminal (replies with each decrypted /faf message; no S3).
 #
 # Launch the instance with:
 #   - Amazon Linux 2023 (or Amazon Linux 2), on an enclave-capable type with at least 4 vCPUs
@@ -22,7 +23,7 @@
 #   vsock-proxy                 target/release/vsock-proxy, built for Linux on the same architecture
 #   vsock-proxy.service         deploy/systemd/vsock-proxy.service
 #   ttk-<node>-enclave.service  deploy/systemd/ttk-<node>-enclave.service
-#                               (s3-server runs under ttk-terminal-enclave.service)
+#                               (s3-server and echo run under ttk-terminal-enclave.service)
 #   vsock-proxy-tcp             s3-server only: target/release/vsock-proxy-tcp, like vsock-proxy
 #   vsock-proxy-tcp.service     s3-server only: deploy/systemd/vsock-proxy-tcp.service
 #   vsock-proxy-imds.service    s3-server only: deploy/systemd/vsock-proxy-imds.service
@@ -33,13 +34,14 @@
 #
 # Progress: /var/log/ttk-user-data.log (also /var/log/cloud-init-output.log).
 # Afterwards: nitro-cli describe-enclaves; journalctl -u ttk-<node>-enclave -u vsock-proxy
+#             (echo: journalctl -u ttk-terminal-enclave -u vsock-proxy)
 #             (s3-server: journalctl -u ttk-terminal-enclave -u vsock-proxy -u vsock-proxy-tcp
 #              -u vsock-proxy-imds)
 set -euo pipefail
 
 # ---- Configuration ----------------------------------------------------------------------------
 TTK_BASE_URL="https://aptrepo.move.ai/ttkserver"   # no trailing slash
-TTK_NODE=s3-server                # enclave node to run: relay or s3-server (<node> above)
+TTK_NODE=s3-server                # enclave node to run: relay, s3-server or echo (<node> above)
 # SHA-256 of the downloads; leave empty to skip the check (not recommended over plain HTTP).
 TTK_EIF_SHA256=""
 TTK_VSOCK_PROXY_SHA256=""
@@ -63,13 +65,14 @@ TTK_IMDS_VSOCK_PORT=8002
 exec > >(tee -a /var/log/ttk-user-data.log) 2>&1
 echo "==> TTKServer user data starting at $(date -Is)"
 
-# s3-server is a terminal node: it runs under the terminal's enclave unit, and needs the TCP
-# proxy to S3 alongside the UDP one.
+# s3-server and echo are terminal nodes: they run under the terminal's enclave unit; s3-server
+# also needs the TCP proxy to S3 alongside the UDP one.
 case "$TTK_NODE" in
     relay) enclave_unit="ttk-$TTK_NODE-enclave"; with_s3=0 ;;
     s3-server) enclave_unit=ttk-terminal-enclave; with_s3=1 ;;
+    echo) enclave_unit=ttk-terminal-enclave; with_s3=0 ;;
     *)
-        echo "error: unknown TTK_NODE '$TTK_NODE' (expected relay or s3-server)" >&2
+        echo "error: unknown TTK_NODE '$TTK_NODE' (expected relay, s3-server or echo)" >&2
         exit 1
         ;;
 esac

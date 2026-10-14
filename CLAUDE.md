@@ -78,12 +78,12 @@ cargo run --bin vsock-proxy-tcp -- --cid <CID> --remote s3.<region>.amazonaws.co
 cargo fmt --all && cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo deny check                              # config in deny.toml
 mdbook build docs                             # book -> docs/book; needs `cargo install mdbook-mermaid` (```mermaid blocks)
-scripts/build-eif.sh [amd64|arm64] [relay|s3-server|root]   # EIF via Docker (Dockerfile ARG NODE) -> out/ttk-<node>_v<ver>_<arch>.eif + .json (PCRs)
+scripts/build-eif.sh [amd64|arm64] [relay|s3-server|root|echo]   # EIF via Docker (Dockerfile ARG NODE) -> out/ttk-<node>_v<ver>_<arch>.eif + .json (PCRs)
 TTK_S3_BUCKET=<bucket> AWS_REGION=<region> scripts/build-eif.sh arm64 s3-server   # bakes bucket/region/TTK_S3_VSOCK_PORT (8001) + ca-certificates into the image
 deploy/systemd/vsock-proxy.service            # systemd unit for `vsock-proxy` on the parent (steps in its header)
 deploy/systemd/vsock-proxy-tcp.service        # systemd unit for `vsock-proxy-tcp` (enclave -> S3)
 deploy/systemd/vsock-proxy-imds.service       # second `vsock-proxy-tcp` (--allow-imds, vsock 8002 -> 169.254.169.254:80): instance role credentials for s3-server
-deploy/ec2/user-data.sh                       # EC2 user data: installs nitro-cli, downloads EIF/vsock-proxy/units over HTTP, starts both (TTK_NODE=s3-server: also vsock-proxy-tcp to s3.<TTK_S3_REGION> and vsock-proxy-imds, enclave under ttk-terminal-enclave.service)
+deploy/ec2/user-data.sh                       # EC2 user data: installs nitro-cli, downloads EIF/vsock-proxy/units over HTTP, starts both (TTK_NODE=s3-server: also vsock-proxy-tcp to s3.<TTK_S3_REGION> and vsock-proxy-imds, enclave under ttk-terminal-enclave.service; TTK_NODE=echo: terminal unit, no S3 proxies)
 deploy/systemd/ttk-{relay,terminal}-enclave.service  # systemd units running the node EIF via nitro-cli (CID 16 / 17, 2 vCPU, 1024 MiB; /etc/default/ttk-<node>-enclave)
 ```
 

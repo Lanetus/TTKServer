@@ -2,13 +2,16 @@
 # Builds a TTKServer Nitro Enclave image file (EIF) locally with Docker, mirroring the
 # "Build EIF" steps of .github/workflows/build.yml.
 #
-# Usage: scripts/build-eif.sh [amd64|arm64] [relay|s3-server|root]
+# Usage: scripts/build-eif.sh [amd64|arm64] [relay|s3-server|root|echo]
 #        (defaults: this machine's architecture, and the relay node)
 #
 # s3-server (a terminal storing files in S3) needs TTK_S3_BUCKET and AWS_REGION, which are baked
 # into the image (so they are part of the measurements); TTK_S3_VSOCK_PORT (default 8001) must
 # match the parent's vsock-proxy-tcp, and TTK_IMDS_VSOCK_PORT (default 8002; empty = no instance
 # role credentials) the parent's vsock-proxy-imds.
+#
+# echo is a terminal replying to each /faf message with the decrypted message unchanged (for
+# testing a route end to end); it needs no extra configuration.
 #
 # TTK_DEBUG=1 builds a debug image (suffix _debug): RUST_LOG=info and
 # TTK_ALLOW_MOCK_ATTESTATION=1 baked in, for running with `nitro-cli run-enclave --debug-mode`
@@ -27,7 +30,7 @@ case "${1:-$(uname -m)}" in
     amd64 | x86_64) arch=amd64 ;;
     arm64 | aarch64) arch=arm64 ;;
     -h | --help)
-        sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *)
@@ -38,9 +41,9 @@ esac
 platform="linux/$arch"
 
 case "${2:-relay}" in
-    relay | s3-server | root) node="${2:-relay}" ;;
+    relay | s3-server | root | echo) node="${2:-relay}" ;;
     *)
-        echo "error: unknown node '$2' (expected relay, s3-server or root)" >&2
+        echo "error: unknown node '$2' (expected relay, s3-server, root or echo)" >&2
         exit 2
         ;;
 esac
