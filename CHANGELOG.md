@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.5] - 2026-10-14
+
+### Fixed
+- `vsock-proxy` and `vsock-proxy-tcp` now install their `SIGTERM` / `SIGINT` handlers before reporting ready, so a stop signal sent right after startup no longer kills them with a failure status.
+
 ## [6.5.4] - 2026-10-14
 
 No user-facing changes.
@@ -528,7 +533,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.5.4...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.5.5...HEAD
+[6.5.5]: https://github.com/Lanetus/TTKServer/compare/v6.5.4...v6.5.5
 [6.5.4]: https://github.com/Lanetus/TTKServer/compare/v6.5.3...v6.5.4
 [6.5.3]: https://github.com/Lanetus/TTKServer/compare/v6.5.2...v6.5.3
 [6.5.2]: https://github.com/Lanetus/TTKServer/compare/v6.5.1...v6.5.2
