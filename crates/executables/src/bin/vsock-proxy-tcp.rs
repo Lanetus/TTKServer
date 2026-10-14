@@ -14,7 +14,7 @@
 //!
 //! The proxy only moves opaque bytes: TLS terminates inside the enclave, end to end with the
 //! remote. It runs in the foreground; run it as a daemon under a service manager such as
-//! systemd. Linux only.
+//! systemd. `SIGTERM` / `SIGINT` stop it cleanly. Linux only.
 
 use ttk_core::vsock_proxy_tcp::{parse_tcp_proxy_args, TcpProxyConfig, TCP_PROXY_USAGE};
 
@@ -34,13 +34,17 @@ fn parse_args() -> TcpProxyConfig {
     }
 }
 
-/// Entry point for the `vsock-proxy-tcp` binary.
+/// Entry point for the `vsock-proxy-tcp` binary: runs until the listener fails (an error) or the
+/// process gets `SIGTERM` / `SIGINT` (a clean exit).
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
     let config = parse_args();
-    imp::run(config).await
+    tokio::select! {
+        result = imp::run(config) => result,
+        () = ttk_executables::shutdown::shutdown_signal() => Ok(()),
+    }
 }
 
 /// Entry point for the `vsock-proxy-tcp` binary on platforms without vsock.
