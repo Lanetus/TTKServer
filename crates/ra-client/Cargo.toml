@@ -35,9 +35,11 @@ x509-parser.workspace = true
 [dev-dependencies]
 # Attested servers for the end-to-end tests, with every attestation provider compiled in.
 ttk-ra-server = { workspace = true, features = ["mock", "sev-snp", "tdx"] }
-ttk-relay.workspace = true
-ttk-storage.workspace = true
-ttk-root.workspace = true
+# Path only (no version): these depend on `ttk-ra-client`, so `cargo package`/`publish`
+# must strip them from the published manifest to break the dev-dependency cycle.
+ttk-relay = { path = "../relay", default-features = false }
+ttk-storage = { path = "../storage", default-features = false }
+ttk-root = { path = "../root", default-features = false }
 aws-nitro-enclaves-nsm-api.workspace = true
 base64.workspace = true
 rcgen.workspace = true
