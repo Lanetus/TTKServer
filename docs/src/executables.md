@@ -4,7 +4,7 @@ Crate reference for `crates/executables`. For the system-level picture, see the 
 
 Other crates: [`ttk-core`](core.md) · [`ttk-ra-server`](ra-server.md) · [`ttk-ra-client`](ra-client.md) · [`ttk-relay`](relay.md) · [`ttk-root`](root.md) · [`ttk-storage`](storage.md)
 
-> **Role:** **every binary** of the workspace (`src/bin/<name>.rs`); all other crates are libraries. Each bin is a thin entry point over a library. The crate's own small library (`ttk_executables`) holds only what several bins share: the `faf_client` core of the two test clients.
+> **Role:** **every binary** of the workspace (`src/bin/<name>.rs`); all other crates are libraries. Each bin is a thin entry point over a library. The crate's own small library (`ttk_executables`) holds only what several bins share: the `faf_client` core of the two test clients, and `shutdown`, the signal handling of the two proxies.
 
 ## 1. Binaries
 
@@ -14,14 +14,14 @@ Other crates: [`ttk-core`](core.md) · [`ttk-ra-server`](ra-server.md) · [`ttk-
 | `root` | Inside the enclave | `ttk_root::run()` | Root node (accepted images) |
 | `s3-server` | Inside the enclave | `Terminal` + `FileService<S3Store>` | File service terminal storing in S3. `required-features = ["s3"]` |
 | `local-mem-server` | Dev machine / tests | `Terminal` + `FileService<MemoryStore>` | File service terminal, in memory, nothing persisted |
-| `echo` | Dev machine / tests | `Terminal` + `Echo` (defined in the bin) | Terminal replying with the decrypted message unchanged |
-| `vsock-proxy` | Parent EC2 instance (Linux) | `ttk_core::{vsock, vsock_proxy, egress}` | Bridges public UDP ↔ enclave vsock, both directions |
+| `echo` | Inside the enclave, or dev machine | `Terminal` + `Echo` (defined in the bin) | Terminal replying with the decrypted message unchanged (end-to-end route tests) |
+| `vsock-proxy` | Parent EC2 instance (Linux) | `ttk_core::{vsock, vsock_proxy, egress}` | Bridges public UDP ↔ enclave vsock, both directions; resolves host names for the enclave |
 | `vsock-proxy-tcp` | Parent EC2 instance (Linux) | `ttk_core::{vsock_proxy_tcp, egress}` | Enclave vsock → one fixed TCP remote (S3, or the instance metadata service) |
 | `client` | Dev machine / tests only | `faf_client` + `ttk_core::file_message` | Uploads / downloads a file through two relays to a file service terminal |
 | `client-m` | Dev machine / tests only | `faf_client` | Sends a text message through two relays (e.g. to `echo`) |
 | `certify-server` | Dev machine / tests only | `ttk_root::auth::authorize` | Test CA: attests a node and installs a CA-issued certificate |
 
-Enclave images (`Dockerfile`, `ARG NODE`) are built for `relay`, `s3-server` or `root`; the test-only tools are never included. All nodes read `Listener::from_env()` (`TTK_USE_UDP`, `TTK_LISTEN_ADDR`, `TTK_VSOCK_PORT`) and log through `env_logger` (`RUST_LOG`).
+Enclave images (`Dockerfile`, `ARG NODE`, Nitro feature only) are built for `relay`, `s3-server`, `root` or `echo`; the test-only tools are never included. All nodes read `Listener::from_env()` (`TTK_USE_UDP`, `TTK_LISTEN_ADDR`, `TTK_VSOCK_PORT`) and log through `env_logger` (`RUST_LOG`).
 
 ```mermaid
 flowchart LR
@@ -37,6 +37,7 @@ flowchart LR
         cm["client-m"]
         cert["certify-server"]
         fc["faf_client (lib)"]
+        sd["shutdown (lib)"]
     end
     relay --> R["ttk-relay"]
     root --> RT["ttk-root"]
@@ -44,6 +45,7 @@ flowchart LR
     s3 & mem --> ST["ttk-storage"]
     s3 & mem & echo --> RS["ttk-ra-server<br/>(Terminal)"]
     vp & vpt --> C["ttk-core"]
+    vp & vpt --> sd
     client & cm --> fc --> RC["ttk-ra-client"]
 ```
 
@@ -117,7 +119,7 @@ If neither CA file exists, a new root CA is created and written (the key with pr
 
 ## 4. Parent-instance proxies
 
-Both are Linux only (they error out elsewhere), run in the foreground under systemd, and only move opaque bytes: TLS ends inside the enclave.
+Both are Linux only (they error out elsewhere), run in the foreground under systemd, and only move opaque bytes: TLS ends inside the enclave. On `SIGTERM` / `SIGINT` they return from `main` (`ttk_executables::shutdown::shutdown_signal`), so systemd sees a clean exit; a failing listener is an error exit.
 
 **`vsock-proxy`** (QUIC):
 
@@ -133,7 +135,8 @@ Both are Linux only (they error out elsewhere), run in the foreground under syst
 |---|---|
 | Inbound | One vsock stream to the enclave per client UDP address; framed datagrams both ways |
 | Outbound | Accepts vsock from the enclave CID only; reads the destination header (within 5 s), applies `classify_hop_address`, sends datagrams from a dedicated UDP socket, frames replies back |
-| Limits | Peers idle for 120 s are dropped; at most 4096 peers per direction; 256 datagrams queued per peer |
+| DNS | A connection on the outbound port may instead start with a resolve request (the enclave has no DNS): the parent looks the name up (5 s) and answers the addresses `classify_hop_address` permits (`ttk_core::vsock::answer_resolve`), then closes it |
+| Limits | Peers idle for 120 s are dropped; at most 4096 (`MAX_VSOCK_PEERS`, the enclave's own cap) peers per direction; 256 datagrams queued per peer |
 
 **`vsock-proxy-tcp`** (TCP, fixed remote):
 
@@ -158,3 +161,4 @@ Features `nitro`, `mock` (default), `sev-snp`, `tdx` forward to `ttk-ra-server`,
 | `crates/executables/tests/auth_test_bin_tests.rs` | `certify-server` against a root node trusting a throwaway CA: installs a certificate, writes the chain, mock opt-in, a created CA is refused, unusable CA, usage |
 | `crates/executables/tests/node_bin_tests.rs` | `relay`, `root` (and `s3-server`) exit with an error on an invalid listener configuration |
 | `crates/executables/tests/vsock_proxy_bin_tests.rs` | `vsock-proxy` / `vsock-proxy-tcp` usage, argument errors, refusal to run without vsock off Linux |
+| `crates/executables/tests/vsock_proxy_relay_tests.rs` | Both proxies against a test enclave over vsock loopback (skipped without it): inbound and outbound relaying, DNS for the enclave, the egress policy, malformed and foreign connections, bind failures, clean shutdown |

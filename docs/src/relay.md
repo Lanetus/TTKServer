@@ -54,7 +54,7 @@ flowchart TD
     F --> G{"pool has open client?"}
     G -- yes --> H["post_json(/faf, rest)"]
     H -- "fails, connection closed" --> I
-    G -- no --> I["resolve, keep addresses may_contact() allows,<br/>connect_to_node_filtered + attest,<br/>insert into pool (≤ 64)"]
+    G -- no --> I["resolve_node (vsock: on the parent),<br/>keep addresses may_contact() allows,<br/>connect_to_node_filtered + attest,<br/>insert into pool (≤ 64)"]
     I --> H2["post_json(/faf, rest)"]
     H & H2 --> J{"200 with UTF-8 body<br/>within 10 s?"}
     J -- yes --> OK["200 + next hop's body"]
@@ -78,7 +78,7 @@ flowchart TD
 |---|---|---|
 | `Public` | allowed | allowed |
 | `Private` (loopback, RFC 1918, `100.64/10`, `fc00::/7`) | refused | allowed |
-| `Forbidden` (link-local incl. metadata, multicast, broadcast, unspecified, `0/8`) | refused | refused |
+| `Forbidden` (link-local incl. metadata, `fd00:ec2::/64`, multicast, broadcast, unspecified, `0/8`, reserved and documentation ranges, NAT64 / 6to4 / Teredo / IPv4-compatible IPv6) | refused | refused |
 
 Pool: verified connections keyed by `(host, port)`; closed ones are evicted on lookup; when full, a one-off connection is used and closed in the background; a pooled connection that fails after closing is retried once on a new connection.
 
@@ -92,7 +92,7 @@ Pool: verified connections keyed by `(host, port)`; closed ones are evicted on l
 | `TTK_ALLOW_MOCK_ATTESTATION` | unset | `1` = accept mock next hops |
 | `TTK_ALLOW_PRIVATE_NEXT_HOPS` | unset | `1` = accept loopback/private next hops |
 
-On a vsock listener the relay switches its transport to `Vsock { cid, port }` and calls `set_root_transport` with the same transport, so the accepted-images fetch from the root servers also goes through `vsock-proxy`. On UDP it forwards over UDP.
+On a vsock listener the relay switches its transport to `Vsock { cid, port }` and calls `set_root_transport` with the same transport, so the accepted-images fetch from the root servers also goes through `vsock-proxy`. Host names (next hops given by name, the root servers) are then resolved by the parent: `resolve_node` sends a resolve request on the same outbound port, and `vsock-proxy` answers only the addresses its own egress policy permits; the relay still applies `may_contact` to them, and each must pass RA-TLS. On UDP it forwards over UDP and resolves with the system resolver.
 
 ## 6. Features and tests
 
