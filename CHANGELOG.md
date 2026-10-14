@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.0] - 2026-10-14
+
+### Added
+- The `root` node can be deployed from the EC2 user data (`TTK_NODE=root`), with its own `ttk-root-enclave.service` systemd unit (default CID 18) and no S3 proxies.
+
+### Changed
+- Deployment files moved from `deploy/` to `deploy/nitro/` (EC2 user data and the systemd units); update any download URLs or paths.
+- The root servers are now `a.root.ttk-servers.net` and `b.root.ttk-servers.net`.
+- The root image allowlist (`crates/root/src/image_allowlist.txt`) was updated with new accepted measurements.
+
 ## [6.3.0] - 2026-10-14
 
 ### Added
@@ -497,7 +507,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.3.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.4.0...HEAD
+[6.4.0]: https://github.com/Lanetus/TTKServer/compare/v6.3.0...v6.4.0
 [6.3.0]: https://github.com/Lanetus/TTKServer/compare/v6.2.1...v6.3.0
 [6.2.1]: https://github.com/Lanetus/TTKServer/compare/v6.2.0...v6.2.1
 [6.2.0]: https://github.com/Lanetus/TTKServer/compare/v6.1.0...v6.2.0
