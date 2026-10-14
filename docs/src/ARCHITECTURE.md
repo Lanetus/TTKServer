@@ -318,7 +318,7 @@ sequenceDiagram
 
 | Rule | Detail |
 |---|---|
-| Trusted root | Only the built-in **TTK root CA** (`ttk_core::TTK_ROOT_CA_PEM`, `crates/core/src/TTK_Root_CA.pem`); intermediates it issued may be sent after the leaf. `Server::set_trusted_roots` overrides it (tests, private CAs) |
+| Trusted root | Only the built-in **TTK root CA** (`ttk_core::TTK_ROOT_CA_PEM`, `../../crates/core/src/certs/TTK_Root_CA.pem`); intermediates it issued may be sent after the leaf. `Server::set_trusted_roots` overrides it (tests, private CAs) |
 | Same identity | The new leaf must have the current SubjectPublicKeyInfo and attestation extension byte for byte, so the evidence binding still holds and RA-TLS clients verify the node exactly as before |
 | One time | The certificate is replaced at most once; then `POST /evidence` and `POST /certificate` answer `404`, so no further evidence is generated |
 | Per connection | `CertificatePhase` is read before each TLS handshake; only connections that negotiated the CA-issued certificate are served. Connections opened before the replacement stay locked |
@@ -590,7 +590,7 @@ flowchart LR
 | `scripts/build-eif.sh` | Produces the EIF and its PCR measurements. `s3-server` requires `TTK_S3_BUCKET` and `AWS_REGION` (part of the measurements). `TTK_DEBUG=1` builds a `_debug` image (logs at `info`, accepts mock next hops); never deploy it |
 | `crates/root/src/nitro_image_allowlist.txt` | PCR0 of each released relay/terminal image, served by the root nodes |
 | `crates/ra-client/src/trust/root_signer_pcr8.txt` | PCR8 pins for the root servers' images |
-| `crates/core/src/TTK_Root_CA.pem` | The TTK root CA every node trusts for `POST /certificate` (its key is kept outside the repository) |
+| `../../crates/core/src/certs/TTK_Root_CA.pem` | The TTK root CA every node trusts for `POST /certificate` (its key is kept outside the repository) |
 | `deploy/ec2/user-data.sh` | EC2 bootstrap: installs `nitro-cli`, downloads the EIF / `vsock-proxy` / units (with optional SHA-256 checks), starts them. `TTK_NODE` = `relay` or `s3-server` (the latter also installs `vsock-proxy-tcp` to `s3.<TTK_S3_REGION>.amazonaws.com:443` and `vsock-proxy-imds`, and runs under `ttk-terminal-enclave.service`) |
 | `deploy/systemd/ttk-relay-enclave.service` | Runs the relay EIF via `nitro-cli` (CID 16, 2 vCPU, 1024 MiB; overrides in `/etc/default/ttk-relay-enclave`) |
 | `deploy/systemd/ttk-terminal-enclave.service` | Runs the terminal (`s3-server`) EIF (CID 17; `/etc/default/ttk-terminal-enclave`) |

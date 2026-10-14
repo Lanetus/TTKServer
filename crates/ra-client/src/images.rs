@@ -1,16 +1,16 @@
 //! The accepted enclave images (RFC 9334 reference values), fetched from the root servers.
 //!
-//! The root nodes (`ttk_root`, at [`ROOT_SERVERS`]) publish the PCR0 values of the verified
-//! enclave images at [`ROOT_ATTESTATION_PATH`]. [`RootImageTrustStore`] fetches that list over
-//! RA-TLS; each root server's own attestation is checked against the PCR8 values pinned in
-//! [`RootSignerTrustStore`], since the PCR0 allowlist is not known yet.
+//! The root nodes (`ttk_root`, at [`ROOT_SERVERS`]) publish the image measurements of the
+//! verified enclave images at [`ROOT_ATTESTATION_PATH`]. [`RootImageTrustStore`] fetches that
+//! list over RA-TLS; each root server's own attestation is checked against the signers pinned in
+//! [`RootSignerTrustStore`], since the image allowlist is not known yet.
 //!
 //! An [`EnclaveCertVerifier`] without an explicit image trust store fetches the list lazily,
-//! the first time it appraises non-debug Nitro Evidence, and shares it process-wide.
+//! the first time it appraises non-debug Evidence, and shares it process-wide.
 
-use crate::trust::{ImageTrustStore, RootSignerTrustStore};
 use crate::{connect_to_node, parse_relay_server};
 use crate::{ClientTransport, EnclaveCertVerifier};
+use crate::{ImageTrustStore, RootSignerTrustStore};
 use log::{error, info, warn};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -35,11 +35,11 @@ pub fn set_root_transport(transport: ClientTransport) {
     *ROOT_TRANSPORT.lock().unwrap_or_else(|e| e.into_inner()) = transport;
 }
 
-/// The accepted enclave images (PCR0 values), as published by a root server.
+/// The accepted enclave images (image measurements), as published by a root server.
 #[derive(Debug, Clone, Default)]
 pub struct RootImageTrustStore {
-    /// PCR0 values (SHA-384 of the enclave image file) of the verified Nitro enclave images.
-    pub nitro_image_allowlist: Vec<Vec<u8>>,
+    /// Image measurements of the verified enclave images.
+    pub image_allowlist: Vec<Vec<u8>>,
 }
 
 /// Fetching from the root servers.
@@ -58,7 +58,7 @@ impl RootImageTrustStore {
                 Ok(Ok(images)) => {
                     info!(
                         "Fetched {} accepted enclave images from root server {root}",
-                        images.nitro_image_allowlist.len()
+                        images.image_allowlist.len()
                     );
                     return Ok(images);
                 }
@@ -91,13 +91,11 @@ impl RootImageTrustStore {
             return Err(format!("{ROOT_ATTESTATION_PATH} answered {}", response.status).into());
         }
         let body: RootAttestation = serde_json::from_slice(&response.body)?;
-        let nitro_image_allowlist = body.pcr0_values()?;
-        if nitro_image_allowlist.is_empty() {
+        let image_allowlist = body.measurement_values()?;
+        if image_allowlist.is_empty() {
             return Err("the root server lists no accepted images".into());
         }
-        Ok(Self {
-            nitro_image_allowlist,
-        })
+        Ok(Self { image_allowlist })
     }
 }
 
@@ -108,7 +106,7 @@ impl ImageTrustStore for RootImageTrustStore {
     /// called from within a Tokio runtime.
     ///
     /// Fails closed: if no root server answers, returns an empty list, which rejects every
-    /// non-debug Nitro image.
+    /// non-debug image.
     fn builtin() -> Self {
         let transport = *ROOT_TRANSPORT.lock().unwrap_or_else(|e| e.into_inner());
         let fetched = std::thread::spawn(move || {
@@ -132,14 +130,14 @@ impl ImageTrustStore for RootImageTrustStore {
         }
     }
 
-    /// The fetched PCR0 values.
-    fn nitro_image_allowlist(&self) -> &[Vec<u8>] {
-        &self.nitro_image_allowlist
+    /// The fetched image measurements.
+    fn image_allowlist(&self) -> &[Vec<u8>] {
+        &self.image_allowlist
     }
 }
 
 /// Time after a failed fetch before an [`EnclaveCertVerifier`] tries the root servers again; until
-/// then, the empty list rejects every non-debug Nitro image.
+/// then, the empty list rejects every non-debug image.
 pub const ROOT_FETCH_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The process-wide list fetched by [`RootImageTrustStore::builtin`], and when it was fetched.
@@ -150,7 +148,7 @@ static FETCHED: Mutex<Option<(Arc<RootImageTrustStore>, Instant)>> = Mutex::new(
 fn fetched() -> Arc<RootImageTrustStore> {
     let mut cached = FETCHED.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((images, at)) = cached.as_ref() {
-        if !images.nitro_image_allowlist.is_empty() || at.elapsed() < ROOT_FETCH_RETRY_INTERVAL {
+        if !images.image_allowlist.is_empty() || at.elapsed() < ROOT_FETCH_RETRY_INTERVAL {
             return images.clone();
         }
     }
@@ -172,8 +170,8 @@ impl ImageTrustStore for LazyRootImages {
         Self::default()
     }
 
-    /// The fetched PCR0 values, fetching them on first use.
-    fn nitro_image_allowlist(&self) -> &[Vec<u8>] {
-        self.0.get_or_init(fetched).nitro_image_allowlist()
+    /// The fetched image measurements, fetching them on first use.
+    fn image_allowlist(&self) -> &[Vec<u8>] {
+        self.0.get_or_init(fetched).image_allowlist()
     }
 }

@@ -44,8 +44,8 @@ use x509_parser::prelude::*;
 ///    (issuer = subject), correctly self-signed. A CA-issued certificate's signature is not
 ///    checked: no CA is trusted here, the issuer only matters to Web PKI clients;
 /// 2. the evidence: vendor signature chain up to a root in the [`TrustStore`] (see
-///    [`crate::verifier`]), that the TEE is not in debug mode, and for Nitro that the enclave
-///    image's PCR0 is in [`ImageTrustStore::nitro_image_allowlist`];
+///    [`crate::verifier`]), that the TEE is not in debug mode, and that its image measurement
+///    ([`verifier::image_measurement`]) is in [`ImageTrustStore::image_allowlist`];
 /// 3. the binding: the evidence's report data equals the SHA-256 of the certificate's
 ///    SubjectPublicKeyInfo;
 /// 4. any expected measurements configured with

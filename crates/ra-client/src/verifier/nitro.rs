@@ -2,8 +2,7 @@
 //! certificate chains to the AWS Nitro Enclaves root.
 
 use super::{
-    chain_algorithms, verify_ecdsa, AnyKeyUsage, ImageTrustStore, Policy, TeeKind, TrustStore,
-    VerifiedEvidence,
+    chain_algorithms, verify_ecdsa, AnyKeyUsage, Policy, TeeKind, TrustStore, VerifiedEvidence,
 };
 use ciborium::Value;
 use rustls_pki_types::{CertificateDer, UnixTime};
@@ -58,13 +57,12 @@ impl AttestationDocument {
     }
 }
 
-/// Verifies the Nitro attestation document `doc_bytes` at time `now`; a non-debug enclave's
-/// image must be in `images`.
+/// Verifies the Nitro attestation document `doc_bytes` at time `now`. The image is checked by
+/// [`verify_evidence`](super::verify_evidence), like every TEE's.
 pub fn verify(
     doc_bytes: &[u8],
     now: UnixTime,
     trust: &TrustStore,
-    images: &dyn ImageTrustStore,
     policy: Policy,
 ) -> Result<VerifiedEvidence, String> {
     let cose = CoseSign1Parts::parse(doc_bytes)?;
@@ -83,10 +81,6 @@ pub fn verify(
 
     // Debug-mode enclaves report all-zero PCRs.
     let debug = doc.pcrs.get(&0).is_some_and(|p| p.iter().all(|b| *b == 0));
-    // A debug enclave's image cannot be identified; `verify_evidence` rejects it by policy.
-    if !debug {
-        check_image_allowed(&doc, images)?;
-    }
     let measurements = doc
         .pcrs
         .iter()
@@ -102,29 +96,6 @@ pub fn verify(
         nitro: Some(doc),
     })
 }
-
-/// Checks that the image's PCR (by default PCR0, the SHA-384 of the enclave image file) is in
-/// the allowlist of `images`.
-fn check_image_allowed(
-    doc: &AttestationDocument,
-    images: &dyn ImageTrustStore,
-) -> Result<(), String> {
-    let index = images.nitro_pcr_index();
-    let pcr = doc
-        .pcrs
-        .get(&index)
-        .ok_or(format!("attestation document has no PCR{index}"))?;
-    if images.nitro_image_allowlist().iter().any(|p| p == pcr) {
-        return Ok(());
-    }
-    Err(format!(
-        "enclave image PCR{index} {} is not in the list of verified images",
-        crate::hex_encode(pcr)
-    ))
-}
-
-/// Parser of the Nitro image allowlist format (defined in [`crate::trust`]).
-pub use crate::trust::parse_image_allowlist;
 
 /// `module_id` the server's mock provider puts in its documents.
 const MOCK_MODULE_ID: &str = "aws-nitro-enclaves-mock";

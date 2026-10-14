@@ -77,10 +77,10 @@ TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4455 cargo run --release --bin root
 ```
 
-The `root` node (crate `ttk-root`) serves `GET /root-attestation`, a JSON list of the accepted enclave image checksums (PCR0, the SHA-384 of each EIF), taken from its built-in `FileImageTrustStore` (`crates/root/src/nitro_image_allowlist.txt`). Clients (`ttk-ra-client`'s `RootImageTrustStore`) fetch this list from the root servers (`a.ttk-server.net`, `b.ttk-server.net`) and accept only the images in it; a root server's own enclave is checked against the PCR8 (EIF signing certificate) values pinned in `crates/ra-client/src/trust/root_signer_pcr8.txt`:
+The `root` node (crate `ttk-root`) serves `GET /root-attestation`, a JSON list of the accepted enclave image measurements, taken from its built-in `FileImageTrustStore` (`crates/root/src/image_allowlist.txt`). The list covers every TEE: Nitro PCR0 (the SHA-384 of the EIF), SEV-SNP MEASUREMENT, TDX SHA-384(MRTD ‖ RTMR0 ‖ RTMR1 ‖ RTMR2) and SGX MRENCLAVE (`ttk_ra_client::verifier::image_measurement`). Clients (`ttk-ra-client`'s `RootImageTrustStore`) fetch this list from the root servers (`a.ttk-server.net`, `b.ttk-server.net`) and reject non-debug Evidence whose image is not in it. A root server's own enclave is checked against its signer instead (Nitro PCR8, the EIF signing certificate; SEV-SNP ID key digest; SGX MRSIGNER; no TDX root is accepted), pinned in `crates/core/src/certs/root_signer_allowlist.txt`:
 
 ```json
-{ "hash_algorithm": "SHA384", "pcr0": ["7807833a90cc86f5…"] }
+{ "measurements": ["7807833a90cc86f5…"] }
 ```
 
 Both listen on vsock port `TTK_VSOCK_PORT` (default `5000`, Linux only) unless `TTK_USE_UDP=1`, in which case they listen on UDP `TTK_LISTEN_ADDR` (default `0.0.0.0:4433`). From an enclave, the relay reaches next hops through the parent's `vsock-proxy` at vsock `TTK_PARENT_CID`:`TTK_OUTBOUND_VSOCK_PORT` (default `3:5001`).

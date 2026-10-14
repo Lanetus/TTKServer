@@ -1,5 +1,5 @@
 //! TTKServer root node: an attested [`ttk_ra_server`] server that publishes the checksums of the
-//! accepted enclave images, the reference values a Verifier appraises Nitro Evidence against
+//! accepted enclave images, the reference values a Verifier appraises Evidence against
 //! (RFC 9334).
 //!
 //! | Route                    | Response                                                        |
@@ -14,8 +14,8 @@
 //! [`ttk_ra_server::router`].
 //! Root nodes must therefore be authorized before the nodes and clients fetching their images.
 //!
-//! The checksums are the Nitro image allowlist built into this crate
-//! (`nitro_image_allowlist.txt`, served by [`FileImageTrustStore`]); clients fetch them into
+//! The checksums are the image allowlist built into this crate (`image_allowlist.txt`, served
+//! by [`FileImageTrustStore`]); clients fetch them into
 //! their own [`ImageTrustStore`] and check Evidence against them. Clients reach the root node
 //! over RA-TLS, so the list is bound to an attested enclave.
 
@@ -29,36 +29,36 @@ use ttk_core::image_trust::{parse_image_allowlist, ImageTrustStore};
 pub use ttk_core::image_trust::{RootAttestation, ROOT_ATTESTATION_PATH};
 use ttk_ra_server::server::{BoxError, Listener, Server};
 
-/// PCR0 values (enclave image checksums) of the verified Nitro enclave images.
-const NITRO_IMAGE_ALLOWLIST: &str = include_str!("nitro_image_allowlist.txt");
+/// Image measurements (enclave image checksums) of the verified enclave images.
+const IMAGE_ALLOWLIST: &str = include_str!("image_allowlist.txt");
 
 /// The accepted enclave images, read from an allowlist file (see [`parse_image_allowlist`]).
 #[derive(Debug, Clone)]
 pub struct FileImageTrustStore {
-    /// PCR0 values (SHA-384 of the enclave image file) of the verified Nitro enclave images.
-    pub nitro_image_allowlist: Vec<Vec<u8>>,
+    /// Image measurements of the verified enclave images.
+    pub image_allowlist: Vec<Vec<u8>>,
 }
 
 /// Construction from allowlist text.
 impl FileImageTrustStore {
-    /// Parses allowlist `text` (one PCR0 per line).
+    /// Parses allowlist `text` (one image measurement per line).
     pub fn parse(text: &str) -> Result<Self, String> {
         Ok(Self {
-            nitro_image_allowlist: parse_image_allowlist(text)?,
+            image_allowlist: parse_image_allowlist(text)?,
         })
     }
 }
 
 /// The allowlist file built into this crate.
 impl ImageTrustStore for FileImageTrustStore {
-    /// The images of the built-in `nitro_image_allowlist.txt`.
+    /// The images of the built-in `image_allowlist.txt`.
     fn builtin() -> Self {
-        Self::parse(NITRO_IMAGE_ALLOWLIST).expect("built-in nitro_image_allowlist.txt is invalid")
+        Self::parse(IMAGE_ALLOWLIST).expect("built-in image_allowlist.txt is invalid")
     }
 
-    /// The parsed PCR0 values.
-    fn nitro_image_allowlist(&self) -> &[Vec<u8>] {
-        &self.nitro_image_allowlist
+    /// The parsed image measurements.
+    fn image_allowlist(&self) -> &[Vec<u8>] {
+        &self.image_allowlist
     }
 }
 

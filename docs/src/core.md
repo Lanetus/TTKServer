@@ -40,8 +40,8 @@ flowchart LR
 | `crates/core/src/vsock.rs` | quinn `AsyncUdpSocket`s over vsock, their framing helpers, and TCP-over-vsock forwarding (Linux) |
 | `crates/core/src/vsock_proxy.rs` | `vsock-proxy` usage text, defaults and argument parsing (platform independent, so `tests/` can reach it) |
 | `crates/core/src/vsock_proxy_tcp.rs` | `vsock-proxy-tcp` usage text, defaults and argument parsing |
-| `crates/core/src/mock_nitro_root.der` | Mock root CA certificate (its key lives in `ttk-ra-server`) |
-| `crates/core/src/TTK_Root_CA.pem` | The TTK root CA: the only root a CA-issued RA-TLS certificate may chain to |
+| `../../crates/core/src/certs/mock_nitro_root.der` | Mock root CA certificate (its key lives in `ttk-ra-server`) |
+| `../../crates/core/src/certs/TTK_Root_CA.pem` | The TTK root CA: the only root a CA-issued RA-TLS certificate may chain to |
 
 ## 2. Public API
 
