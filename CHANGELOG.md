@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.0] - 2026-10-14
+
+### Added
+- Image trust now covers every non-debug TEE, not only Nitro: `verify_evidence` checks the image measurement for Nitro (`pcr0`, or `pcr8` for signers), SEV-SNP (`measurement` / `id_key_digest`), TDX (SHA-384 of `mrtd` and `rtmr0..2`) and SGX (`mrenclave` / `mrsigner`). `RootSignerTrustStore` moved to `ttk-core`.
+
+### Changed
+- **BREAKING:** `GET /root-attestation` on the `root` node now returns `{"measurements": [hex...]}` instead of the Nitro-specific list.
+- **BREAKING:** `ttk_ra_client::verifier::nitro::verify` no longer takes an image store; image checks happen in `verify_evidence`.
+- **BREAKING:** SEV-SNP and TDX images not on the allowlist are now rejected.
+- Image allowlists accept 32- or 48-byte digests (64 or 96 hex characters per line). Allowlist files were renamed to `crates/root/src/image_allowlist.txt` and `crates/core/src/certs/root_signer_allowlist.txt`; the bundled certificates moved to `crates/core/src/certs/`.
+
 ## [6.2.1] - 2026-10-14
 
 ### Security
@@ -486,7 +497,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.2.1...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.3.0...HEAD
+[6.3.0]: https://github.com/Lanetus/TTKServer/compare/v6.2.1...v6.3.0
 [6.2.1]: https://github.com/Lanetus/TTKServer/compare/v6.2.0...v6.2.1
 [6.2.0]: https://github.com/Lanetus/TTKServer/compare/v6.1.0...v6.2.0
 [6.1.0]: https://github.com/Lanetus/TTKServer/compare/v6.0.1...v6.1.0
