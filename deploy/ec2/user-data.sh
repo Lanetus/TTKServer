@@ -49,7 +49,7 @@ TTK_VSOCK_PROXY_TCP_SHA256=""   # s3-server only
 
 TTK_ENCLAVE_CID=16
 TTK_ENCLAVE_CPUS=2
-TTK_ENCLAVE_MEMORY=4096       # MiB; raise it if nitro-cli reports the EIF needs more
+TTK_ENCLAVE_MEMORY=4096       # MiB; at least 4096 (worst case of the server's request limits); raise it if nitro-cli reports the EIF needs more
 TTK_ENCLAVE_EXTRA_ARGS=""     # e.g. --debug-mode (debug only: zeroes PCRs)
 TTK_RELAY_LISTEN=0.0.0.0:443
 

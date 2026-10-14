@@ -52,7 +52,7 @@ fn rejects_invalid_entries_with_their_line_number() {
     let not_hex = format!("{}zz", "ab".repeat(47));
     let multibyte = format!("{}é", "a".repeat(94));
     for bad in [short.as_str(), &long, &not_hex, &multibyte] {
-        let error = parse_image_allowlist(&format!("{}\n{bad}\n", pcr_hex(0))).unwrap_err();
+        let error = parse_image_allowlist(&format!("{}\n{bad}\n", pcr_hex(1))).unwrap_err();
         assert!(error.starts_with("line 2:"), "{error}");
         assert!(error.contains(bad), "{error}");
     }
@@ -87,10 +87,24 @@ fn root_attestation_json_round_trips() {
 }
 
 #[test]
+fn rejects_all_zero_pcrs() {
+    let error =
+        parse_image_allowlist(&format!("{}\n{}  # debug\n", pcr_hex(1), pcr_hex(0))).unwrap_err();
+    assert!(error.starts_with("line 2:"), "{error}");
+    assert!(error.contains("all-zero"), "{error}");
+
+    let attestation = RootAttestation {
+        hash_algorithm: ROOT_ATTESTATION_HASH.to_string(),
+        pcr0: vec![pcr_hex(0)],
+    };
+    assert!(attestation.pcr0_values().unwrap_err().contains("all-zero"));
+}
+
+#[test]
 fn root_attestation_rejects_other_hash_algorithms() {
     let attestation = RootAttestation {
         hash_algorithm: "SHA256".to_string(),
-        pcr0: vec![pcr_hex(0)],
+        pcr0: vec![pcr_hex(1)],
     };
     assert!(attestation.pcr0_values().unwrap_err().contains("SHA256"));
 }
@@ -99,7 +113,7 @@ fn root_attestation_rejects_other_hash_algorithms() {
 fn root_attestation_rejects_invalid_pcr0_values() {
     let attestation = RootAttestation {
         hash_algorithm: ROOT_ATTESTATION_HASH.to_string(),
-        pcr0: vec![pcr_hex(0), "abcd".to_string()],
+        pcr0: vec![pcr_hex(1), "abcd".to_string()],
     };
     assert!(attestation.pcr0_values().unwrap_err().contains("abcd"));
 }

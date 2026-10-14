@@ -3207,6 +3207,7 @@ dependencies = [
  "tokio",
  "tokio-vsock",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]
@@ -3285,6 +3286,7 @@ dependencies = [
  "tower-service",
  "ttk-core",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]

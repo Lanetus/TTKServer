@@ -2,8 +2,6 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [develop]
 
 jobs:
   test:
@@ -31,23 +29,6 @@ jobs:
       # Runs the tests once: writes coverage to lcov.info and results to target/nextest/ci/junit.xml
       - name: Run tests with coverage
         run: cargo llvm-cov nextest --all-features --workspace --profile ci --lcov --output-path lcov.info
-
-      # Codecov uploads only for merges to develop, not for pull requests
-      - name: Upload coverage reports to Codecov
-        if: ${{ github.event_name != 'pull_request' }}
-        uses: codecov/codecov-action@v7
-        with:
-          files: lcov.info
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }} # Required for private repos & recommended for public repos
-
-      - name: Upload test results to Codecov
-        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-        uses: codecov/test-results-action@v1
-        with:
-          files: target/nextest/ci/junit.xml
-          fail_ci_if_error: true
-          token: ${{ secrets.CODECOV_TOKEN }}
 
   lint:
     name: Lint

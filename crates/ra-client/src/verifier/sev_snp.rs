@@ -102,6 +102,7 @@ pub fn verify(
         report_data: field(report, OFFSET_REPORT_DATA, 64),
         measurements,
         debug: le_u64(report, OFFSET_POLICY) & POLICY_DEBUG != 0,
+        mock: false,
         nitro: None,
     })
 }

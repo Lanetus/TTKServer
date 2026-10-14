@@ -97,6 +97,9 @@ pub struct VerifiedEvidence {
     pub measurements: BTreeMap<String, Vec<u8>>,
     /// `true` if the TEE runs in debug mode, where its memory is not confidential.
     pub debug: bool,
+    /// `true` if the evidence is a mock Nitro document signed by the mock root CA (accepted only
+    /// with [`Policy::allow_mock`]).
+    pub mock: bool,
     /// The decoded Nitro attestation document, for Nitro evidence.
     pub nitro: Option<nitro::AttestationDocument>,
 }
@@ -105,7 +108,8 @@ pub struct VerifiedEvidence {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Policy {
     /// Accept mock Nitro documents: additionally trusts the mock root CA (whose private key is
-    /// public) and implies `allow_debug`. Mock documents are still fully verified. For local
+    /// public), including their debug-mode PCRs. It does not accept debug-mode evidence from a
+    /// real TEE (that needs `allow_debug`). Mock documents are still fully verified. For local
     /// development only.
     pub allow_mock: bool,
     /// Accept TEEs running in debug mode.
@@ -145,7 +149,7 @@ pub fn verify_evidence(
         _ => return Err(format!("{tee} evidence has the wrong CMW form")),
     };
 
-    if evidence.debug && !(policy.allow_debug || policy.allow_mock) {
+    if evidence.debug && !(policy.allow_debug || (policy.allow_mock && evidence.mock)) {
         return Err(format!("{tee} evidence comes from a debug-mode TEE"));
     }
     if !is_bound_to(&evidence.report_data, binding) {

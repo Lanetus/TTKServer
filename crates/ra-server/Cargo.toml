@@ -32,6 +32,7 @@ time.workspace = true
 tokio.workspace = true
 tower-service.workspace = true
 x509-parser.workspace = true
+zeroize.workspace = true
 
 [features]
 default = ["nitro", "mock"]

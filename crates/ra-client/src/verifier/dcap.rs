@@ -128,6 +128,7 @@ fn td_evidence(body: &[u8]) -> VerifiedEvidence {
         report_data: field(body, TD_REPORT_DATA, 64),
         measurements,
         debug: le_u64(body, TD_ATTRIBUTES) & TD_ATTRIBUTE_DEBUG != 0,
+        mock: false,
         nitro: None,
     }
 }
@@ -142,6 +143,7 @@ fn sgx_evidence(body: &[u8]) -> VerifiedEvidence {
             ("mrsigner".to_string(), field(body, SGX_MRSIGNER, 32)),
         ]),
         debug: le_u64(body, SGX_ATTRIBUTES) & SGX_FLAG_DEBUG != 0,
+        mock: false,
         nitro: None,
     }
 }

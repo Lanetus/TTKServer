@@ -83,8 +83,9 @@ mod imp {
 
     /// Most peers relayed at once in each direction. Each one holds a vsock connection (and,
     /// outbound, a UDP socket), so this bounds what spoofed source addresses can make the relay
-    /// open; datagrams from further clients are dropped.
-    const MAX_CLIENTS: usize = 4096;
+    /// open; datagrams from further clients are dropped. Equal to the enclave's cap on inbound
+    /// vsock connections ([`ttk_core::vsock::MAX_VSOCK_PEERS`]).
+    const MAX_CLIENTS: usize = ttk_core::vsock::MAX_VSOCK_PEERS;
 
     /// Datagrams buffered per client toward the enclave; further datagrams are dropped, as a
     /// full UDP socket buffer would.

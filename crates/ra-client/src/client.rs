@@ -121,10 +121,13 @@ impl EnclaveCertVerifier {
         self
     }
 
-    /// Accepts unsigned mock attestation documents (for local development only).
+    /// Accepts mock Nitro attestation documents (for local development only).
     ///
-    /// Skips the Nitro COSE signature and AWS certificate-chain checks; the certificate checks,
-    /// the key binding and the measurement checks still apply. Never enable this in production.
+    /// Additionally trusts the mock root CA, whose private key is public, so anyone can forge
+    /// such documents. They are still fully verified (COSE signature, chain up to the mock root,
+    /// certificate checks, key binding, measurements), and their debug-mode PCRs are accepted;
+    /// debug-mode evidence from a real TEE still needs [`allow_debug`](Self::allow_debug).
+    /// Never enable this in production.
     pub fn allow_mock(mut self) -> Self {
         self.policy.allow_mock = true;
         self
