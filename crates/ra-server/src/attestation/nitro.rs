@@ -111,15 +111,13 @@ impl NsmSession {
         }
     }
 
-    /// Convenience method to create an attestation document binding an ephemeral TLS certificate.
+    /// Convenience method to create an attestation document binding an ephemeral RA-TLS key.
     ///
-    /// Computes the SHA-256 hash of `cert_der` and supplies it as `user_data`.
-    pub fn create_attestation_for_cert(
-        &self,
-        cert_der: &[u8],
-    ) -> Result<Vec<u8>, AttestationError> {
+    /// Supplies the SHA-256 of `spki_der`, the certificate's DER SubjectPublicKeyInfo, as
+    /// `user_data`: the binding verifiers check (not a hash of the whole certificate).
+    pub fn create_attestation_for_key(&self, spki_der: &[u8]) -> Result<Vec<u8>, AttestationError> {
         let params = AttestationParams {
-            user_data: Some(Sha256::digest(cert_der).to_vec()),
+            user_data: Some(Sha256::digest(spki_der).to_vec()),
             ..Default::default()
         };
         self.create_attestation(&params)

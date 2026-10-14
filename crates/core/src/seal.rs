@@ -26,6 +26,7 @@ use rand_core::OsRng;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 use x509_parser::prelude::*;
+use zeroize::{Zeroize, Zeroizing};
 
 /// HPKE KEM: DHKEM(P-256, HKDF-SHA256), matching the RA-TLS certificate key.
 type Kem = hpke::kem::DhP256HkdfSha256;
@@ -102,7 +103,9 @@ impl NodeSecretKey {
     pub fn from_pkcs8_der(der: &[u8]) -> Result<Self, SealError> {
         let key = p256::SecretKey::from_pkcs8_der(der)
             .map_err(|e| SealError::new(format!("not a PKCS#8 P-256 private key: {e}")))?;
-        <Kem as hpke::Kem>::PrivateKey::from_bytes(&key.to_bytes())
+        // `SecretKey` zeroizes itself on drop; so does this copy of its scalar.
+        let scalar = Zeroizing::new(key.to_bytes());
+        <Kem as hpke::Kem>::PrivateKey::from_bytes(&scalar)
             .map(Self)
             .map_err(|_| SealError::new("invalid P-256 private key"))
     }
@@ -117,6 +120,13 @@ impl NodeSecretKey {
 /// recovered by the last node in [`open_body_with_key`], and used by both for the response.
 #[derive(Clone)]
 pub struct MessageKey([u8; MESSAGE_KEY_LEN]);
+
+/// The key is erased from memory when dropped.
+impl Drop for MessageKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 impl std::fmt::Debug for MessageKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

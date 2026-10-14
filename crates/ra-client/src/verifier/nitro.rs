@@ -77,6 +77,7 @@ pub fn verify(
     }
 
     let root = trusted_root(&doc, trust, policy)?;
+    let mock = root == trust.mock_nitro_root.as_slice();
     verify_chain(&doc, root)?;
     cose.verify_signature(&doc.certificate)?;
 
@@ -97,6 +98,7 @@ pub fn verify(
         report_data: doc.user_data.clone().unwrap_or_default(),
         measurements,
         debug,
+        mock,
         nitro: Some(doc),
     })
 }

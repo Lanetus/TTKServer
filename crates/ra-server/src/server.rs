@@ -28,7 +28,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use log::{error, info, warn};
 use quinn::{Endpoint, ServerConfig, TransportConfig, VarInt};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
-use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
@@ -36,6 +36,7 @@ use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 use tokio::sync::Semaphore;
 use tower_service::Service;
+use zeroize::Zeroizing;
 
 pub use super::router::Evidence;
 
@@ -202,7 +203,7 @@ pub struct Server {
     endpoint: Endpoint,
     evidence: Arc<Evidence>,
     provider: Arc<dyn AttestationProvider>,
-    private_key: Vec<u8>,
+    private_key: Zeroizing<Vec<u8>>,
     certificates: Arc<CertificateStore>,
 }
 
@@ -355,7 +356,7 @@ struct Identity {
     /// Produces fresh Evidence for `POST /evidence`.
     provider: Arc<dyn AttestationProvider>,
     /// The key pair's private key (PKCS#8 DER).
-    private_key: Vec<u8>,
+    private_key: Zeroizing<Vec<u8>>,
     /// The presented certificate chain, replaceable by `POST /certificate`.
     certificates: Arc<CertificateStore>,
 }
@@ -369,7 +370,7 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let key_pair = KeyPair::generate()?;
-    let private_key = key_pair.serialize_der();
+    let private_key = Zeroizing::new(key_pair.serialize_der());
     info!("Generated ephemeral TLS certificate.");
 
     let provider: Arc<dyn AttestationProvider> = attestation::detect()?.into();
@@ -426,7 +427,9 @@ fn build_certificate_store(
 ) -> Result<CertificateStore, BoxError> {
     let cert_pem = create_cert_with_attestation(key_pair, CERT_DNS_NAME, cmw_bytes, 30)?;
     let cert = CertificateDer::from_pem_slice(cert_pem.as_bytes())?;
-    let key = PrivateKeyDer::from_pem_slice(key_pair.serialize_pem().as_bytes())?;
+    // Borrowed from a buffer that is zeroized on drop, so no copy of the key outlives this call.
+    let key_der = Zeroizing::new(key_pair.serialize_der());
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der.as_slice()));
     CertificateStore::new(cert, &key)
 }
 

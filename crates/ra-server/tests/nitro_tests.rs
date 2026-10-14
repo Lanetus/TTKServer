@@ -140,7 +140,7 @@ fn nsm_requests_on_a_non_nsm_device_fail_with_driver_errors() {
         &session.create_attestation(&params).unwrap_err()
     ));
     assert!(is_driver_error(
-        &session.create_attestation_for_cert(b"cert").unwrap_err()
+        &session.create_attestation_for_key(b"spki").unwrap_err()
     ));
     assert!(is_driver_error(&session.describe_nsm().unwrap_err()));
     assert!(is_driver_error(&session.get_random().unwrap_err()));

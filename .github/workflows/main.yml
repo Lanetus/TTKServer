@@ -281,23 +281,15 @@ jobs:
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.node }}-${{ env.IMAGE_TAG }}
             ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ matrix.node }}-v${{ steps.version.outputs.tag }}
 
-      - name: Build app Docker image
-        run: docker build --build-arg NODE=${{ matrix.node }} -t ttk-node:local .
-
+      # Same reproducible build as locally (pinned base images, Debian snapshot and nitro-cli,
+      # SOURCE_DATE_EPOCH = commit time): the PCR0 can be reproduced from the tagged commit.
+      # Never a debug image: its PCR0 must not reach an allowlist.
       - name: Build EIF
+        env:
+          TTK_DEBUG: "0"
         run: |
-          mkdir -p out
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD/out:/out" \
-            amazonlinux:2023 bash -c '
-              dnf install -y aws-nitro-enclaves-cli aws-nitro-enclaves-cli-devel &&
-              mkdir -p /var/log/nitro_enclaves &&
-              nitro-cli build-enclave \
-                --docker-uri ttk-node:local \
-                --output-file /out/ttk-${{ matrix.node }}_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.eif > /out/ttk-${{ matrix.node }}_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.json
-            '
-          cat out/ttk-${{ matrix.node }}_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.json
+          scripts/build-eif.sh ${{ matrix.arch }} ${{ matrix.node }}
+          test -f out/ttk-${{ matrix.node }}_v${{ steps.version.outputs.tag }}_${{ matrix.arch }}.json
 
       - uses: actions/upload-artifact@v4
         with:
