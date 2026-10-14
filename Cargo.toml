@@ -41,7 +41,7 @@ quinn = "0.11"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rcgen = "0.13"
 ring = "0.17"
-rustls = { version = "0.23", features = ["ring"] }
+rustls = { version = "0.23.46", features = ["ring"] }
 rustls-pki-types = "1"
 rustls-webpki = "0.103"
 serde = { version = "1.0.228", features = ["derive"] }
