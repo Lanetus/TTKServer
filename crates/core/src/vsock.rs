@@ -47,9 +47,9 @@ const RECV_QUEUE: usize = 1024;
 /// buffer would.
 const PEER_QUEUE: usize = 256;
 
-/// Inbound vsock connections served at once (each one task and one [`PEER_QUEUE`]); further
-/// connections wait in the listen backlog until one closes. Equal to the number of clients
-/// `vsock-proxy` relays at once, so the parent never needs more.
+/// Inbound vsock connections served at once (each one task and one outgoing queue of 256
+/// datagrams); further connections wait in the listen backlog until one closes. Equal to the
+/// number of clients `vsock-proxy` relays at once, so the parent never needs more.
 pub const MAX_VSOCK_PEERS: usize = 4096;
 
 /// Outgoing datagram queues, keyed by the peer address quinn sees for each vsock connection.

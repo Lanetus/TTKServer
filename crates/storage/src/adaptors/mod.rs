@@ -1,5 +1,5 @@
 //! Content adaptors behind [`FileService`](crate::FileService):
-//! named blobs, in memory ([`MemoryStore`]) or in S3 (`s3::S3Store`, feature `s3`).
+//! named blobs, in memory ([`MemoryStore`](local_memory::MemoryStore)) or in S3 (`s3::S3Store`, feature `s3`).
 
 use crate::EvalError;
 use std::future::Future;

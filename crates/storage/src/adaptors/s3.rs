@@ -3,7 +3,7 @@
 //! Inside a Nitro Enclave there is no network: with [`VSOCK_PORT_ENV`] set, S3 is reached over
 //! vsock instead. Every host name resolves to loopback ([`LoopbackResolver`]), where a local
 //! listener on [`LOCAL_PORT`] carries each TCP connection over vsock to the parent
-//! ([`forward_tcp_to_vsock`](ttk_ra_server::vsock::forward_tcp_to_vsock)), whose
+//! (`ttk_ra_server::vsock::forward_tcp_to_vsock`, Linux only), whose
 //! `vsock-proxy-tcp` forwards it to the S3 endpoint. TLS still runs here, end to end with S3,
 //! and checks the endpoint's real host name.
 //!
