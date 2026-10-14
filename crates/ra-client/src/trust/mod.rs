@@ -1,11 +1,11 @@
 //! Trust anchors for appraising TEE Evidence (RFC 9334): the vendor roots of each attestation
-//! signing chain ([`TrustStore`]) and the PCR8 values pinned for the root servers
-//! ([`RootSignerTrustStore`]).
+//! signing chain ([`TrustStore`]).
 //!
 //! Pure data, with no verification logic: the [`verifier`](crate::verifier) checks Evidence
-//! signatures against a [`TrustStore`] and Nitro images against an [`ImageTrustStore`]: for
-//! the root servers a [`RootSignerTrustStore`], for every other node the image list fetched
-//! from them ([`RootImageTrustStore`](crate::images::RootImageTrustStore)).
+//! signatures against a [`TrustStore`] and images against an
+//! [`ImageTrustStore`](crate::ImageTrustStore): for the root servers the pinned
+//! [`RootSignerTrustStore`](crate::RootSignerTrustStore), for every other node the image list
+//! fetched from them ([`RootImageTrustStore`](crate::images::RootImageTrustStore)).
 
 /// AWS Nitro Enclaves root certificate (G1), from the AWS Nitro Enclaves documentation.
 const AWS_NITRO_ROOT: &[u8] = include_bytes!("certs/aws_nitro_root_g1.der");
@@ -14,8 +14,6 @@ const AWS_NITRO_ROOT: &[u8] = include_bytes!("certs/aws_nitro_root_g1.der");
 const MOCK_NITRO_ROOT: &[u8] = ttk_core::MOCK_NITRO_ROOT_CERT;
 /// Intel SGX Root CA, which also roots TDX PCK certificate chains.
 const INTEL_SGX_ROOT: &[u8] = include_bytes!("certs/intel_sgx_root_ca.der");
-/// PCR8 values (signing certificate hashes) pinned for the root servers' enclave images.
-const ROOT_SIGNER_PCR8: &str = include_str!("root_signer_pcr8.txt");
 
 /// AMD EPYC processor families with SEV-SNP support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -103,38 +101,5 @@ impl Default for TrustStore {
     /// Returns the built-in vendor roots.
     fn default() -> Self {
         Self::builtin()
-    }
-}
-
-/// The accepted-images interface and the allowlist parser (defined in
-/// [`ttk_core::image_trust`]).
-pub use ttk_core::image_trust::{parse_image_allowlist, ImageTrustStore};
-
-/// The root servers' enclave images, identified by PCR8 (the SHA-384 of the certificate that
-/// signed the image) rather than PCR0: the PCR0 allowlist is what the client fetches from them.
-#[derive(Debug, Clone)]
-pub struct RootSignerTrustStore {
-    /// Accepted PCR8 values of a root server's enclave image.
-    pub pcr8_allowlist: Vec<Vec<u8>>,
-}
-
-/// The PCR8 values built into this crate.
-impl ImageTrustStore for RootSignerTrustStore {
-    /// The PCR8 values of `root_signer_pcr8.txt`.
-    fn builtin() -> Self {
-        Self {
-            pcr8_allowlist: parse_image_allowlist(ROOT_SIGNER_PCR8)
-                .expect("built-in root_signer_pcr8.txt is invalid"),
-        }
-    }
-
-    /// The pinned PCR8 values.
-    fn nitro_image_allowlist(&self) -> &[Vec<u8>] {
-        &self.pcr8_allowlist
-    }
-
-    /// PCR8: the image's signing certificate.
-    fn nitro_pcr_index(&self) -> usize {
-        8
     }
 }

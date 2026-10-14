@@ -18,8 +18,8 @@ use ttk_core::image_trust::ImageTrustStore;
 use ttk_ra_server::server::Server;
 use ttk_root::{FileImageTrustStore, Root, RootAttestation, ROOT_ATTESTATION_PATH};
 
-const PCR0_A: &str = "7807833a90cc86f5a853a1f49043a568f3428f6b03eb983aed99899fbfa77d6b86b34fa934e318dd3741debca32c0aba";
-const PCR0_B: &str = "1de927770d7a1c250ba364440947226ed9af7250ae25fdad391c3cd87d0044b1e4a4e96810bc8f2dfc9160fcf0742c8d";
+const IMAGE_A: &str = "7807833a90cc86f5a853a1f49043a568f3428f6b03eb983aed99899fbfa77d6b86b34fa934e318dd3741debca32c0aba";
+const IMAGE_B: &str = "1de927770d7a1c250ba364440947226ed9af7250ae25fdad391c3cd87d0044b1e4a4e96810bc8f2dfc9160fcf0742c8d";
 
 /// Starts `root`, unlocked with a test CA certificate, on a free local port and returns its
 /// address.
@@ -146,23 +146,22 @@ async fn root_attestation_serves_the_builtin_accepted_images() {
     let addr = start(Root::bind("127.0.0.1:0".parse().unwrap()).unwrap());
 
     let expected: Vec<String> = FileImageTrustStore::builtin()
-        .nitro_image_allowlist()
+        .image_allowlist()
         .iter()
-        .map(|pcr0| hex_encode(pcr0))
+        .map(|measurement| hex_encode(measurement))
         .collect();
     let body = fetch(addr).await;
-    assert_eq!(body.hash_algorithm, "SHA384");
-    assert_eq!(body.pcr0, expected);
+    assert_eq!(body.measurements, expected);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_attestation_serves_a_custom_image_trust_store() {
-    let images = FileImageTrustStore::parse(&format!("{PCR0_A}\n{PCR0_B}")).unwrap();
+    let images = FileImageTrustStore::parse(&format!("{IMAGE_A}\n{IMAGE_B}")).unwrap();
     let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let addr = start(Root::with_image_trust_store(server, &images));
 
     let body = fetch(addr).await;
-    assert_eq!(body.pcr0, vec![PCR0_A, PCR0_B]);
+    assert_eq!(body.measurements, vec![IMAGE_A, IMAGE_B]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -173,10 +172,10 @@ async fn base_routes_are_still_served() {
 }
 
 #[test]
-fn builtin_nitro_image_allowlist_is_valid() {
-    // Empty until reproducible, labelled images are listed: every non-debug Nitro enclave is
-    // rejected meanwhile (fails closed).
-    for pcr0 in FileImageTrustStore::builtin().nitro_image_allowlist() {
-        assert_eq!(pcr0.len(), 48);
+fn builtin_image_allowlist_is_valid() {
+    // Empty until reproducible, labelled images are listed: every non-debug enclave is rejected
+    // meanwhile (fails closed).
+    for measurement in FileImageTrustStore::builtin().image_allowlist() {
+        assert!([32, 48].contains(&measurement.len()));
     }
 }

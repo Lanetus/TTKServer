@@ -8,7 +8,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use ttk_ra_client::verifier::{verify_evidence, Policy, TeeKind, TrustStore};
+use ttk_ra_client::verifier::{
+    dcap, image_measurement, verify_evidence, ImageMeasurement, Policy, TeeKind, TrustStore,
+};
 use ttk_ra_client::RootImageTrustStore;
 use ttk_ra_server::attestation::tdx::{
     quote_from_entry, report_data, wrap_quote_as_cmw, TdxSession, REPORT_DATA_LEN,
@@ -171,13 +173,18 @@ fn provider_cmw_is_accepted_by_the_client_verifier() {
     };
     // 2026-01-01: inside the validity of the sample quote's PCK chain.
     let now = UnixTime::since_unix_epoch(Duration::from_secs(1_767_225_600));
+    // Lists the fixture's own image, so only the provider's wrapping is under test.
+    let fixture = dcap::verify(TDX_QUOTE, TeeKind::Tdx, now, &trust).unwrap();
+    let images = RootImageTrustStore {
+        image_allowlist: vec![image_measurement(&fixture, ImageMeasurement::Image).unwrap()],
+    };
 
     let evidence = verify_evidence(
         &cmw,
         &quote_report_data(),
         now,
         &trust,
-        &RootImageTrustStore::default(),
+        &images,
         Policy::default(),
     )
     .expect("the verifier should accept the provider's CMW");

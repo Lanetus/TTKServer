@@ -1,0 +1,17 @@
+# Signer measurements pinned for the root servers (`ROOT_SERVERS` in crates/ra-client/src/images.rs),
+# read by ttk_core::image_trust::RootSignerTrustStore.
+#
+# Each entry identifies the key or certificate that signed the root node's image, so every image
+# it signs is accepted. The client checks a root server's attestation against these values
+# instead of the image allowlist, which it is fetching from that very server. The measurement
+# per TEE (ttk_ra_client::verifier::image_measurement):
+#   AWS Nitro    PCR8, the SHA-384 of the EIF signing certificate
+#                (`nitro-cli build-enclave --signing-certificate ... --private-key ...`)
+#   AMD SEV-SNP  ID_KEY_DIGEST, the SHA-384 of the key that signed the guest's ID block
+#   Intel SGX    MRSIGNER
+#   Intel TDX    none: a TD has no signer measurement, so no TDX root server is accepted
+#
+# One measurement (64 or 96 hex characters) per line; blank lines and text after `#` are
+# ignored. While this list is empty, no genuine (non-debug) root server is accepted.
+08cefd6235c63d2cf69da31ecc0d5814f789d995348ddaa514c245136ac7bd305793595db0375f2fafbf06d9047dfe71 # Root CA 1
+51f56407fc2567cd0e38a749e83849e63c6eed95e84ce887a9a97cea086d9bc42c7455b0de8f665f585d8000ce643796 # Int CA 1 -> Root CA 1

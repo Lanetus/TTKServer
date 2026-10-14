@@ -12,7 +12,7 @@
 //! 3. issues a certificate for the node's RA-TLS key with the same attestation extension
 //!    ([`CertificateAuthority::issue`]) and installs it with `POST /certificate`.
 //!
-//! Accepted Nitro images are this crate's [`FileImageTrustStore`] by default.
+//! Accepted images are this crate's [`FileImageTrustStore`] by default.
 
 use crate::FileImageTrustStore;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -186,7 +186,7 @@ impl CertificateAuthority {
 pub struct AuthorizeOptions {
     /// Accept mock attestation (for local development only).
     pub allow_mock: bool,
-    /// Accepted Nitro images; `None` = this crate's [`FileImageTrustStore::builtin`].
+    /// Accepted images; `None` = this crate's [`FileImageTrustStore::builtin`].
     pub images: Option<FileImageTrustStore>,
 }
 

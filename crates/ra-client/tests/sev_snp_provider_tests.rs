@@ -9,7 +9,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use ttk_ra_client::verifier::{verify_evidence, Policy, TeeKind, TrustStore};
+use ttk_ra_client::verifier::{
+    image_measurement, sev_snp, verify_evidence, ImageMeasurement, Policy, TeeKind, TrustStore,
+};
 use ttk_ra_client::RootImageTrustStore;
 use ttk_ra_server::attestation::sev_snp::{
     evidence_from_entry, report_data, vcek_from_cert_table, vlek_from_cert_table,
@@ -303,12 +305,17 @@ fn provider_cmw_is_accepted_by_the_client_verifier() {
 
     // 2026-01-01: inside the VCEK's validity period.
     let now = UnixTime::since_unix_epoch(Duration::from_secs(1_767_225_600));
+    // Lists the fixture's own image, so only the provider's wrapping is under test.
+    let fixture = sev_snp::verify(MILAN_REPORT, MILAN_VCEK, now, &TrustStore::builtin()).unwrap();
+    let images = RootImageTrustStore {
+        image_allowlist: vec![image_measurement(&fixture, ImageMeasurement::Image).unwrap()],
+    };
     let verified = verify_evidence(
         &cmw,
         &milan_report_data(),
         now,
         &TrustStore::builtin(),
-        &RootImageTrustStore::default(),
+        &images,
         Policy::default(),
     )
     .expect("the verifier should accept the provider's CMW with the real AMD roots");
