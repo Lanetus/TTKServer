@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.2.1] - 2026-10-14
+
+### Security
+- Updated `rustls` to 0.23.46 to address RUSTSEC-2026-0347.
+
 ## [6.2.0] - 2026-10-14
 
 ### Added
@@ -481,7 +486,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.2.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.2.1...HEAD
+[6.2.1]: https://github.com/Lanetus/TTKServer/compare/v6.2.0...v6.2.1
 [6.2.0]: https://github.com/Lanetus/TTKServer/compare/v6.1.0...v6.2.0
 [6.1.0]: https://github.com/Lanetus/TTKServer/compare/v6.0.1...v6.1.0
 [6.0.1]: https://github.com/Lanetus/TTKServer/compare/v6.0.0...v6.0.1
