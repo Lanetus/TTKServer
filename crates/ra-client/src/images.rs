@@ -20,7 +20,7 @@ pub use ttk_core::image_trust::{RootAttestation, ROOT_ATTESTATION_PATH};
 type SendError = Box<dyn std::error::Error + Send + Sync>;
 
 /// The root servers publishing the accepted enclave images, tried in order.
-pub const ROOT_SERVERS: &[&str] = &["a.ttk-server.net:443", "b.ttk-server.net:443"];
+pub const ROOT_SERVERS: &[&str] = &["a.root.ttk-servers.net:443", "b.root.ttk-servers.net:443"];
 
 /// Time allowed for fetching the image list from one root server, RA-TLS handshake included.
 pub const ROOT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);

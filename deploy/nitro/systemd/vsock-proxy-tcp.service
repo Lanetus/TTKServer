@@ -5,7 +5,7 @@
 # Install:
 #   cargo build --release -p ttk-executables --bin vsock-proxy-tcp
 #   sudo install -m 0755 target/release/vsock-proxy-tcp /usr/local/bin/vsock-proxy-tcp
-#   sudo install -m 0644 deploy/systemd/vsock-proxy-tcp.service /etc/systemd/system/
+#   sudo install -m 0644 deploy/nitro/systemd/vsock-proxy-tcp.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now vsock-proxy-tcp
 #
 # Configure in /etc/default/vsock-proxy-tcp (optional; overrides the defaults below), e.g.

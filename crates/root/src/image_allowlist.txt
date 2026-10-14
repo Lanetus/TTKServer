@@ -16,3 +16,7 @@
 #   <measurement> # ttk-<node> v<version> <tee> <arch> <commit>
 # Never list a debug image (TTK_DEBUG=1, suffix _debug: it accepts mock next hops). Remove
 # entries for images that are no longer deployed.
+915c59cef3572aaa4bcc751ffb95c4befe2e2e96a13b98e7d5ec6425b88c1766a0bc2de3411c2bd56b27d887e5d91eae
+10ca146d569c40c61402b8419786627c86e66587d568a6a48f1fe135b65e9271795add409b342e56cfd2bbf2b4dce671
+650d8d0138b3245fb2ddda1574da3ca3d582de362294198f99cafb270e72ed508c29d17a15b3c2b1a0c53eb22a105b02
+14baf8ffee84698e188c35bd3f62bc314e91d48f17c1e2cea48ab160fb7953464c5d3400bda715bd6b31318819f7b00d
