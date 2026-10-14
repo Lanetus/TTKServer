@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-10-14
+
+### Added
+- SEV-SNP and TDX `POST /evidence` answers now bind the nonce: the 64-byte report data is the RA-TLS SPKI hash followed by SHA-256 of the nonce (`ttk_core::fresh_evidence::report_data`), checked by `verify_evidence_with_nonce`.
+- SEV-SNP reports signed with a VLEK (as AWS does) are accepted: `ttk-ra-client` verifies the VLEK through the AMD ASVK roots (Milan, Genoa, Turin) in addition to VCEK via ASK.
+
+### Changed
+- The root signer PCR8 pin list (`root_signer_pcr8.txt`) was updated.
+
 ## [6.1.0] - 2026-10-14
 
 ### Added
@@ -472,7 +481,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.1.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.2.0...HEAD
+[6.2.0]: https://github.com/Lanetus/TTKServer/compare/v6.1.0...v6.2.0
 [6.1.0]: https://github.com/Lanetus/TTKServer/compare/v6.0.1...v6.1.0
 [6.0.1]: https://github.com/Lanetus/TTKServer/compare/v6.0.0...v6.0.1
 [6.0.0]: https://github.com/Lanetus/TTKServer/compare/v5.0.0...v6.0.0
