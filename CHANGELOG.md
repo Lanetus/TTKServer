@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-10-14
+
+### Added
+- Enclave clients can connect to hosts by name over vsock: the enclave sends a resolve request on the `vsock-proxy` outbound port (`5001`) and the parent answers with the addresses its egress policy permits (at most 16). `ttk_ra_client::connect_to_node` resolves via the new `resolve_node` (IP literals as is, system DNS over UDP, the parent over vsock), which fixes fetching the root servers' image list and relay next hops given by name. The enclave image and `vsock-proxy` must be upgraded together.
+
 ## [6.0.1] - 2026-10-14
 
 ### Added
@@ -467,7 +472,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.0.1...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.1.0...HEAD
+[6.1.0]: https://github.com/Lanetus/TTKServer/compare/v6.0.1...v6.1.0
 [6.0.1]: https://github.com/Lanetus/TTKServer/compare/v6.0.0...v6.0.1
 [6.0.0]: https://github.com/Lanetus/TTKServer/compare/v5.0.0...v6.0.0
 [5.0.0]: https://github.com/Lanetus/TTKServer/compare/v4.0.0...v5.0.0
