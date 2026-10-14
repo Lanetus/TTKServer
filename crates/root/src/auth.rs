@@ -286,10 +286,10 @@ async fn authorize_over(
 /// RA-TLS certificate `ra_tls_cert` (from the TLS handshake) and its Evidence `cert_evidence`:
 ///
 /// 1. the certificate in the response is `ra_tls_cert`, byte for byte;
-/// 2. the Evidence is genuine under `policy` and bound to that certificate's key (as in
-///    [`verifier::verify_evidence`]);
-/// 3. it carries `nonce` (only AWS Nitro Evidence can);
-/// 4. it has the same measurements as `cert_evidence`.
+/// 2. the Evidence is genuine under `policy`, bound to that certificate's key and carries
+///    `nonce` ([`verifier::verify_evidence_with_nonce`]: the Nitro document's `nonce`, or the
+///    second half of the TDX/SEV-SNP report data);
+/// 3. it has the same measurements as `cert_evidence`.
 pub fn verify_fresh_evidence(
     cmw: &[u8],
     nonce: &[u8],
@@ -307,19 +307,15 @@ pub fn verify_fresh_evidence(
     let (_, cert) = X509Certificate::from_der(&fresh.certificate)
         .map_err(|e| format!("malformed fresh Evidence certificate: {e}"))?;
     let binding = Sha256::digest(cert.public_key().raw);
-    let evidence = verifier::verify_evidence(
+    let evidence = verifier::verify_evidence_with_nonce(
         &fresh.evidence.to_cbor_bytes(),
         &binding,
+        nonce,
         UnixTime::now(),
         &TrustStore::builtin(),
         images,
         policy,
     )?;
-
-    let doc_nonce = evidence.nitro.as_ref().and_then(|doc| doc.nonce.as_deref());
-    if doc_nonce != Some(nonce) {
-        return Err("fresh Evidence does not carry the nonce".into());
-    }
     if evidence.tee != cert_evidence.tee || evidence.measurements != cert_evidence.measurements {
         return Err("fresh Evidence measurements differ from the RA-TLS certificate's".into());
     }

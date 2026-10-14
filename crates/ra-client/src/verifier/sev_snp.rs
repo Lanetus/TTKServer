@@ -1,13 +1,17 @@
-//! AMD SEV-SNP evidence: an attestation report signed by the chip's VCEK, whose certificate
-//! chains through the ASK to the AMD Root Key (ARK) of the processor family.
+//! AMD SEV-SNP evidence: an attestation report signed either by the chip's VCEK (Versioned Chip
+//! Endorsement Key), whose certificate chains through the ASK to the AMD Root Key (ARK) of the
+//! processor family, or by a VLEK (Versioned Loaded Endorsement Key, which cloud providers such
+//! as AWS EC2 load into their chips), whose certificate chains through the ASVK to the ARK.
 //!
 //! The evidence is the raw 1184-byte report (SEV-SNP ABI spec, `ATTESTATION_REPORT`) and the
-//! DER-encoded VCEK certificate as served by the AMD Key Distribution Service, carried as the
-//! `report` and `vcek` records of a CMW collection (see [`super::media_type`]). The ARK and ASK are pinned in the trust store.
+//! DER-encoded VCEK or VLEK certificate as served by the AMD Key Distribution Service, carried as
+//! the `report` and `vcek` records of a CMW collection (see [`super::media_type`]). The report's
+//! `SIGNING_KEY` flags select which of the two it is. The ARK, ASK and ASVK are pinned in the
+//! trust store.
 //!
-//! Checks: ARK → ASK → VCEK chain (RSA-PSS), VCEK validity period, VCEK `hwID` and TCB
-//! extensions match the report, and the report's ECDSA P-384 signature. VLEK-signed reports
-//! and VCEK revocation (CRL) checks are not supported.
+//! Checks: ARK → ASK → VCEK or ARK → ASVK → VLEK chain (RSA-PSS), validity periods, the VCEK's
+//! `hwID` (VLEKs are not chip-specific) and the TCB extensions match the report, and the
+//! report's ECDSA P-384 signature. Revocation (CRL) checks are not supported.
 
 use super::{field, le_u64, verify_ecdsa, TeeKind, TrustStore, VerifiedEvidence};
 use rustls_pki_types::UnixTime;
@@ -49,7 +53,8 @@ const OID_HW_ID: &str = "1.3.6.1.4.1.3704.1.4";
 /// AMD processor families and their pinned roots (defined in [`crate::trust`]).
 pub use crate::trust::{AmdProduct, AmdRoots};
 
-/// Verifies the SEV-SNP `report` and its DER `vcek_der` certificate at time `now`.
+/// Verifies the SEV-SNP `report` and the DER certificate `vcek_der` of its signing key (the VCEK,
+/// or the VLEK for VLEK-signed reports) at time `now`.
 pub fn verify(
     report: &[u8],
     vcek_der: &[u8],
@@ -70,16 +75,23 @@ pub fn verify(
         return Err("SEV-SNP report is not signed with ECDSA P-384".into());
     }
     let flags = le_u32(report, OFFSET_FLAGS);
-    let signing_key = (flags >> 2) & 0b111;
-    if signing_key != 0 {
-        return Err("SEV-SNP report is not signed by a VCEK (VLEK is not supported)".into());
-    }
+    let signing_key = match (flags >> 2) & 0b111 {
+        0 => SigningKey::Vcek,
+        1 => SigningKey::Vlek,
+        _ => return Err("SEV-SNP report is not signed by a VCEK or VLEK".into()),
+    };
 
     let (_, vcek) = X509Certificate::from_der(vcek_der)
-        .map_err(|e| format!("malformed SEV-SNP VCEK certificate: {e}"))?;
-    let product = verify_vcek_chain(&vcek, now, trust)?;
-    check_vcek_matches_report(&vcek, report, product, flags & FLAG_MASK_CHIP_ID != 0)?;
-    verify_report_signature(&vcek, report)?;
+        .map_err(|e| format!("malformed SEV-SNP {signing_key} certificate: {e}"))?;
+    let product = verify_vcek_chain(&vcek, signing_key, now, trust)?;
+    check_vcek_matches_report(
+        &vcek,
+        signing_key,
+        report,
+        product,
+        flags & FLAG_MASK_CHIP_ID != 0,
+    )?;
+    verify_report_signature(&vcek, signing_key, report)?;
 
     let measurements = BTreeMap::from([
         (
@@ -112,24 +124,58 @@ fn le_u32(buf: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(buf[offset..offset + 4].try_into().expect("4-byte slice"))
 }
 
-/// Finds the pinned ARK/ASK pair that signed `vcek` and checks the chain at time `now`.
+/// Key that signed an SEV-SNP report (`FLAGS.SIGNING_KEY`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SigningKey {
+    /// Versioned Chip Endorsement Key, certified by the ASK.
+    Vcek,
+    /// Versioned Loaded Endorsement Key, certified by the ASVK.
+    Vlek,
+}
+
+/// Displays `VCEK` or `VLEK`.
+impl std::fmt::Display for SigningKey {
+    /// Writes the key's acronym.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Vcek => "VCEK",
+            Self::Vlek => "VLEK",
+        })
+    }
+}
+
+/// Finds the pinned ARK and intermediate (ASK for a VCEK, ASVK for a VLEK) that signed `vcek`
+/// and checks the chain at time `now`.
 fn verify_vcek_chain(
     vcek: &X509Certificate<'_>,
+    signing_key: SigningKey,
     now: UnixTime,
     trust: &TrustStore,
 ) -> Result<AmdProduct, String> {
+    let intermediate_name = match signing_key {
+        SigningKey::Vcek => "ASK",
+        SigningKey::Vlek => "ASVK",
+    };
     for roots in &trust.amd {
         let (_, ark) = X509Certificate::from_der(&roots.ark)
             .map_err(|e| format!("malformed pinned AMD ARK: {e}"))?;
-        let (_, ask) = X509Certificate::from_der(&roots.ask)
-            .map_err(|e| format!("malformed pinned AMD ASK: {e}"))?;
+        let intermediate = match signing_key {
+            SigningKey::Vcek => &roots.ask,
+            SigningKey::Vlek => &roots.asvk,
+        };
+        let (_, ask) = X509Certificate::from_der(intermediate)
+            .map_err(|e| format!("malformed pinned AMD {intermediate_name}: {e}"))?;
         if vcek.verify_signature(Some(ask.public_key())).is_err() {
             continue;
         }
         ark.verify_signature(None)
             .map_err(|_| format!("pinned {:?} ARK is not self-signed", roots.product))?;
-        ask.verify_signature(Some(ark.public_key()))
-            .map_err(|_| format!("pinned {:?} ASK is not signed by its ARK", roots.product))?;
+        ask.verify_signature(Some(ark.public_key())).map_err(|_| {
+            format!(
+                "pinned {:?} {intermediate_name} is not signed by its ARK",
+                roots.product
+            )
+        })?;
         for cert in [&ark, &ask, vcek] {
             if !cert.validity().is_valid_at(to_asn1_time(now)?) {
                 return Err(format!(
@@ -140,7 +186,9 @@ fn verify_vcek_chain(
         }
         return Ok(roots.product);
     }
-    Err("SEV-SNP VCEK is not signed by a pinned AMD ASK".into())
+    Err(format!(
+        "SEV-SNP {signing_key} is not signed by a pinned AMD {intermediate_name}"
+    ))
 }
 
 /// Converts `now` to an ASN.1 time for certificate validity checks.
@@ -148,15 +196,17 @@ fn to_asn1_time(now: UnixTime) -> Result<ASN1Time, String> {
     ASN1Time::from_timestamp(now.as_secs() as i64).map_err(|e| format!("invalid time: {e}"))
 }
 
-/// Checks that the VCEK was issued for this chip (`hwID`) and for the report's TCB.
+/// Checks that the VCEK was issued for this chip (`hwID`; VLEKs are not chip-specific) and that
+/// the VCEK or VLEK was issued for the report's TCB.
 fn check_vcek_matches_report(
     vcek: &X509Certificate<'_>,
+    signing_key: SigningKey,
     report: &[u8],
     product: AmdProduct,
     chip_id_masked: bool,
 ) -> Result<(), String> {
     let chip_id = &report[OFFSET_CHIP_ID..OFFSET_CHIP_ID + 64];
-    if !chip_id_masked {
+    if signing_key == SigningKey::Vcek && !chip_id_masked {
         let hw_id = extension(vcek, OID_HW_ID).ok_or("SEV-SNP VCEK has no hwID extension")?;
         let hw_id = unwrap_octet_string(hw_id);
         // Turin VCEKs carry an 8-byte hardware ID; earlier families the full 64-byte chip ID.
@@ -183,16 +233,16 @@ fn check_vcek_matches_report(
         ],
     };
     for (name, oid, value) in expected {
-        let ext =
-            extension(vcek, oid).ok_or_else(|| format!("SEV-SNP VCEK has no {name} extension"))?;
+        let ext = extension(vcek, oid)
+            .ok_or_else(|| format!("SEV-SNP {signing_key} has no {name} extension"))?;
         let (_, int) = der_parser::der::parse_der_integer(ext)
-            .map_err(|_| format!("SEV-SNP VCEK {name} extension is not an integer"))?;
+            .map_err(|_| format!("SEV-SNP {signing_key} {name} extension is not an integer"))?;
         let spl = int
             .as_u32()
-            .map_err(|_| format!("SEV-SNP VCEK {name} extension is out of range"))?;
+            .map_err(|_| format!("SEV-SNP {signing_key} {name} extension is out of range"))?;
         if spl != u32::from(*value) {
             return Err(format!(
-                "SEV-SNP VCEK {name} ({spl}) does not match the report's TCB ({value})"
+                "SEV-SNP {signing_key} {name} ({spl}) does not match the report's TCB ({value})"
             ));
         }
     }
@@ -215,11 +265,15 @@ fn unwrap_octet_string(value: &[u8]) -> &[u8] {
     }
 }
 
-/// Verifies the report's ECDSA P-384 signature with the VCEK public key.
+/// Verifies the report's ECDSA P-384 signature with the VCEK or VLEK public key.
 ///
 /// The signature stores `r` and `s` as 72-byte little-endian integers; ring expects them as
 /// 48-byte big-endian values.
-fn verify_report_signature(vcek: &X509Certificate<'_>, report: &[u8]) -> Result<(), String> {
+fn verify_report_signature(
+    vcek: &X509Certificate<'_>,
+    signing_key: SigningKey,
+    report: &[u8],
+) -> Result<(), String> {
     let signature = &report[SIGNED_LEN..SIGNED_LEN + 144];
     let mut fixed = Vec::with_capacity(96);
     for component in [&signature[..72], &signature[72..144]] {
@@ -234,5 +288,5 @@ fn verify_report_signature(vcek: &X509Certificate<'_>, report: &[u8]) -> Result<
         &report[..SIGNED_LEN],
         &fixed,
     )
-    .map_err(|_| "SEV-SNP report signature is invalid".to_string())
+    .map_err(|_| format!("SEV-SNP report signature is invalid for its {signing_key}"))
 }
