@@ -34,3 +34,6 @@ tokio-vsock.workspace = true
 [dev-dependencies]
 rcgen.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

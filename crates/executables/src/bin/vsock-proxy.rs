@@ -20,7 +20,7 @@
 //!
 //! The relay only moves opaque QUIC datagrams: TLS terminates inside the enclave, so peers still
 //! verify the RA-TLS evidence end to end. It runs in the foreground; run it as a daemon under a
-//! service manager such as systemd. Linux only.
+//! service manager such as systemd. `SIGTERM` / `SIGINT` stop it cleanly. Linux only.
 
 #[cfg(target_os = "linux")]
 use std::net::SocketAddr;
@@ -42,13 +42,17 @@ fn parse_args() -> RelayConfig {
     }
 }
 
-/// Entry point for the `vsock-proxy` binary.
+/// Entry point for the `vsock-proxy` binary: runs until a listener fails (an error) or the
+/// process gets `SIGTERM` / `SIGINT` (a clean exit).
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
     let config = parse_args();
-    imp::run(config).await
+    tokio::select! {
+        result = imp::run(config) => result,
+        () = ttk_executables::shutdown::shutdown_signal() => Ok(()),
+    }
 }
 
 /// Entry point for the `vsock-proxy` binary on platforms without vsock.
