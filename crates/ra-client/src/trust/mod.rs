@@ -37,28 +37,35 @@ pub struct AmdRoots {
     pub ark: Vec<u8>,
     /// DER of the AMD SEV Key certificate, signed by the ARK; it signs VCEKs.
     pub ask: Vec<u8>,
+    /// DER of the AMD SEV VLEK Key certificate, signed by the ARK; it signs VLEKs (the
+    /// endorsement keys cloud providers such as AWS load into their chips).
+    pub asvk: Vec<u8>,
 }
 
 /// Built-in AMD roots.
 impl AmdRoots {
-    /// ARK/ASK pairs for Milan, Genoa and Turin, downloaded from the AMD KDS
-    /// (`https://kdsintf.amd.com/vcek/v1/<product>/cert_chain`).
+    /// ARK/ASK/ASVK certificates for Milan, Genoa and Turin, downloaded from the AMD KDS
+    /// (`https://kdsintf.amd.com/vcek/v1/<product>/cert_chain` and
+    /// `https://kdsintf.amd.com/vlek/v1/<product>/cert_chain`).
     pub fn builtin() -> Vec<Self> {
         vec![
             Self {
                 product: AmdProduct::Milan,
                 ark: include_bytes!("certs/amd_milan_ark.der").to_vec(),
                 ask: include_bytes!("certs/amd_milan_ask.der").to_vec(),
+                asvk: include_bytes!("certs/amd_milan_asvk.der").to_vec(),
             },
             Self {
                 product: AmdProduct::Genoa,
                 ark: include_bytes!("certs/amd_genoa_ark.der").to_vec(),
                 ask: include_bytes!("certs/amd_genoa_ask.der").to_vec(),
+                asvk: include_bytes!("certs/amd_genoa_asvk.der").to_vec(),
             },
             Self {
                 product: AmdProduct::Turin,
                 ark: include_bytes!("certs/amd_turin_ark.der").to_vec(),
                 ask: include_bytes!("certs/amd_turin_ask.der").to_vec(),
+                asvk: include_bytes!("certs/amd_turin_asvk.der").to_vec(),
             },
         ]
     }
@@ -74,7 +81,7 @@ pub struct TrustStore {
     pub mock_nitro_root: Vec<u8>,
     /// DER of the Intel SGX Root CA (roots both SGX and TDX PCK chains).
     pub intel_sgx_root: Vec<u8>,
-    /// AMD root (ARK) and signing (ASK) certificates per processor family.
+    /// AMD root (ARK) and signing (ASK, ASVK) certificates per processor family.
     pub amd: Vec<AmdRoots>,
 }
 

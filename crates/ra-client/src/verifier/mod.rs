@@ -127,6 +127,63 @@ pub fn verify_evidence(
     images: &dyn ImageTrustStore,
     policy: Policy,
 ) -> Result<VerifiedEvidence, String> {
+    let evidence = appraise(cmw_bytes, now, trust, images, policy)?;
+    if !is_bound_to(&evidence.report_data, binding) {
+        return Err(format!(
+            "{} report data does not match the certificate's public key",
+            evidence.tee
+        ));
+    }
+    Ok(evidence)
+}
+
+/// Like [`verify_evidence`], for Evidence answering a `POST /evidence` `nonce` (RFC 9334 §10):
+/// it must be bound to `binding` and carry `nonce`. Nitro documents carry the nonce in their
+/// `nonce` field; TDX, SGX and SEV-SNP, whose report data holds only 64 bytes, carry
+/// `binding || SHA-256(nonce)` ([`ttk_core::fresh_evidence::report_data`]).
+pub fn verify_evidence_with_nonce(
+    cmw_bytes: &[u8],
+    binding: &[u8],
+    nonce: &[u8],
+    now: UnixTime,
+    trust: &TrustStore,
+    images: &dyn ImageTrustStore,
+    policy: Policy,
+) -> Result<VerifiedEvidence, String> {
+    let evidence = appraise(cmw_bytes, now, trust, images, policy)?;
+    let tee = evidence.tee;
+    match &evidence.nitro {
+        Some(doc) => {
+            if !is_bound_to(&evidence.report_data, binding) {
+                return Err(format!(
+                    "{tee} report data does not match the certificate's public key"
+                ));
+            }
+            if doc.nonce.as_deref() != Some(nonce) {
+                return Err(format!("{tee} evidence does not carry the nonce"));
+            }
+        }
+        None => {
+            let expected = ttk_core::fresh_evidence::report_data(binding, Some(nonce))?;
+            if evidence.report_data != expected {
+                return Err(format!(
+                    "{tee} report data does not match the certificate's public key and the nonce"
+                ));
+            }
+        }
+    }
+    Ok(evidence)
+}
+
+/// Verifies the TEE evidence in `cmw_bytes` against the vendor roots, `images` and `policy`,
+/// without checking what its report data binds.
+fn appraise(
+    cmw_bytes: &[u8],
+    now: UnixTime,
+    trust: &TrustStore,
+    images: &dyn ImageTrustStore,
+    policy: Policy,
+) -> Result<VerifiedEvidence, String> {
     let cmw = Cmw::from_cbor_bytes(cmw_bytes).map_err(|e| format!("invalid CMW: {e}"))?;
     let tee = TeeKind::from_cmw(&cmw).ok_or("CMW does not carry supported TEE evidence")?;
 
@@ -151,11 +208,6 @@ pub fn verify_evidence(
 
     if evidence.debug && !(policy.allow_debug || (policy.allow_mock && evidence.mock)) {
         return Err(format!("{tee} evidence comes from a debug-mode TEE"));
-    }
-    if !is_bound_to(&evidence.report_data, binding) {
-        return Err(format!(
-            "{tee} report data does not match the certificate's public key"
-        ));
     }
     Ok(evidence)
 }
