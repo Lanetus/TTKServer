@@ -11,86 +11,9 @@ env:
   IMAGE_TAG: latest
 
 jobs:
-  bump_version:
-    name: Bump version
-    runs-on: ubuntu-latest
-    # This condition prevents the workflow from running on its own commits
-    if: "!contains(github.event.head_commit.message, 'chore(release):')"
-    permissions:
-      contents: write
-    outputs:
-      new_tag: ${{ steps.version.outputs.tag }}
-    steps:
-      - name: Generate GitHub App Token
-        id: generate-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ vars.LANETUS_APP_ID }}
-          private-key: ${{ secrets.LANETUS_PRIVATE_KEY }}
-
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          token: ${{ steps.generate-token.outputs.token }}
-          fetch-depth: 0
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Determine bump level
-        id: bump_level
-        env:
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-        run: |
-          commit_message="$COMMIT_MESSAGE"
-          if [[ "$commit_message" == major:* ]]; then
-            echo "level=major" >> $GITHUB_OUTPUT
-          elif [[ "$commit_message" == feat:* ]]; then
-            echo "level=minor" >> $GITHUB_OUTPUT
-          elif [[ "$commit_message" == fix:* ]]; then
-            echo "level=patch" >> $GITHUB_OUTPUT
-          else
-            echo "level=patch" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Install cargo-edit
-        run: cargo install cargo-edit
-
-      - name: Bump version
-        run: cargo set-version --workspace --bump ${{ steps.bump_level.outputs.level }}
-
-      - name: Get new version
-        id: version
-        run: echo "tag=$(cargo pkgid -p ttk-ra-server | sed 's/.*[#@]//')" >> $GITHUB_OUTPUT
-
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Update CHANGELOG.md
-        continue-on-error: true
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          VERSION: ${{ steps.version.outputs.tag }}
-        run: |
-          claude -p "Use the changelog subagent to update CHANGELOG.md, then release-stamp it as \
-          version $VERSION (the root Cargo.toml has already been bumped; the v$VERSION tag does \
-          not exist yet, so the commits in <latest-tag>..HEAD are this release). \
-          Edit only CHANGELOG.md. Do not commit." \
-            --model claude-sonnet-5-5 \
-            --max-turns 30 \
-            --allowedTools "Task,Read,Edit,Write,Grep,Glob,Bash(git log:*),Bash(git tag:*),Bash(git show:*),Bash(git diff:*),Bash(git remote:*)"
-          git diff --stat CHANGELOG.md
-
-      - name: Commit version bump and create tag
-        uses: stefanzweifel/git-auto-commit-action@v4
-        with:
-          commit_message: "chore(release): version ${{ steps.version.outputs.tag }}"
-          tagging_message: "v${{ steps.version.outputs.tag }}"
-
   test:
     name: Test and Coverage
     runs-on: ubuntu-latest
-    needs: bump_version
     permissions:
       contents: read
     steps:
