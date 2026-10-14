@@ -23,6 +23,7 @@ ring.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 x509-parser.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bytes.workspace = true

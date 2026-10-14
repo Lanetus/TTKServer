@@ -8,7 +8,7 @@ Only the latest release receives security fixes. Releases are cut automatically 
 
 | Version          | Supported |
 |------------------|:---------:|
-| Latest `2.x`     | ✓         |
+| Latest release   | ✓         |
 | Older releases   | ✗         |
 
 ## Reporting a vulnerability
@@ -19,7 +19,7 @@ Report them privately through GitHub's [security advisories](https://github.com/
 
 Please include as much of the following as you can:
 
-- The affected crate(s) (`ttk-core`, `ttk-ra-server`, `ttk-ra-client`, `ttk-relay`, `ttk-storage`), version or commit, and enabled Cargo features
+- The affected crate(s) (`ttk-core`, `ttk-ra-server`, `ttk-ra-client`, `ttk-relay`, `ttk-root`, `ttk-storage`), version or commit, and enabled Cargo features
 - The TEE involved (AWS Nitro, AMD SEV-SNP, Intel TDX / SGX, or none)
 - A description of the issue and its impact: what an attacker can do, and from what position (network, parent instance, malicious host, compromised enclave, ...)
 - Steps to reproduce, or a proof of concept
@@ -42,7 +42,7 @@ Out of scope — known, documented limitations:
 
 - **Mock attestation.** The `mock` provider, the TTKServer mock root CA, `TTK_ALLOW_MOCK_ATTESTATION=1` and `EnclaveCertVerifier::allow_mock()` are for development only and provide no security.
 - **`EnclaveCertVerifier` skips CA validation by design.** Trust comes from the attestation evidence and its binding to the certificate key; using it outside an RA-TLS flow is a misuse.
-- **No freshness.** Evidence is generated once at startup and the server takes no nonce, so evidence is not proof of liveness.
+- **No freshness in the certificate.** The Evidence in the RA-TLS certificate and `GET /evidence.cmw` is generated once at startup, with no nonce, so it is not proof of liveness; fresh Evidence is only available through `POST /evidence`.
 - **The attestation OID** `1.3.6.1.4.1.99999.1` is a placeholder, not a registered PEN.
 - **The `client` binary** is a test tool and is never shipped in enclave images.
 - **Reference values.** Choosing and distributing the expected PCRs / measurements happens outside this repository.

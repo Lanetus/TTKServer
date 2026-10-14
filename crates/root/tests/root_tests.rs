@@ -152,7 +152,6 @@ async fn root_attestation_serves_the_builtin_accepted_images() {
         .collect();
     let body = fetch(addr).await;
     assert_eq!(body.hash_algorithm, "SHA384");
-    assert!(!body.pcr0.is_empty());
     assert_eq!(body.pcr0, expected);
 }
 
@@ -174,8 +173,10 @@ async fn base_routes_are_still_served() {
 }
 
 #[test]
-fn builtin_nitro_image_allowlist_is_valid_and_not_empty() {
-    assert!(!FileImageTrustStore::builtin()
-        .nitro_image_allowlist()
-        .is_empty());
+fn builtin_nitro_image_allowlist_is_valid() {
+    // Empty until reproducible, labelled images are listed: every non-debug Nitro enclave is
+    // rejected meanwhile (fails closed).
+    for pcr0 in FileImageTrustStore::builtin().nitro_image_allowlist() {
+        assert_eq!(pcr0.len(), 48);
+    }
 }

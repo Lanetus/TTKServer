@@ -49,16 +49,24 @@ fn public_unicast_addresses_are_public() {
         HopAddressClass::Public,
         &[
             "8.8.8.8",
-            "203.0.113.7",
+            "52.95.110.1",
             "1.0.0.1",
+            "192.0.1.255",
+            "192.0.3.0",
+            "198.17.255.255",
+            "198.20.0.0",
+            "203.0.112.255",
             "100.63.255.255",
             "100.128.0.0",
             "172.15.255.255",
             "172.32.0.0",
             "169.253.255.255",
             "223.255.255.255",
-            "2001:db8::1",
+            "2001:4860:4860::8888",
+            "2001:db9::1",
+            "2003::1",
             "2606:4700::1111",
+            "64:ff9a::1",
             "fbff::1",
             "fe7f::1",
             "fec0::1",
@@ -82,7 +90,7 @@ fn loopback_private_and_shared_addresses_are_private() {
             "100.127.255.255",
             "::1",
             "fc00::1",
-            "fd00:ec2::254",
+            "fd00:ec2:0:1::1",
             "fdff:ffff::1",
             "::ffff:10.0.0.1",
             "::ffff:127.0.0.1",
@@ -110,6 +118,44 @@ fn unroutable_link_local_and_group_addresses_are_forbidden() {
             "::ffff:169.254.169.254",
             "::ffff:0.0.0.0",
             "::ffff:224.0.0.1",
+        ],
+    );
+}
+
+#[test]
+fn reserved_documentation_and_ec2_service_addresses_are_forbidden() {
+    assert_class(
+        HopAddressClass::Forbidden,
+        &[
+            "192.0.0.1",
+            "192.0.2.1",
+            "198.51.100.1",
+            "203.0.113.7",
+            "198.18.0.1",
+            "198.19.255.255",
+            "240.0.0.1",
+            "254.255.255.255",
+            "2001:db8::1",
+            "100::1",
+            "fd00:ec2::254",
+            "fd00:ec2::253",
+            "fd00:ec2::123",
+        ],
+    );
+}
+
+#[test]
+fn ipv6_addresses_embedding_an_ipv4_address_are_forbidden() {
+    assert_class(
+        HopAddressClass::Forbidden,
+        &[
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b::808:808",
+            "64:ff9b:1::1",
+            "2002:a9fe:a9fe::1",
+            "2001:0:4136:e378::1",
+            "::169.254.169.254",
+            "::8.8.8.8",
         ],
     );
 }

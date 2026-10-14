@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
 use tokio_vsock::{VsockListener, VsockStream};
 
@@ -43,6 +43,11 @@ const RECV_QUEUE: usize = 1024;
 /// Outgoing datagrams buffered per peer; further datagrams are dropped, as a full UDP socket
 /// buffer would.
 const PEER_QUEUE: usize = 256;
+
+/// Inbound vsock connections served at once (each one task and one [`PEER_QUEUE`]); further
+/// connections wait in the listen backlog until one closes. Equal to the number of clients
+/// `vsock-proxy` relays at once, so the parent never needs more.
+pub const MAX_VSOCK_PEERS: usize = 4096;
 
 /// Outgoing datagram queues, keyed by the peer address quinn sees for each vsock connection.
 type Peers = Arc<Mutex<HashMap<SocketAddr, mpsc::Sender<Bytes>>>>;
@@ -84,10 +89,19 @@ impl Drop for VsockUdpSocket {
     }
 }
 
-/// Accepts vsock connections, giving each a unique synthetic peer address.
+/// Accepts vsock connections, giving each a unique synthetic peer address. At most
+/// [`MAX_VSOCK_PEERS`] are served at once, so the parent cannot exhaust enclave memory.
 async fn accept_loop(mut listener: VsockListener, peers: Peers, incoming: Incoming) {
+    let slots = Arc::new(Semaphore::new(MAX_VSOCK_PEERS));
     let mut next_id: u64 = 0;
     loop {
+        // Only accept once a slot is free: further connections wait in the backlog.
+        let Ok(slot) = slots.clone().acquire_owned().await else {
+            return;
+        };
+        if slots.available_permits() == 0 {
+            warn!("{MAX_VSOCK_PEERS} vsock peers connected; new connections wait");
+        }
         let (stream, vsock_addr) = match listener.accept().await {
             Ok(accepted) => accepted,
             Err(e) => {
@@ -112,6 +126,7 @@ async fn accept_loop(mut listener: VsockListener, peers: Peers, incoming: Incomi
             pump(stream, peer, rx, &incoming).await;
             forget_peer(&peers, peer, &tx);
             info!("vsock peer {peer} disconnected");
+            drop(slot);
         });
     }
 }

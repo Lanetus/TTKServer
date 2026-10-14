@@ -19,7 +19,8 @@
 #   TTK_EIF=/opt/ttkserver/ttk-terminal.eif
 #   TTK_ENCLAVE_CID=17                 # vsock-proxy's TTK_ENCLAVE_CID must match
 #   TTK_ENCLAVE_CPUS=2
-#   TTK_ENCLAVE_MEMORY=1024            # MiB
+#   TTK_ENCLAVE_MEMORY=4096            # MiB; the server's worst case (MAX_IN_FLIGHT_BODY_BYTES)
+#                                      # needs about 2.5 GiB, so keep at least 4096
 #   TTK_ENCLAVE_EXTRA_ARGS=--debug-mode   # debug only: zeroes PCRs, so strict clients reject it
 #
 # Status: nitro-cli describe-enclaves; logs: journalctl -u ttk-terminal-enclave
@@ -38,7 +39,7 @@ Environment=TTK_EIF=/opt/ttkserver/ttk-terminal.eif
 Environment=TTK_ENCLAVE_NAME=ttk-terminal
 Environment=TTK_ENCLAVE_CID=17
 Environment=TTK_ENCLAVE_CPUS=2
-Environment=TTK_ENCLAVE_MEMORY=1024
+Environment=TTK_ENCLAVE_MEMORY=4096
 Environment=TTK_ENCLAVE_EXTRA_ARGS=
 EnvironmentFile=-/etc/default/ttk-terminal-enclave
 # Clear an enclave left over from an unclean stop, so its CID and resources are free.

@@ -80,15 +80,25 @@ impl RootAttestation {
 
 /// Parses a Nitro image allowlist: one PCR (96 hex characters, a SHA-384 digest) per line.
 /// Blank lines and text after `#` are ignored.
+///
+/// An all-zero PCR is refused: it is what a debug-mode enclave reports for PCR0 (and what an
+/// unsigned image reports for PCR8), so listing it would accept any such enclave.
 pub fn parse_image_allowlist(text: &str) -> Result<Vec<Vec<u8>>, String> {
     text.lines()
         .enumerate()
         .map(|(i, line)| (i + 1, line.split('#').next().unwrap_or_default().trim()))
         .filter(|(_, entry)| !entry.is_empty())
         .map(|(n, entry)| {
-            decode_sha384_hex(entry).ok_or(format!(
+            let pcr = decode_sha384_hex(entry).ok_or(format!(
                 "line {n}: expected a PCR of 96 hex characters, got '{entry}'"
-            ))
+            ))?;
+            if pcr.iter().all(|b| *b == 0) {
+                return Err(format!(
+                    "line {n}: an all-zero PCR (debug-mode enclave or unsigned image) is never \
+                     an accepted image"
+                ));
+            }
+            Ok(pcr)
         })
         .collect()
 }

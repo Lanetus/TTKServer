@@ -91,10 +91,7 @@ impl fmt::Debug for CertificateStore {
 
 impl CertificateStore {
     /// Creates a store presenting `cert` with the RA-TLS `key`, with no trusted roots.
-    pub fn new(
-        cert: CertificateDer<'static>,
-        key: &PrivateKeyDer<'static>,
-    ) -> Result<Self, BoxError> {
+    pub fn new(cert: CertificateDer<'static>, key: &PrivateKeyDer<'_>) -> Result<Self, BoxError> {
         let signing_key = any_supported_type(key)?;
         Ok(Self {
             current: RwLock::new(Arc::new(CertifiedKey::new(vec![cert], signing_key.clone()))),
@@ -186,16 +183,16 @@ impl CertificateStore {
             .verify_server_cert(leaf, intermediates, &name, &[], UnixTime::now())
             .map_err(|e| CertificateError::Untrusted(e.to_string()))?;
 
-        // Only the first of concurrent valid replacements wins.
-        if self
-            .replaced
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        // Concurrent valid replacements serialize on the write lock; only the first wins. The
+        // chain is installed before the flag is set, so a connection that sees `is_replaced()`
+        // is always handed the CA-issued certificate.
+        let mut current = self.current.write().unwrap_or_else(|e| e.into_inner());
+        if self.replaced.load(Ordering::Acquire) {
             return Err(CertificateError::AlreadyReplaced);
         }
-        let replacement = Arc::new(CertifiedKey::new(chain, self.signing_key.clone()));
-        *self.current.write().unwrap_or_else(|e| e.into_inner()) = replacement;
+        *current = Arc::new(CertifiedKey::new(chain, self.signing_key.clone()));
+        self.replaced.store(true, Ordering::Release);
+        drop(current);
         info!("Replaced the RA-TLS certificate with a CA-issued one; routes unlocked for new connections");
         Ok(())
     }
