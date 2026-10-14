@@ -8,7 +8,7 @@
 # instance role to the bucket rather than e.g. AmazonS3FullAccess.
 #
 # Install (after vsock-proxy-tcp, same binary):
-#   sudo install -m 0644 deploy/systemd/vsock-proxy-imds.service /etc/systemd/system/
+#   sudo install -m 0644 deploy/nitro/systemd/vsock-proxy-imds.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now vsock-proxy-imds
 #
 # Configure in /etc/default/vsock-proxy-imds (optional; overrides the defaults below), e.g.

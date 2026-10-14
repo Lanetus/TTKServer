@@ -54,14 +54,14 @@ async fn frames_round_trip() {
 #[tokio::test]
 async fn resolve_request_round_trips() {
     let mut buf = Vec::new();
-    write_resolve_request(&mut buf, "a.ttk-server.net", 443)
+    write_resolve_request(&mut buf, "a.root.ttk-servers.net", 443)
         .await
         .unwrap();
     assert_eq!(buf[0], RESOLVE_REQUEST);
     assert_eq!(
         read_outbound_request(&mut &buf[..]).await.unwrap(),
         OutboundRequest::Resolve {
-            host: "a.ttk-server.net".to_string(),
+            host: "a.root.ttk-servers.net".to_string(),
             port: 443
         }
     );
@@ -80,7 +80,7 @@ async fn destination_header_is_a_relay_request() {
 
 #[test]
 fn host_names_are_checked() {
-    for host in ["a.ttk-server.net", "localhost", "example.com."] {
+    for host in ["a.root.ttk-servers.net", "localhost", "example.com."] {
         assert!(check_host_name(host).is_ok(), "{host}");
     }
     let too_long = format!("{}.com", "a".repeat(250));
