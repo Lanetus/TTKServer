@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.1] - 2026-10-14
+
+### Added
+- `POST /certificate` route on `ttk-ra-server` nodes: replaces the self-signed RA-TLS certificate once with a CA-issued one for the same key and attestation extension (204; 400 malformed, 422 not the current cert, 403 untrusted, 503 no trusted roots). Only the built-in TTK root CA (`ttk_core::TTK_ROOT_CA_PEM`) is trusted.
+- Route gating: until a CA-issued certificate is installed, a node serves only `POST /evidence` and `POST /certificate` (everything else 404); afterwards every other route is served, only on connections that negotiated the CA-issued certificate.
+- `POST /evidence` now also returns the currently presented RA-TLS leaf certificate alongside the Evidence (`FreshEvidence`, CMW collection `{evidence, certificate}`).
+- `certify-server` binary (test-only): a test CA that authorizes a node by checking its fresh Evidence and installing a CA-issued certificate via `POST /certificate`.
+- `s3-server` binary (feature `s3`): a terminal node storing files in S3 (`TTK_S3_BUCKET`, optional `TTK_S3_ENDPOINT`), with S3 over vsock (`TTK_S3_VSOCK_PORT`) and instance-role credentials over vsock (`TTK_IMDS_VSOCK_PORT`).
+- `vsock-proxy-tcp` binary and `vsock-proxy-imds` systemd unit: parent-side forwarding of enclave traffic to one fixed TCP remote (S3) and to the instance metadata service; `deploy/ec2/user-data.sh` and the systemd units set them up for `TTK_NODE=s3-server`.
+- Downloads of missing files get a sealed `{"error": "not_found"}` reply from the file service.
+- `echo` terminal node, `local-mem-server` (in-memory file service) and the test-only `client-m` text client; `scripts/build-eif.sh` and `deploy/ec2/user-data.sh` (`TTK_NODE=echo`) can build and deploy `echo` as an enclave node.
+- Optional EIF signing in `scripts/build-eif.sh` (`TTK_EIF_SIGNING_CERT`/`TTK_EIF_SIGNING_KEY`, PCR8).
+
+### Changed
+- All binaries now live in the new `ttk-executables` crate; the other crates are libraries only. `ttk-terminal` is renamed `ttk-storage`.
+- The `/faf` wire format (`ttk_core::faf`) and onion sealing (`ttk_core::seal`) moved from `ttk-ra-client` into `ttk-core`; `ttk_ra_client::faf::X` is now `ttk_ra_client::X`, and `ttk-ra-server` no longer depends on `ttk-ra-client`.
+- `BoxError` is defined in `ttk-core`; `Evaluator`/`EvalError` live at the `ttk-ra-server` root and the file service at the `ttk-storage` root.
+- `EnclaveCertVerifier` accepts CA-issued RA-TLS certificates (CA signature unchecked; trust still comes from the attestation).
+- Nodes trust only the built-in TTK root CA instead of the `TTK_CA_ROOTS` environment variable.
+- Reproducible EIF builds: base images pinned by digest, Debian snapshot, pinned `nitro-cli`, `SOURCE_DATE_EPOCH`; EIFs are built with the `nitro` feature only. The root node's image allowlist is emptied (fails closed until reproducible PCR0s are added).
+- `create_attestation_for_cert` is renamed `create_attestation_for_key` (hashes the SPKI); `allow_mock` only waives the debug-PCR check for mock documents.
+- Enclave units default to `TTK_ENCLAVE_MEMORY=4096`.
+
+### Security
+- The CA-issued certificate is installed before the replaced flag is set, so a connection marked CA-issued always presents it.
+- Egress policy also forbids reserved/documentation IPv4 ranges, NAT64, 6to4, Teredo, IPv4-compatible IPv6 and the EC2 IPv6 service range `fd00:ec2::/64` as hops.
+- Image allowlists refuse all-zero PCRs.
+- The RA-TLS private key, the P-256 scalar copy and `MessageKey` are zeroized on drop.
+- Concurrent inbound vsock peers are capped (`MAX_VSOCK_PEERS`, 4096); in-flight request body memory is bounded to 1 GiB (`MAX_IN_FLIGHT_BODY_BYTES`, else 503).
+
 ## [6.0.0] - 2026-10-07
 
 ### Changed
@@ -437,7 +467,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.0.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.0.1...HEAD
+[6.0.1]: https://github.com/Lanetus/TTKServer/compare/v6.0.0...v6.0.1
 [6.0.0]: https://github.com/Lanetus/TTKServer/compare/v5.0.0...v6.0.0
 [5.0.0]: https://github.com/Lanetus/TTKServer/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/Lanetus/TTKServer/compare/v3.0.3...v4.0.0
