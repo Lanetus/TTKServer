@@ -34,7 +34,7 @@ use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower_service::Service;
 use zeroize::Zeroizing;
 
@@ -150,6 +150,78 @@ pub const MAX_STREAMS_PER_CONNECTION: u32 = 16;
 /// Flow-control window for all streams of one connection together, in bytes: bounds the request
 /// data a connection can have buffered at once.
 pub const CONNECTION_RECEIVE_WINDOW: u32 = 4 * 1024 * 1024;
+
+/// Most request body bytes held in memory across all requests of a server at once (a
+/// [`BodyBudget`]); a request whose body does not fit gets `503 Service Unavailable`.
+///
+/// Without it, [`MAX_CONNECTIONS`] x [`MAX_STREAMS_PER_CONNECTION`] x [`MAX_REQUEST_BODY`] is
+/// 16 GiB. With it, the worst case is about 1 GiB of bodies, plus up to 2 MiB per relay forward
+/// and the per-connection QUIC state: enclaves are given 4 GiB (`TTK_ENCLAVE_MEMORY`).
+pub const MAX_IN_FLIGHT_BODY_BYTES: usize = 1024 * 1024 * 1024;
+
+/// A budget of request body bytes shared by all requests of a server, so that concurrent
+/// requests cannot hold more than a fixed amount of memory in bodies.
+#[derive(Debug, Clone)]
+pub struct BodyBudget(Arc<Semaphore>);
+
+/// Reservations against the budget.
+impl BodyBudget {
+    /// A budget of `bytes`.
+    pub fn new(bytes: usize) -> Self {
+        Self(Arc::new(Semaphore::new(bytes)))
+    }
+
+    /// Bytes not reserved by any request.
+    pub fn available(&self) -> usize {
+        self.0.available_permits()
+    }
+
+    /// An empty reservation for one request, grown as its body arrives.
+    pub fn reservation(&self) -> BodyReservation {
+        BodyReservation {
+            budget: self.0.clone(),
+            permit: None,
+        }
+    }
+}
+
+/// The bytes one request holds of a [`BodyBudget`]; returned to the budget when dropped.
+#[derive(Debug)]
+pub struct BodyReservation {
+    budget: Arc<Semaphore>,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+/// Growing the reservation.
+impl BodyReservation {
+    /// Reserves `bytes` more, without waiting. Returns `false` (reserving nothing more) if the
+    /// budget has less than `bytes` left.
+    pub fn grow(&mut self, bytes: usize) -> bool {
+        let Ok(bytes) = u32::try_from(bytes) else {
+            return false;
+        };
+        let Ok(more) = self.budget.clone().try_acquire_many_owned(bytes) else {
+            return false;
+        };
+        match &mut self.permit {
+            Some(permit) => permit.merge(more),
+            None => self.permit = Some(more),
+        }
+        true
+    }
+
+    /// Bytes reserved.
+    pub fn len(&self) -> usize {
+        self.permit
+            .as_ref()
+            .map_or(0, OwnedSemaphorePermit::num_permits)
+    }
+
+    /// Whether nothing is reserved.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
 
 /// Where the server's QUIC endpoint listens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,13 +400,14 @@ impl Server {
             );
         }
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+        let budget = BodyBudget::new(MAX_IN_FLIGHT_BODY_BYTES);
         while let Some(incoming) = self.endpoint.accept().await {
             let Ok(permit) = connections.clone().try_acquire_owned() else {
                 warn!("Refusing connection: {MAX_CONNECTIONS} already open");
                 incoming.refuse();
                 continue;
             };
-            let app = app.clone();
+            let (app, budget) = (app.clone(), budget.clone());
             // Read before the handshake: see `CertificatePhase`.
             let phase = if self.certificates.is_replaced() {
                 CertificatePhase::CaIssued
@@ -342,7 +415,7 @@ impl Server {
                 CertificatePhase::SelfSigned
             };
             tokio::spawn(async move {
-                handle_connection(incoming, app, phase).await;
+                handle_connection(incoming, app, phase, budget).await;
                 drop(permit);
             });
         }
@@ -444,8 +517,13 @@ fn build_tls_config(certificates: Arc<CertificateStore>) -> Result<rustls::Serve
 }
 
 /// Drives a single QUIC connection, dispatching each HTTP/3 request to `app` with the
-/// connection's certificate `phase` attached.
-async fn handle_connection(incoming: quinn::Incoming, app: Router, phase: CertificatePhase) {
+/// connection's certificate `phase` attached; request bodies are reserved against `budget`.
+async fn handle_connection(
+    incoming: quinn::Incoming,
+    app: Router,
+    phase: CertificatePhase,
+    budget: BodyBudget,
+) {
     let conn = match incoming.await {
         Ok(conn) => conn,
         Err(err) => return warn!("Handshake failed: {err}"),
@@ -463,7 +541,7 @@ async fn handle_connection(incoming: quinn::Incoming, app: Router, phase: Certif
     while let Ok(Some((mut req, stream))) = h3_conn.accept().await {
         req.extensions_mut().insert(phase);
         let app = app.clone();
-        tokio::spawn(respond(app, req, stream));
+        tokio::spawn(respond(app, req, stream, budget.reservation()));
     }
 }
 
@@ -471,12 +549,29 @@ async fn handle_connection(incoming: quinn::Incoming, app: Router, phase: Certif
 type ServerStream =
     h3::server::RequestStream<h3_quinn::BidiStream<axum::body::Bytes>, axum::body::Bytes>;
 
-/// Reads the request body from `stream`. Returns `None` if it exceeds [`MAX_REQUEST_BODY`].
-async fn read_body(stream: &mut ServerStream) -> Result<Option<Bytes>, SendError> {
+/// How reading a request body ended.
+enum Body {
+    /// The whole body, reserved against the budget.
+    Complete(Bytes),
+    /// Larger than [`MAX_REQUEST_BODY`].
+    TooLarge,
+    /// The server's [`BodyBudget`] is exhausted.
+    OverBudget,
+}
+
+/// Reads the request body from `stream`, reserving each chunk against `reservation` before
+/// buffering it.
+async fn read_body(
+    stream: &mut ServerStream,
+    reservation: &mut BodyReservation,
+) -> Result<Body, SendError> {
     let mut body = BytesMut::new();
     while let Some(mut chunk) = stream.recv_data().await? {
         if body.len() + chunk.remaining() > MAX_REQUEST_BODY {
-            return Ok(None);
+            return Ok(Body::TooLarge);
+        }
+        if !reservation.grow(chunk.remaining()) {
+            return Ok(Body::OverBudget);
         }
         while chunk.has_remaining() {
             let slice = chunk.chunk();
@@ -485,20 +580,37 @@ async fn read_body(stream: &mut ServerStream) -> Result<Option<Bytes>, SendError
             chunk.advance(len);
         }
     }
-    Ok(Some(body.freeze()))
+    Ok(Body::Complete(body.freeze()))
 }
 
 /// Reads the body of `req`, runs it through `app` and streams the response back over the
-/// HTTP/3 `stream`.
-async fn respond(mut app: Router, req: axum::http::Request<()>, mut stream: ServerStream) {
-    let body = tokio::time::timeout(REQUEST_BODY_TIMEOUT, read_body(&mut stream)).await;
+/// HTTP/3 `stream`. The body stays reserved in `reservation` until the response is sent.
+async fn respond(
+    mut app: Router,
+    req: axum::http::Request<()>,
+    mut stream: ServerStream,
+    mut reservation: BodyReservation,
+) {
+    let body = tokio::time::timeout(
+        REQUEST_BODY_TIMEOUT,
+        read_body(&mut stream, &mut reservation),
+    )
+    .await;
     let response = match body {
         Err(_) => (StatusCode::REQUEST_TIMEOUT, "request body timed out").into_response(),
-        Ok(Ok(Some(body))) => match app.call(req.map(|()| axum::body::Body::from(body))).await {
-            Ok(response) => response,
-            Err(e) => return error!("App call error: {e}"),
-        },
-        Ok(Ok(None)) => (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response(),
+        Ok(Ok(Body::Complete(body))) => {
+            match app.call(req.map(|()| axum::body::Body::from(body))).await {
+                Ok(response) => response,
+                Err(e) => return error!("App call error: {e}"),
+            }
+        }
+        Ok(Ok(Body::TooLarge)) => {
+            (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response()
+        }
+        Ok(Ok(Body::OverBudget)) => {
+            warn!("Refusing request: {MAX_IN_FLIGHT_BODY_BYTES} body bytes already in flight");
+            (StatusCode::SERVICE_UNAVAILABLE, "server busy").into_response()
+        }
         Ok(Err(e)) => return warn!("Failed to read request body: {e}"),
     };
 
