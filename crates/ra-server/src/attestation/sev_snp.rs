@@ -250,12 +250,12 @@ fn check_report(
     })
 }
 
-/// Finds the VCEK in an extended-report certificate table (see [`cert_from_table`]).
+/// Finds the VCEK in an extended-report certificate table (by its GUID).
 pub fn vcek_from_cert_table(table: &[u8]) -> Result<Option<Vec<u8>>, AttestationError> {
     cert_from_table(table, &VCEK_GUID)
 }
 
-/// Finds the VLEK in an extended-report certificate table (see [`cert_from_table`]).
+/// Finds the VLEK in an extended-report certificate table (by its GUID).
 pub fn vlek_from_cert_table(table: &[u8]) -> Result<Option<Vec<u8>>, AttestationError> {
     cert_from_table(table, &VLEK_GUID)
 }
