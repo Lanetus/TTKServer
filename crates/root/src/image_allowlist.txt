@@ -1,0 +1,18 @@
+# Verified enclave images, served by the root servers (ttk_root::FileImageTrustStore,
+# GET /root-attestation) and fetched by clients and relays (ttk_ra_client::RootImageTrustStore).
+#
+# One image measurement per line, as 64 or 96 hex characters. The measurement per TEE
+# (ttk_ra_client::verifier::image_measurement):
+#   AWS Nitro    PCR0, the SHA-384 of the enclave image file (EIF); `scripts/build-eif.sh`
+#                prints it ("PCR0" in out/<image>.json)
+#   AMD SEV-SNP  MEASUREMENT, the launch digest
+#   Intel TDX    SHA-384(MRTD || RTMR0 || RTMR1 || RTMR2): firmware, boot configuration and
+#                kernel (RTMR3 is extended at runtime and left out)
+#   Intel SGX    MRENCLAVE
+# Blank lines and text after `#` are ignored. Evidence from a non-debug TEE whose image is not
+# listed is rejected; an empty list rejects every non-debug enclave.
+#
+# Every entry must be reproducible from a tagged commit (scripts/build-eif.sh) and labelled:
+#   <measurement> # ttk-<node> v<version> <tee> <arch> <commit>
+# Never list a debug image (TTK_DEBUG=1, suffix _debug: it accepts mock next hops). Remove
+# entries for images that are no longer deployed.

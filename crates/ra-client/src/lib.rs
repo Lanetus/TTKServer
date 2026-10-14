@@ -29,9 +29,12 @@ use std::net::SocketAddr;
 
 pub use client::*;
 pub use images::RootImageTrustStore;
-pub use trust::{ImageTrustStore, TrustStore};
+pub use trust::TrustStore;
 pub use ttk_core::egress::{classify_hop_address, HopAddressClass};
 pub use ttk_core::faf::{FafBody, FafRelay, FafRequest, DEFAULT_RELAY_PORT, FAF_PATH};
+pub use ttk_core::image_trust::{
+    parse_image_allowlist, ImageMeasurement, ImageTrustStore, RootSignerTrustStore,
+};
 pub use ttk_core::seal;
 
 /// Boxed error type that can cross task boundaries.

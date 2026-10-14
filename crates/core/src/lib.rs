@@ -3,8 +3,9 @@
 //!
 //! - [`cmw`]: the RATS Conceptual Message Wrapper carrying the Evidence.
 //! - [`media_type`]: the CMW types naming the TEE behind the wrapped Evidence.
-//! - [`image_trust`]: the accepted enclave images ([`ImageTrustStore`]) and the root node's
-//!   `GET /root-attestation` format.
+//! - [`image_trust`]: the accepted enclave images ([`ImageTrustStore`]), the signers pinned for
+//!   the root servers ([`RootSignerTrustStore`]) and the root node's `GET /root-attestation`
+//!   format, for every TEE.
 //! - [`file_message`]: the file service's `/faf` messages and replies ([`file_message::FileRequest`]).
 //! - [`fresh_evidence`]: the `POST /evidence` response ([`FreshEvidence`]).
 //! - [`faf`]: the `POST /faf` onion-routed request format ([`faf::FafRequest`]).
@@ -31,7 +32,7 @@ pub mod vsock_proxy_tcp;
 
 pub use cmw::{Cmw, CmwCollection, CmwRecord, CmwType};
 pub use fresh_evidence::FreshEvidence;
-pub use image_trust::ImageTrustStore;
+pub use image_trust::{ImageTrustStore, RootSignerTrustStore};
 
 /// Boxed error type used by the server functions (not `Send + Sync`; see `ttk_ra_server::EvalError`
 /// for one that crosses `.await` in `Send` futures).
@@ -80,8 +81,8 @@ pub const PARENT_CID: u32 = 3;
 /// DER of the mock root CA that signs the server's `mock` attestation documents. Its private
 /// key is public, so verifiers must trust it only when mock attestation is explicitly allowed
 /// (local development).
-pub const MOCK_NITRO_ROOT_CERT: &[u8] = include_bytes!("mock_nitro_root.der");
+pub const MOCK_NITRO_ROOT_CERT: &[u8] = include_bytes!("certs/mock_nitro_root.der");
 
 /// PEM of the TTK root certificate authority: the only root a CA-issued RA-TLS certificate
 /// (installed with `POST /certificate`) may chain to.
-pub const TTK_ROOT_CA_PEM: &[u8] = include_bytes!("TTK_Root_CA.pem");
+pub const TTK_ROOT_CA_PEM: &[u8] = include_bytes!("certs/TTK_Root_CA.pem");

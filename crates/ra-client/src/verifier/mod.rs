@@ -14,11 +14,10 @@
 //! comes only from the wrapped evidence.
 //!
 //! Every verifier checks the vendor signature chain up to a root in the [`TrustStore`] and
-//! returns a [`VerifiedEvidence`]; the Nitro verifier also requires the enclave image's PCR0 to
-//! be in the [`ImageTrustStore::nitro_image_allowlist`]. [`verify_evidence`] then enforces the
-//! [`Policy`] and checks
-//! that the evidence's report data is bound to the expected hash (the SHA-256 of the RA-TLS
-//! certificate's public key).
+//! returns a [`VerifiedEvidence`]. [`verify_evidence`] then enforces the [`Policy`], requires a
+//! non-debug TEE's [`image_measurement`] to be in the [`ImageTrustStore::image_allowlist`], and
+//! checks that the evidence's report data is bound to the expected hash (the SHA-256 of the
+//! RA-TLS certificate's public key).
 
 pub mod dcap;
 pub mod nitro;
@@ -33,8 +32,8 @@ use ttk_core::cmw::{ind, Cmw, CmwCollection, CmwRecord};
 pub use ttk_core::media_type;
 
 /// Trust anchors and accepted images the verifiers check evidence against (defined in
-/// [`crate::trust`]).
-pub use crate::trust::{ImageTrustStore, TrustStore};
+/// [`crate::trust`] and [`ttk_core::image_trust`]).
+pub use crate::{ImageMeasurement, ImageTrustStore, TrustStore};
 
 /// The trusted execution environment that produced a piece of evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,7 +116,7 @@ pub struct Policy {
 }
 
 /// Verifies the TEE evidence in the CBOR CMW `cmw_bytes` at time `now` and checks that it is bound to
-/// `binding`, the SHA-256 of the RA-TLS certificate's public key. Nitro images must be in
+/// `binding`, the SHA-256 of the RA-TLS certificate's public key. Non-debug images must be in
 /// `images`.
 pub fn verify_evidence(
     cmw_bytes: &[u8],
@@ -189,7 +188,7 @@ fn appraise(
 
     let evidence = match (tee, &cmw) {
         (TeeKind::AwsNitro, Cmw::Record(r)) => {
-            nitro::verify(evidence_of(r, tee)?, now, trust, images, policy)?
+            nitro::verify(evidence_of(r, tee)?, now, trust, policy)?
         }
         (TeeKind::Tdx | TeeKind::Sgx, Cmw::Record(r)) => {
             dcap::verify(evidence_of(r, tee)?, tee, now, trust)?
@@ -206,10 +205,79 @@ fn appraise(
         _ => return Err(format!("{tee} evidence has the wrong CMW form")),
     };
 
-    if evidence.debug && !(policy.allow_debug || (policy.allow_mock && evidence.mock)) {
-        return Err(format!("{tee} evidence comes from a debug-mode TEE"));
+    if evidence.debug {
+        // A debug TEE's image cannot be trusted to be what it measures, so there is no image to
+        // check: it is accepted only by policy.
+        if !(policy.allow_debug || (policy.allow_mock && evidence.mock)) {
+            return Err(format!("{tee} evidence comes from a debug-mode TEE"));
+        }
+    } else {
+        check_image_allowed(&evidence, images)?;
     }
     Ok(evidence)
+}
+
+/// Returns the measurement of `evidence` that `kind` names, the value an [`ImageTrustStore`]
+/// lists:
+///
+/// | TEE         | [`ImageMeasurement::Image`]                 | [`ImageMeasurement::Signer`]        |
+/// |-------------|---------------------------------------------|-------------------------------------|
+/// | AWS Nitro   | `pcr0` (SHA-384 of the EIF)                 | `pcr8` (SHA-384 of its signing cert) |
+/// | AMD SEV-SNP | `measurement` (launch digest)               | `id_key_digest` (ID block signer)   |
+/// | Intel TDX   | SHA-384(`mrtd` ‖ `rtmr0` ‖ `rtmr1` ‖ `rtmr2`) | none (error)                        |
+/// | Intel SGX   | `mrenclave`                                 | `mrsigner`                          |
+///
+/// TDX's `mrtd` measures only the virtual firmware, so the boot-time RTMRs (configuration,
+/// kernel, command line) are folded in; `rtmr3` is left out, as it is extended at runtime.
+pub fn image_measurement(
+    evidence: &VerifiedEvidence,
+    kind: ImageMeasurement,
+) -> Result<Vec<u8>, String> {
+    let tee = evidence.tee;
+    let get = |name: &str| {
+        evidence
+            .measurements
+            .get(name)
+            .ok_or(format!("{tee} evidence has no {name} measurement"))
+    };
+    Ok(match (tee, kind) {
+        (TeeKind::AwsNitro, ImageMeasurement::Image) => get("pcr0")?.clone(),
+        (TeeKind::AwsNitro, ImageMeasurement::Signer) => get("pcr8")?.clone(),
+        (TeeKind::SevSnp, ImageMeasurement::Image) => get("measurement")?.clone(),
+        (TeeKind::SevSnp, ImageMeasurement::Signer) => get("id_key_digest")?.clone(),
+        (TeeKind::Tdx, ImageMeasurement::Image) => {
+            let mut digest = ring::digest::Context::new(&ring::digest::SHA384);
+            for name in ["mrtd", "rtmr0", "rtmr1", "rtmr2"] {
+                digest.update(get(name)?);
+            }
+            digest.finish().as_ref().to_vec()
+        }
+        (TeeKind::Tdx, ImageMeasurement::Signer) => {
+            return Err(format!("{tee} evidence has no signer measurement"))
+        }
+        (TeeKind::Sgx, ImageMeasurement::Image) => get("mrenclave")?.clone(),
+        (TeeKind::Sgx, ImageMeasurement::Signer) => get("mrsigner")?.clone(),
+    })
+}
+
+/// Checks that the [`image_measurement`] of `evidence` is in the allowlist of `images`.
+pub fn check_image_allowed(
+    evidence: &VerifiedEvidence,
+    images: &dyn ImageTrustStore,
+) -> Result<(), String> {
+    let measurement = image_measurement(evidence, images.measurement())?;
+    if images.image_allowlist().contains(&measurement) {
+        return Ok(());
+    }
+    let what = match images.measurement() {
+        ImageMeasurement::Image => "image",
+        ImageMeasurement::Signer => "image signer",
+    };
+    Err(format!(
+        "{} {what} {} is not in the list of verified images",
+        evidence.tee,
+        crate::hex_encode(&measurement)
+    ))
 }
 
 /// Returns the `tee` evidence in `record`, which must not be marked as anything but Evidence.

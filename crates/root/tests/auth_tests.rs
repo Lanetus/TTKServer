@@ -129,7 +129,6 @@ fn node(key: &KeyPair) -> Node {
         &record.value,
         UnixTime::now(),
         &TrustStore::builtin(),
-        &FileImageTrustStore::builtin(),
         mock_policy(),
     )
     .unwrap();

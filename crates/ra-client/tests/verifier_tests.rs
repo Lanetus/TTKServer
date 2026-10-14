@@ -19,15 +19,15 @@ use ring::signature::{
 use rustls::client::danger::ServerCertVerifier;
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha384};
 use std::collections::BTreeMap;
 use std::time::Duration;
-use ttk_ra_client::trust::RootSignerTrustStore;
 use ttk_ra_client::verifier::sev_snp::{AmdProduct, AmdRoots};
 use ttk_ra_client::verifier::{
-    dcap, is_bound_to, media_type, nitro, sev_snp, verify_evidence, verify_evidence_with_nonce,
-    ImageTrustStore, Policy, TeeKind, TrustStore,
+    check_image_allowed, dcap, image_measurement, is_bound_to, media_type, nitro, sev_snp,
+    verify_evidence, verify_evidence_with_nonce, ImageMeasurement, Policy, TeeKind, TrustStore,
 };
+use ttk_ra_client::{parse_image_allowlist, RootSignerTrustStore};
 use ttk_ra_client::{EnclaveCertVerifier, RootImageTrustStore};
 use ttk_ra_server::server::create_cert_with_attestation;
 use ttk_ra_server::{cmw, Cmw, CmwCollection, CmwRecord};
@@ -448,6 +448,21 @@ fn test_trust(intel: &IntelPki, amd: &AmdPki) -> TrustStore {
     }
 }
 
+/// An image trust store listing the synthetic images whose measurement bytes are all `fill`:
+/// TDX (`SHA-384(MRTD || RTMR0..2)`, the RTMRs being zero), SGX (MRENCLAVE) and SEV-SNP
+/// (MEASUREMENT).
+fn synthetic_images(fill: u8) -> RootImageTrustStore {
+    let mut td_image = vec![fill; 48];
+    td_image.extend([0; 3 * 48]);
+    RootImageTrustStore {
+        image_allowlist: vec![
+            Sha384::digest(&td_image).to_vec(),
+            vec![fill; 32],
+            vec![fill; 48],
+        ],
+    }
+}
+
 #[test]
 fn synthetic_evidence_verifies_for_every_hardware_tee() {
     let intel = intel_pki();
@@ -484,7 +499,7 @@ fn synthetic_evidence_verifies_for_every_hardware_tee() {
             &binding,
             UnixTime::now(),
             &trust,
-            &RootImageTrustStore::default(),
+            &synthetic_images(7),
             Policy::default(),
         )
         .unwrap_or_else(|e| panic!("{tee}: {e}"));
@@ -551,6 +566,93 @@ fn debug_mode_is_rejected_unless_allowed() {
 }
 
 #[test]
+fn unlisted_images_are_rejected_for_every_hardware_tee() {
+    let intel = intel_pki();
+    let amd = amd_pki();
+    let trust = test_trust(&intel, &amd);
+    let binding = [0x42; 32];
+
+    let cases = [
+        (
+            TeeKind::Tdx,
+            record(
+                media_type::TDX,
+                build_quote(TeeKind::Tdx, &td_body(&binding, 7, false), &intel),
+            ),
+        ),
+        (
+            TeeKind::Sgx,
+            record(
+                media_type::SGX,
+                build_quote(TeeKind::Sgx, &sgx_body(&binding, 7, false), &intel),
+            ),
+        ),
+        (
+            TeeKind::SevSnp,
+            snp_cmw(&build_snp_report(&amd, &binding, 7, false), &amd.vcek),
+        ),
+    ];
+    for (tee, cmw) in cases {
+        for images in [synthetic_images(8), RootImageTrustStore::default()] {
+            let err = verify_evidence(
+                &cmw,
+                &binding,
+                UnixTime::now(),
+                &trust,
+                &images,
+                Policy::default(),
+            )
+            .unwrap_err();
+            assert!(err.contains(&format!("{tee} image")), "{tee}: {err}");
+            assert!(
+                err.contains("not in the list of verified images"),
+                "{tee}: {err}"
+            );
+        }
+    }
+}
+
+#[test]
+fn signer_measurements_per_hardware_tee() {
+    let intel = intel_pki();
+    let amd = amd_pki();
+    let binding = [0x42; 32];
+
+    let sgx = dcap::verify(
+        &build_quote(TeeKind::Sgx, &sgx_body(&binding, 7, false), &intel),
+        TeeKind::Sgx,
+        UnixTime::now(),
+        &test_trust(&intel, &amd),
+    )
+    .unwrap();
+    assert_eq!(
+        image_measurement(&sgx, ImageMeasurement::Signer).unwrap(),
+        sgx.measurements["mrsigner"]
+    );
+
+    let snp = sev_snp::verify(
+        &build_snp_report(&amd, &binding, 7, false),
+        &amd.vcek,
+        UnixTime::now(),
+        &test_trust(&intel, &amd),
+    )
+    .unwrap();
+    assert_eq!(
+        image_measurement(&snp, ImageMeasurement::Signer).unwrap(),
+        snp.measurements["id_key_digest"]
+    );
+
+    let tdx = dcap::verify(
+        &build_quote(TeeKind::Tdx, &td_body(&binding, 7, false), &intel),
+        TeeKind::Tdx,
+        UnixTime::now(),
+        &test_trust(&intel, &amd),
+    )
+    .unwrap();
+    let err = image_measurement(&tdx, ImageMeasurement::Signer).unwrap_err();
+    assert!(err.contains("no signer measurement"), "{err}");
+}
+#[test]
 fn evidence_bound_to_other_data_is_rejected() {
     let intel = intel_pki();
     let amd = amd_pki();
@@ -563,7 +665,7 @@ fn evidence_bound_to_other_data_is_rejected() {
         &[0x43; 32],
         UnixTime::now(),
         &trust,
-        &RootImageTrustStore::default(),
+        &synthetic_images(0),
         Policy::default(),
     )
     .unwrap_err();
@@ -752,57 +854,28 @@ fn nitro_trust(pki: &NitroPki) -> TrustStore {
 /// An image trust store allowing only [`LISTED_PCR0`].
 fn nitro_images() -> RootImageTrustStore {
     RootImageTrustStore {
-        nitro_image_allowlist: nitro::parse_image_allowlist(LISTED_PCR0).unwrap(),
+        image_allowlist: parse_image_allowlist(LISTED_PCR0).unwrap(),
     }
 }
 
 fn listed_pcr0() -> Vec<u8> {
-    nitro::parse_image_allowlist(LISTED_PCR0).unwrap().remove(0)
-}
-
-#[test]
-fn builtin_root_signer_pcr8_allowlist_is_valid() {
-    let store = RootSignerTrustStore::builtin();
-    assert_eq!(store.nitro_pcr_index(), 8);
-    assert_eq!(store.nitro_image_allowlist(), store.pcr8_allowlist);
-}
-
-#[test]
-fn nitro_image_allowlist_skips_comments_and_blank_lines() {
-    let text = format!(
-        "# header\n\n  {LISTED_PCR0} # v1\n{}\n",
-        LISTED_PCR0.to_uppercase()
-    );
-    let list = nitro::parse_image_allowlist(&text).unwrap();
-    assert_eq!(list, vec![listed_pcr0(), listed_pcr0()]);
-    assert_eq!(list[0].len(), 48);
-}
-
-#[test]
-fn nitro_image_allowlist_rejects_malformed_entries() {
-    let too_long = format!("{LISTED_PCR0}00");
-    let signed = format!("+{}", &LISTED_PCR0[1..]);
-    for bad in [&LISTED_PCR0[..94], &too_long, &signed] {
-        let err = nitro::parse_image_allowlist(bad).unwrap_err();
-        assert!(err.starts_with("line 1:"), "{err}");
-    }
+    parse_image_allowlist(LISTED_PCR0).unwrap().remove(0)
 }
 
 #[test]
 fn nitro_evidence_from_a_listed_image_is_accepted() {
     let pki = nitro_pki();
     let doc = build_nitro_doc(&pki, listed_pcr0());
-    let evidence = nitro::verify(
-        &doc,
-        UnixTime::now(),
-        &nitro_trust(&pki),
-        &nitro_images(),
-        Policy::default(),
-    )
-    .expect("a listed image should verify");
+    let evidence =
+        nitro::verify(&doc, UnixTime::now(), &nitro_trust(&pki), Policy::default()).unwrap();
     assert_eq!(evidence.tee, TeeKind::AwsNitro);
     assert_eq!(evidence.measurements["pcr0"], listed_pcr0());
     assert!(!evidence.debug);
+    assert_eq!(
+        image_measurement(&evidence, ImageMeasurement::Image).unwrap(),
+        listed_pcr0()
+    );
+    check_image_allowed(&evidence, &nitro_images()).expect("a listed image should verify");
 }
 
 #[test]
@@ -811,14 +884,17 @@ fn nitro_evidence_from_an_unlisted_image_is_rejected() {
     let mut pcr0 = listed_pcr0();
     pcr0[0] ^= 1;
     let doc = build_nitro_doc(&pki, pcr0);
-    let err = nitro::verify(
-        &doc,
+    let cmw = record(media_type::AWS_NITRO, doc);
+    let err = verify_evidence(
+        &cmw,
+        &[7; 32],
         UnixTime::now(),
         &nitro_trust(&pki),
         &nitro_images(),
         Policy::default(),
     )
     .unwrap_err();
+    assert!(err.contains("AWS Nitro image"), "{err}");
     assert!(err.contains("not in the list of verified images"), "{err}");
 }
 
@@ -827,14 +903,7 @@ fn nitro_debug_evidence_is_left_to_the_debug_policy() {
     let pki = nitro_pki();
     let doc = build_nitro_doc(&pki, vec![0; 48]);
     let trust = nitro_trust(&pki);
-    let evidence = nitro::verify(
-        &doc,
-        UnixTime::now(),
-        &trust,
-        &nitro_images(),
-        Policy::default(),
-    )
-    .expect("debug images cannot be identified, so the allowlist does not apply");
+    let evidence = nitro::verify(&doc, UnixTime::now(), &trust, Policy::default()).unwrap();
     assert!(evidence.debug);
 
     let cmw = record(media_type::AWS_NITRO, doc);
@@ -851,34 +920,26 @@ fn nitro_debug_evidence_is_left_to_the_debug_policy() {
 }
 
 #[test]
-fn root_signer_store_checks_pcr8_instead_of_pcr0() {
+fn root_signer_store_checks_the_signer_instead_of_the_image() {
     let pki = nitro_pki();
     let mut pcr0 = listed_pcr0();
     pcr0[0] ^= 1;
     // `build_nitro_doc` sets PCR8 to 48 bytes of 8.
     let doc = build_nitro_doc(&pki, pcr0);
     let signer = |pcr8: Vec<u8>| RootSignerTrustStore {
-        pcr8_allowlist: vec![pcr8],
+        signer_allowlist: vec![pcr8],
     };
 
-    let trust = nitro_trust(&pki);
-    nitro::verify(
-        &doc,
-        UnixTime::now(),
-        &trust,
-        &signer(vec![8; 48]),
-        Policy::default(),
-    )
-    .expect("a pinned PCR8 should verify whatever the PCR0");
-    let err = nitro::verify(
-        &doc,
-        UnixTime::now(),
-        &trust,
-        &signer(vec![9; 48]),
-        Policy::default(),
-    )
-    .unwrap_err();
-    assert!(err.contains("PCR8"), "{err}");
+    let evidence =
+        nitro::verify(&doc, UnixTime::now(), &nitro_trust(&pki), Policy::default()).unwrap();
+    assert_eq!(
+        image_measurement(&evidence, ImageMeasurement::Signer).unwrap(),
+        vec![8; 48]
+    );
+    check_image_allowed(&evidence, &signer(vec![8; 48]))
+        .expect("a pinned PCR8 should verify whatever the PCR0");
+    let err = check_image_allowed(&evidence, &signer(vec![9; 48])).unwrap_err();
+    assert!(err.contains("image signer"), "{err}");
     assert!(err.contains("not in the list of verified images"), "{err}");
 }
 
@@ -916,7 +977,9 @@ fn cert_verifier_accepts_tdx_evidence_and_checks_measurements() {
     let key = KeyPair::generate().unwrap();
     let cert = tdx_ra_tls_cert(&key, &key, &intel);
 
-    let verifier = EnclaveCertVerifier::new().with_trust_store(test_trust(&intel, &amd));
+    let verifier = EnclaveCertVerifier::new()
+        .with_trust_store(test_trust(&intel, &amd))
+        .with_image_trust_store(synthetic_images(7));
     verify_cert(&verifier, &cert).expect("TDX evidence bound to the cert key should verify");
     let evidence = verifier.verified_evidence().unwrap();
     assert_eq!(evidence.tee, TeeKind::Tdx);
@@ -924,17 +987,20 @@ fn cert_verifier_accepts_tdx_evidence_and_checks_measurements() {
 
     let pinned = EnclaveCertVerifier::new()
         .with_trust_store(test_trust(&intel, &amd))
+        .with_image_trust_store(synthetic_images(7))
         .with_expected_measurement("mrtd", vec![7; 48]);
     verify_cert(&pinned, &cert).expect("matching MRTD should verify");
 
     let wrong = EnclaveCertVerifier::new()
         .with_trust_store(test_trust(&intel, &amd))
+        .with_image_trust_store(synthetic_images(7))
         .with_expected_measurement("MRTD", vec![8; 48]);
     let err = verify_cert(&wrong, &cert).unwrap_err();
     assert!(err.to_string().contains("MRTD does not match"), "{err}");
 
     let other_tee = EnclaveCertVerifier::new()
         .with_trust_store(test_trust(&intel, &amd))
+        .with_image_trust_store(synthetic_images(7))
         .with_expected_pcr(0, vec![0; 48]);
     let err = verify_cert(&other_tee, &cert).unwrap_err();
     assert!(
@@ -951,7 +1017,9 @@ fn cert_verifier_rejects_tdx_evidence_bound_to_another_key() {
     let other = KeyPair::generate().unwrap();
     let cert = tdx_ra_tls_cert(&key, &other, &intel);
 
-    let verifier = EnclaveCertVerifier::new().with_trust_store(test_trust(&intel, &amd));
+    let verifier = EnclaveCertVerifier::new()
+        .with_trust_store(test_trust(&intel, &amd))
+        .with_image_trust_store(synthetic_images(7));
     let err = verify_cert(&verifier, &cert).unwrap_err();
     assert!(
         err.to_string().contains("report data does not match"),
@@ -984,7 +1052,7 @@ fn vlek_signed_snp_report_verifies_through_the_asvk() {
         &binding,
         UnixTime::now(),
         &trust,
-        &RootImageTrustStore::default(),
+        &synthetic_images(7),
         Policy::default(),
     )
     .expect("a VLEK-signed report should verify");
@@ -1067,7 +1135,7 @@ fn fresh_tdx_and_snp_evidence_binds_the_nonce_in_the_report_data() {
                 nonce,
                 UnixTime::now(),
                 &trust,
-                &RootImageTrustStore::default(),
+                &synthetic_images(7),
                 Policy::default(),
             )
         };
@@ -1085,7 +1153,7 @@ fn fresh_tdx_and_snp_evidence_binds_the_nonce_in_the_report_data() {
             &binding,
             UnixTime::now(),
             &trust,
-            &RootImageTrustStore::default(),
+            &synthetic_images(7),
             Policy::default(),
         )
         .unwrap_err();
@@ -1100,7 +1168,7 @@ fn fresh_tdx_and_snp_evidence_binds_the_nonce_in_the_report_data() {
         nonce,
         UnixTime::now(),
         &trust,
-        &RootImageTrustStore::default(),
+        &synthetic_images(7),
         Policy::default(),
     )
     .unwrap_err();

@@ -7,13 +7,13 @@ use test_ca::SignForTests;
 
 use std::net::SocketAddr;
 use ttk_ra_client::images::RootImageTrustStore;
-use ttk_ra_client::trust::{parse_image_allowlist, ImageTrustStore};
+use ttk_ra_client::{parse_image_allowlist, ImageTrustStore};
 use ttk_ra_client::{ClientTransport, EnclaveCertVerifier};
 use ttk_ra_server::server::Server;
 use ttk_root::{FileImageTrustStore, Root};
 
-const PCR0_A: &str = "7807833a90cc86f5a853a1f49043a568f3428f6b03eb983aed99899fbfa77d6b86b34fa934e318dd3741debca32c0aba";
-const PCR0_B: &str = "1de927770d7a1c250ba364440947226ed9af7250ae25fdad391c3cd87d0044b1e4a4e96810bc8f2dfc9160fcf0742c8d";
+const IMAGE_A: &str = "7807833a90cc86f5a853a1f49043a568f3428f6b03eb983aed99899fbfa77d6b86b34fa934e318dd3741debca32c0aba";
+const IMAGE_B: &str = "1de927770d7a1c250ba364440947226ed9af7250ae25fdad391c3cd87d0044b1e4a4e96810bc8f2dfc9160fcf0742c8d";
 
 /// Starts a root node serving `allowlist`, unlocked with a test CA certificate, on a free local
 /// port and returns its address.
@@ -37,22 +37,22 @@ async fn fetch(roots: &[&str]) -> Result<RootImageTrustStore, String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn fetches_the_accepted_images_from_a_root_server() {
-    let root = start_root(&format!("{PCR0_A}\n{PCR0_B}")).to_string();
+    let root = start_root(&format!("{IMAGE_A}\n{IMAGE_B}")).to_string();
     let images = fetch(&[&root]).await.unwrap();
     assert_eq!(
-        images.nitro_image_allowlist(),
-        parse_image_allowlist(&format!("{PCR0_A}\n{PCR0_B}")).unwrap()
+        images.image_allowlist(),
+        parse_image_allowlist(&format!("{IMAGE_A}\n{IMAGE_B}")).unwrap()
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn falls_back_to_the_next_root_server() {
     let empty_root = start_root("# no images").to_string();
-    let root = start_root(PCR0_A).to_string();
+    let root = start_root(IMAGE_A).to_string();
     let images = fetch(&[&empty_root, &root]).await.unwrap();
     assert_eq!(
-        images.nitro_image_allowlist(),
-        parse_image_allowlist(PCR0_A).unwrap()
+        images.image_allowlist(),
+        parse_image_allowlist(IMAGE_A).unwrap()
     );
 }
 
@@ -66,7 +66,7 @@ async fn fails_when_no_root_server_answers() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_servers_must_attest() {
-    let root = start_root(PCR0_A).to_string();
+    let root = start_root(IMAGE_A).to_string();
     let err =
         RootImageTrustStore::fetch(&[&root], ClientTransport::Udp, EnclaveCertVerifier::new())
             .await
