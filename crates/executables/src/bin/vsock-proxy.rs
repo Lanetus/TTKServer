@@ -14,6 +14,9 @@
 //!   Destinations that are link-local (including the instance metadata and DNS endpoints),
 //!   multicast, broadcast or unspecified are refused, and loopback or private ones are refused
 //!   unless `--allow-private` is given (see `ttk_core::egress::classify_hop_address`).
+//!   A connection may instead start with a resolve request: the enclave has no DNS, so the host
+//!   name is looked up here and the addresses the egress policy permits are answered, after
+//!   which the connection closes (`ttk_core::vsock::answer_resolve`).
 //!
 //! The relay only moves opaque QUIC datagrams: TLS terminates inside the enclave, so peers still
 //! verify the RA-TLS evidence end to end. It runs in the foreground; run it as a daemon under a
@@ -70,7 +73,8 @@ mod imp {
     use tokio::sync::mpsc::{self, error::TrySendError};
     use tokio_vsock::{SockAddr, VsockListener, VsockStream};
     use ttk_core::egress::{classify_hop_address, HopAddressClass};
-    use ttk_core::vsock::{read_destination, read_frame, write_frame};
+    use ttk_core::vsock::OutboundRequest;
+    use ttk_core::vsock::{answer_resolve, read_frame, read_outbound_request, write_frame};
 
     /// `VMADDR_CID_ANY`: accept vsock connections addressed to any CID of this instance.
     const VMADDR_CID_ANY: u32 = u32::MAX;
@@ -251,22 +255,44 @@ mod imp {
         }
     }
 
-    /// Relays one outbound connection: reads its destination, then pumps datagrams between the
-    /// vsock and a UDP socket connected to the destination until the destination goes idle or
-    /// either side closes. Destinations the egress policy refuses are dropped unanswered.
-    async fn relay_outbound(mut stream: VsockStream, allow_private: bool) {
-        let destination =
-            match tokio::time::timeout(HEADER_TIMEOUT, read_destination(&mut stream)).await {
-                Ok(Ok(destination)) => destination,
-                Ok(Err(e)) => return warn!("Outbound: invalid destination header: {e}"),
-                Err(_) => return warn!("Outbound: no destination header"),
-            };
-        let permitted = match classify_hop_address(destination.ip()) {
+    /// Whether the egress policy lets the enclave reach `destination`.
+    fn permitted(destination: &SocketAddr, allow_private: bool) -> bool {
+        match classify_hop_address(destination.ip()) {
             HopAddressClass::Public => true,
             HopAddressClass::Private => allow_private,
             HopAddressClass::Forbidden => false,
+        }
+    }
+
+    /// Serves one outbound connection: a resolve request is answered (with the addresses the
+    /// egress policy permits) and the connection closed; otherwise the datagrams are relayed to
+    /// the destination in its header.
+    async fn relay_outbound(mut stream: VsockStream, allow_private: bool) {
+        let request =
+            match tokio::time::timeout(HEADER_TIMEOUT, read_outbound_request(&mut stream)).await {
+                Ok(Ok(request)) => request,
+                Ok(Err(e)) => return warn!("Outbound: invalid header: {e}"),
+                Err(_) => return warn!("Outbound: no header"),
+            };
+        let destination = match request {
+            OutboundRequest::Relay(destination) => destination,
+            OutboundRequest::Resolve { host, port } => {
+                let permit = |address: &SocketAddr| permitted(address, allow_private);
+                match answer_resolve(&mut stream, &host, port, permit).await {
+                    Ok(count) => info!("Resolved {host} for the enclave: {count} addresses"),
+                    Err(e) => warn!("Resolving {host} for the enclave: {e}"),
+                }
+                return;
+            }
         };
-        if !permitted {
+        relay_datagrams(stream, destination, allow_private).await;
+    }
+
+    /// Pumps datagrams between the vsock and a UDP socket connected to `destination` until the
+    /// destination goes idle or either side closes. Destinations the egress policy refuses are
+    /// dropped unanswered.
+    async fn relay_datagrams(stream: VsockStream, destination: SocketAddr, allow_private: bool) {
+        if !permitted(&destination, allow_private) {
             return warn!("Outbound to {destination}: refused by the egress policy");
         }
         let bind: SocketAddr = if destination.is_ipv4() {

@@ -1,9 +1,10 @@
-//! Tests of `POST /faf` relay address parsing and the egress policy (`ttk_ra_client`).
+//! Tests of `POST /faf` relay address parsing, node resolution and the egress policy
+//! (`ttk_ra_client`).
 //! The wire format and its sealing are tested in `ttk-core` (`crates/core/tests/faf_tests.rs`).
 
 use ttk_ra_client::{
-    classify_hop_address, parse_relay_address, parse_relay_server, HopAddressClass,
-    DEFAULT_RELAY_PORT,
+    classify_hop_address, parse_relay_address, parse_relay_server, resolve_node, ClientTransport,
+    HopAddressClass, DEFAULT_RELAY_PORT,
 };
 
 #[test]
@@ -78,4 +79,31 @@ fn hop_addresses_are_classified_for_the_egress_policy() {
     ] {
         assert_eq!(class(forbidden), HopAddressClass::Forbidden, "{forbidden}");
     }
+}
+
+#[tokio::test]
+async fn ip_literals_resolve_without_a_lookup() {
+    // Even over vsock (no parent here): IP literals need no resolver.
+    let vsock = ClientTransport::Vsock { cid: 3, port: 5001 };
+    for transport in [ClientTransport::Udp, vsock] {
+        assert_eq!(
+            resolve_node(transport, "203.0.113.7", 443).await.unwrap(),
+            vec!["203.0.113.7:443".parse().unwrap()]
+        );
+        assert_eq!(
+            resolve_node(transport, "2001:db8::1", 443).await.unwrap(),
+            vec!["[2001:db8::1]:443".parse().unwrap()]
+        );
+    }
+}
+
+#[tokio::test]
+async fn host_names_resolve_over_udp_with_the_system_resolver() {
+    let resolved = resolve_node(ClientTransport::Udp, "localhost", 4433)
+        .await
+        .unwrap();
+    assert!(!resolved.is_empty());
+    assert!(resolved
+        .iter()
+        .all(|a| a.ip().is_loopback() && a.port() == 4433));
 }

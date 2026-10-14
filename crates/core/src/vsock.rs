@@ -11,6 +11,9 @@
 //! - [`VsockOutboundSocket`] (outbound, for clients such as `/faf` relaying): connects to the
 //!   parent once per destination, first sending a [destination header](write_destination), and
 //!   the parent relays the datagrams to that UDP address.
+//! - [`resolve_via_parent`]: the enclave has no DNS either, so host names are resolved by the
+//!   parent over a short-lived connection to the same outbound port, opened by a
+//!   [resolve request](write_resolve_request) instead of a destination header.
 //!
 //! On every vsock connection, datagrams are framed as `[u16 big-endian length][payload]`.
 //!
@@ -223,7 +226,13 @@ pub async fn write_destination<W: AsyncWrite + Unpin>(
 
 /// Reads the header written by [`write_destination`].
 pub async fn read_destination<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<SocketAddr> {
-    let ip = match reader.read_u8().await? {
+    let family = reader.read_u8().await?;
+    read_address(family, reader).await
+}
+
+/// Reads the rest of a destination header whose family byte `family` was already read.
+async fn read_address<R: AsyncRead + Unpin>(family: u8, reader: &mut R) -> io::Result<SocketAddr> {
+    let ip = match family {
         4 => {
             let mut octets = [0; 4];
             reader.read_exact(&mut octets).await?;
@@ -242,6 +251,187 @@ pub async fn read_destination<R: AsyncRead + Unpin>(reader: &mut R) -> io::Resul
         }
     };
     Ok(SocketAddr::new(ip, reader.read_u16().await?))
+}
+
+/// Header family byte of a [resolve request](write_resolve_request), in place of the `4` / `6` of
+/// a [destination header](write_destination).
+pub const RESOLVE_REQUEST: u8 = 0;
+
+/// Longest host name a [resolve request](write_resolve_request) carries (RFC 1035 §2.3.4).
+pub const MAX_HOST_NAME_LEN: usize = 253;
+
+/// Most addresses a [resolve response](write_resolved) carries; further ones are dropped.
+pub const MAX_RESOLVED_ADDRESSES: usize = 16;
+
+/// Time allowed for the parent to answer a resolve request ([`resolve_via_parent`]), and for
+/// the parent's own lookup ([`answer_resolve`]).
+pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// What an outbound vsock connection asks the parent's `vsock-proxy` for, read by
+/// [`read_outbound_request`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutboundRequest {
+    /// Relay the connection's datagrams to this UDP address ([`write_destination`]).
+    Relay(SocketAddr),
+    /// Resolve `host` on the parent and answer its addresses with `port`
+    /// ([`write_resolve_request`]); the connection then closes.
+    Resolve {
+        /// The host name to resolve.
+        host: String,
+        /// The port of the answered addresses.
+        port: u16,
+    },
+}
+
+/// Checks that `host` is a DNS host name a resolve request may carry: 1 to
+/// [`MAX_HOST_NAME_LEN`] ASCII letters, digits, `-` and `.`, with no empty label.
+pub fn check_host_name(host: &str) -> io::Result<()> {
+    let valid = !host.is_empty()
+        && host.len() <= MAX_HOST_NAME_LEN
+        && host.trim_end_matches('.').split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid host name {host:?}"),
+        ))
+    }
+}
+
+/// Writes the header of a resolve request, asking the parent to resolve `host` (an enclave has
+/// no DNS): `[0][u8 length][host name][u16 big-endian port]`.
+pub async fn write_resolve_request<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    host: &str,
+    port: u16,
+) -> io::Result<()> {
+    check_host_name(host)?;
+    let mut header = Vec::with_capacity(4 + host.len());
+    header.push(RESOLVE_REQUEST);
+    header.push(host.len() as u8);
+    header.extend_from_slice(host.as_bytes());
+    header.extend_from_slice(&port.to_be_bytes());
+    writer.write_all(&header).await
+}
+
+/// Reads the header of an outbound connection: a [destination header](write_destination) or a
+/// [resolve request](write_resolve_request).
+pub async fn read_outbound_request<R: AsyncRead + Unpin>(
+    reader: &mut R,
+) -> io::Result<OutboundRequest> {
+    let family = reader.read_u8().await?;
+    if family != RESOLVE_REQUEST {
+        return read_address(family, reader)
+            .await
+            .map(OutboundRequest::Relay);
+    }
+    let mut host = vec![0; usize::from(reader.read_u8().await?)];
+    reader.read_exact(&mut host).await?;
+    let host = String::from_utf8(host)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "host name is not UTF-8"))?;
+    check_host_name(&host).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let port = reader.read_u16().await?;
+    Ok(OutboundRequest::Resolve { host, port })
+}
+
+/// Writes the answer to a resolve request: `[u8 count]`, then each address as a
+/// [destination header](write_destination). At most [`MAX_RESOLVED_ADDRESSES`] are written.
+pub async fn write_resolved<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    addresses: &[SocketAddr],
+) -> io::Result<()> {
+    let addresses = &addresses[..addresses.len().min(MAX_RESOLVED_ADDRESSES)];
+    let mut answer = vec![addresses.len() as u8];
+    for address in addresses {
+        write_destination(&mut answer, *address).await?;
+    }
+    writer.write_all(&answer).await
+}
+
+/// Reads the answer written by [`write_resolved`].
+pub async fn read_resolved<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<Vec<SocketAddr>> {
+    let count = usize::from(reader.read_u8().await?);
+    if count > MAX_RESOLVED_ADDRESSES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{count} resolved addresses (at most {MAX_RESOLVED_ADDRESSES})"),
+        ));
+    }
+    let mut addresses = Vec::with_capacity(count);
+    for _ in 0..count {
+        addresses.push(read_destination(reader).await?);
+    }
+    Ok(addresses)
+}
+
+/// Parent side of a resolve request: looks `host` up (within [`RESOLVE_TIMEOUT`]) and answers
+/// the addresses `permit` accepts (the egress policy), deduplicated, on `writer`. A failed
+/// lookup is answered with no addresses. Returns how many addresses were answered.
+pub async fn answer_resolve<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    host: &str,
+    port: u16,
+    permit: impl Fn(&SocketAddr) -> bool,
+) -> io::Result<usize> {
+    let mut addresses = Vec::new();
+    match tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host((host, port))).await {
+        Ok(Ok(found)) => {
+            for address in found {
+                let address = SocketAddr::new(address.ip().to_canonical(), address.port());
+                if permit(&address) && !addresses.contains(&address) {
+                    addresses.push(address);
+                }
+            }
+        }
+        Ok(Err(e)) => debug!("Resolving {host}: {e}"),
+        Err(_) => debug!("Resolving {host}: timed out"),
+    }
+    addresses.truncate(MAX_RESOLVED_ADDRESSES);
+    write_resolved(writer, &addresses).await?;
+    Ok(addresses.len())
+}
+
+/// Enclave side of a resolve request over `stream` (any connection to the parent's
+/// `vsock-proxy`): sends the request and reads the answer, within [`RESOLVE_TIMEOUT`].
+pub async fn resolve_over<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    host: &str,
+    port: u16,
+) -> io::Result<Vec<SocketAddr>> {
+    let exchange = async {
+        write_resolve_request(stream, host, port).await?;
+        read_resolved(stream).await
+    };
+    tokio::time::timeout(RESOLVE_TIMEOUT, exchange)
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "resolving via the parent timed out",
+            )
+        })?
+}
+
+/// Resolves `host` on the parent instance, through its `vsock-proxy` at vsock `cid`:`vsock_port`
+/// (the outbound port, normally `5001`): an enclave has no DNS of its own. The addresses carry
+/// `port` and are those the parent's egress policy would relay to.
+///
+/// The answer is not trusted: whichever address is connected to must still pass RA-TLS.
+pub async fn resolve_via_parent(
+    cid: u32,
+    vsock_port: u32,
+    host: &str,
+    port: u16,
+) -> io::Result<Vec<SocketAddr>> {
+    let mut stream = VsockStream::connect(cid, vsock_port).await?;
+    resolve_over(&mut stream, host, port).await
 }
 
 /// Reads one `[u16 big-endian length][payload]` frame; `None` once the stream ends.
