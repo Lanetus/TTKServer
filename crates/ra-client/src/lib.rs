@@ -88,9 +88,9 @@ pub fn parse_relay_server(relay_server: &str) -> Result<(String, u16), String> {
     Ok((host.to_string(), port))
 }
 
-/// Resolves `host` and connects over `transport` to the first of its addresses that completes
-/// an RA-TLS handshake (verified by `verifier`) within [`RELAY_CONNECT_TIMEOUT`], e.g. falling
-/// back from `::1` to `127.0.0.1` for `localhost`.
+/// Resolves `host` (see [`resolve_node`]) and connects over `transport` to the first of its
+/// addresses that completes an RA-TLS handshake (verified by `verifier`) within
+/// [`RELAY_CONNECT_TIMEOUT`], e.g. falling back from `::1` to `127.0.0.1` for `localhost`.
 pub async fn connect_to_node(
     transport: ClientTransport,
     host: &str,
@@ -114,7 +114,7 @@ pub async fn connect_to_node_filtered(
 ) -> Result<TtkClient, SendError> {
     let mut last_error: SendError = format!("{host} did not resolve").into();
     let mut refused = Vec::new();
-    for addr in tokio::net::lookup_host((host, port)).await? {
+    for addr in resolve_node(transport, host, port).await? {
         if !allow(&addr) {
             refused.push(addr.ip().to_string());
             continue;
@@ -134,4 +134,28 @@ pub async fn connect_to_node_filtered(
         .into();
     }
     Err(last_error)
+}
+
+/// Resolves `host` (a host name or IP address) to the addresses to try with `port`. Over
+/// [`ClientTransport::Udp`] with the system resolver; over [`ClientTransport::Vsock`] on the
+/// parent instance, through its `vsock-proxy` (`ttk_core::vsock::resolve_via_parent`), since an
+/// enclave has no DNS. Either answer is untrusted: each address must still pass RA-TLS.
+pub async fn resolve_node(
+    transport: ClientTransport,
+    host: &str,
+    port: u16,
+) -> Result<Vec<SocketAddr>, SendError> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+    match transport {
+        ClientTransport::Udp => Ok(tokio::net::lookup_host((host, port)).await?.collect()),
+        #[cfg(target_os = "linux")]
+        ClientTransport::Vsock {
+            cid,
+            port: vsock_port,
+        } => Ok(ttk_core::vsock::resolve_via_parent(cid, vsock_port, host, port).await?),
+        #[cfg(not(target_os = "linux"))]
+        ClientTransport::Vsock { .. } => Err("vsock is only available on Linux".into()),
+    }
 }
