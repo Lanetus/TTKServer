@@ -46,7 +46,7 @@ flowchart LR
 | File | Responsibility |
 |---|---|
 | `crates/ra-server/src/lib.rs` | Declares modules; `AttestationParams { user_data, nonce, public_key }`; the `Evaluator` trait and `EvalError`; re-exports `cmw`, `Cmw*`, and `ttk_core::{egress, vsock}` |
-| `crates/ra-server/src/server.rs` | Attestation at startup, RA-TLS certificate, QUIC/HTTP/3 accept loop, listener config, limits, per-connection `CertificatePhase` |
+| `crates/ra-server/src/server.rs` | Attestation at startup, RA-TLS certificate, QUIC/HTTP/3 accept loop, listener config, limits (including the shared `BodyBudget`), per-connection `CertificatePhase` |
 | `crates/ra-server/src/certificate.rs` | `CertificateStore`: the presented chain (rustls `ResolvesServerCert`), its one-time replacement by a CA-issued certificate, trusted roots |
 | `crates/ra-server/src/router.rs` | Base routes `GET /`, `GET /evidence.cmw`, `POST /evidence`, `POST /certificate`; the route gating; `Evidence`, `CertificatePhase` |
 | `crates/ra-server/src/terminal.rs` | The terminal node: `POST /faf` last hop, answered by an `Evaluator` |
@@ -54,9 +54,9 @@ flowchart LR
 | `crates/ra-server/src/attestation/nitro.rs` | AWS Nitro provider over `/dev/nsm` |
 | `crates/ra-server/src/attestation/mock.rs` | Mock provider: Nitro-format documents signed by the published mock root CA |
 | `crates/ra-server/src/attestation/nitro_doc.rs` | COSE_Sign1 payload extraction and parsing, mock document creation (key `mock_nitro_root_key.pk8`), `wrap_as_cmw` |
-| `crates/ra-server/src/attestation/sev_snp.rs` | AMD SEV-SNP provider (report + VCEK), `wrap_evidence_as_cmw` |
+| `crates/ra-server/src/attestation/sev_snp.rs` | AMD SEV-SNP provider (report + VCEK or VLEK), `SigningKey`, `wrap_evidence_as_cmw` |
 | `crates/ra-server/src/attestation/tdx.rs` | Intel TDX provider (DCAP quote), `wrap_quote_as_cmw` |
-| `crates/ra-server/src/attestation/tsm.rs` | Linux configfs-tsm request handling, shared by SEV-SNP and TDX |
+| `crates/ra-server/src/attestation/tsm.rs` | Linux configfs-tsm request handling and the 64-byte report data (`report_data`), shared by SEV-SNP and TDX |
 | `crates/ra-server/tests/support/test_ca.rs` | Test support only (not a library module): `SignForTests::sign_for_tests()` |
 
 ## 2. Server lifecycle
@@ -82,11 +82,13 @@ sequenceDiagram
     loop each QUIC connection (≤ MAX_CONNECTIONS)
         Q-->>S: Incoming
         S->>CS: is_replaced()? → CertificatePhase (read before the handshake)
-        S->>S: spawn handle_connection → per request: read_body (≤ 1 MiB, ≤ 10 s),<br/>attach CertificatePhase → axum Router → response
+        S->>S: spawn handle_connection → per request: read_body (≤ 1 MiB, ≤ 10 s,<br/>reserved against the BodyBudget), attach CertificatePhase → axum Router → response
     end
 ```
 
-The provider is kept (`Arc<dyn AttestationProvider>`) so `POST /evidence` can request fresh evidence later. The `CertificateStore` is shared by the TLS config (it resolves the presented chain for every handshake) and the router (`POST /certificate`, the gating).
+The provider is kept (`Arc<dyn AttestationProvider>`) so `POST /evidence` can request fresh evidence later. The `CertificateStore` is shared by the TLS config (it resolves the presented chain for every handshake) and the router (`POST /certificate`, the gating). The RA-TLS private key is zeroized when dropped.
+
+Request bodies are bounded twice: each by `MAX_REQUEST_BODY`, and all of them together by `MAX_IN_FLIGHT_BODY_BYTES` (1 GiB). Every request reserves its body chunk by chunk from the server's `BodyBudget` and holds the reservation until its response is sent; a body that does not fit gets `503`. Without the budget, `MAX_CONNECTIONS` × `MAX_STREAMS_PER_CONNECTION` × `MAX_REQUEST_BODY` would be 16 GiB; with it, enclaves are sized at 4 GiB.
 
 ## 3. Certificate replacement and route gating
 
@@ -116,9 +118,9 @@ stateDiagram-v2
 | Leaf has the **same SubjectPublicKeyInfo** and the **same attestation extension** (byte for byte) as the current certificate | `422` `Mismatch` |
 | Chain validates (rustls `WebPkiServerVerifier`, Web PKI path building) to a trusted root, is currently valid and names `CERT_DNS_NAME` (`enclave.internal`) | `403` `Untrusted` |
 | Trusted roots are configured: the built-in `ttk_core::TTK_ROOT_CA_PEM` unless `Server::set_trusted_roots` overrides it (empty = refuse all) | `503` `NoTrustedRoots` |
-| Not already replaced (atomic: concurrent valid replacements, only the first wins) | `404` `AlreadyReplaced` |
+| Not already replaced (concurrent valid replacements serialize on the store's lock; only the first wins) | `404` `AlreadyReplaced` |
 
-On success the new chain is presented to **new** handshakes; open connections keep their certificate. Because the key and the evidence extension are unchanged, RA-TLS clients still verify the node exactly as before.
+On success the new chain is presented to **new** handshakes; open connections keep their certificate. The chain is installed *before* the replaced flag is set, so a connection that reads `CaIssued` is always handed the CA-issued certificate. Because the key and the evidence extension are unchanged, RA-TLS clients still verify the node exactly as before.
 
 The gating is done in `build_router`, so it covers every route a node adds with `serve_with`:
 
@@ -157,6 +159,8 @@ The gating is done in `build_router`, so it covers every route a node adds with 
 | `ATTESTATION_OID`, `PARENT_CID`, `BoxError` | re-exports | From `ttk-core` |
 | `USE_UDP_ENV`, `LISTEN_ADDR_ENV`, `VSOCK_PORT_ENV` | consts | `TTK_USE_UDP`, `TTK_LISTEN_ADDR`, `TTK_VSOCK_PORT` |
 | `MAX_REQUEST_BODY` | const | 1 MiB; larger bodies get `413` |
+| `MAX_IN_FLIGHT_BODY_BYTES` | const | 1 GiB of request bodies across the server; a body that does not fit gets `503` |
+| `BodyBudget` / `BodyReservation` | structs | The shared byte budget (`new`, `available`, `reservation`) and one request's share of it (`grow`, `len`, `is_empty`; returned on drop) |
 | `REQUEST_BODY_TIMEOUT` | const | 10 s; slower bodies get `408` |
 | `MAX_REQUEST_HEADERS` | const | 16 KiB header section |
 | `MAX_CONNECTIONS` | const | 1024 concurrent QUIC connections |
@@ -187,7 +191,7 @@ The gating is done in `build_router`, so it covers every route a node adds with 
 |---|---|---|
 | `GET /` | CA-issued | Greeting text |
 | `GET /evidence.cmw` | CA-issued | Base64 CBOR CMW from startup |
-| `POST /evidence` | self-signed | Body = raw nonce (1..=512 bytes, else `400`). Base64 CBOR `FreshEvidence`: new Evidence with `user_data` = SHA-256 of the presented cert's SPKI and the nonce in the Nitro document, plus that DER cert. `503` when busy; `500` on failure, always for TDX / SEV-SNP |
+| `POST /evidence` | self-signed | Body = raw nonce (1..=512 bytes, else `400`). Base64 CBOR `FreshEvidence`: new Evidence bound to the SHA-256 of the presented cert's SPKI and carrying the nonce (Nitro: `user_data` + `nonce` field; TDX / SEV-SNP: report data = SPKI hash ‖ SHA-256(nonce)), plus that DER cert. `503` when busy; `500` on failure |
 | `POST /certificate` | self-signed | Body = CA-issued chain. `204`, or `400` / `422` / `403` / `503` / `404` (see section 3) |
 
 **`terminal`**
@@ -210,6 +214,7 @@ There is no default evaluator and no `run()`: the binaries (`s3-server`, `local-
 | `by_name(name)` | fn | Open `aws-nitro`, `sev-snp`, `tdx` or `mock` |
 | `PROVIDER_ENV` | const | `TTK_ATTESTATION` |
 | `AttestationError` | enum | `DeviceOpenFailed`, `Driver`, `UnexpectedResponse`, `InvalidInput`, `DocumentDecodingFailed`, `Unsupported`, `NoProvider`, `Io` |
+| `NsmSession::create_attestation_for_key(spki_der)` | fn | Nitro document with `user_data` = SHA-256 of the SPKI (the binding verifiers check, not a hash of the whole certificate) |
 
 ## 5. Terminal: `POST /faf`
 
@@ -242,10 +247,10 @@ The handler never logs the key or the message, only the message size. An applica
 |---|---|---|---|---|
 | `NsmSession` | `nitro` | `/dev/nsm` | record `AWS_NITRO`: NSM document (COSE_Sign1) | — |
 | `MockSession` | `mock` | none | record `AWS_NITRO`: mock-signed NSM-format document, all-zero PCRs | — |
-| `SevSnpSession` | `sev-snp` | `/sys/kernel/config/tsm/report` | collection `SEV_SNP_COLLECTION`: `report` + `vcek` | `TTK_SEV_SNP_VCEK` if the host supplies no VCEK |
+| `SevSnpSession` | `sev-snp` | `/sys/kernel/config/tsm/report` | collection `SEV_SNP_COLLECTION`: `report` + `vcek` (the VCEK, or the VLEK for VLEK-signed reports, as on AWS EC2) | `TTK_SEV_SNP_VCEK` if the host supplies no certificate |
 | `TdxSession` | `tdx` | `/sys/kernel/config/tsm/report` | record `TDX`: DCAP quote | — |
 
-TDX and SEV-SNP bind 64 bytes of report data (`user_data`, zero-padded); `nonce` and `public_key` are rejected for them. `NsmSession` also exposes `describe_nsm`, `get_random`, and PCR helpers (`describe_pcr`, `extend_pcr`, `lock_pcr`).
+TDX and SEV-SNP bind 64 bytes of report data (`tsm::report_data` = `ttk_core::fresh_evidence::report_data`): `user_data` zero-padded, or, with a `nonce`, `user_data` (≤ 32 bytes) zero-padded to 32 bytes ‖ SHA-256(nonce); `public_key` is rejected for them. The SEV-SNP provider reads the report's `SIGNING_KEY` flags (`SigningKey::{Vcek, Vlek}`) and takes the matching certificate from the extended-report certificate table (`vcek_from_cert_table` / `vlek_from_cert_table`). `NsmSession` also exposes `describe_nsm`, `get_random`, and PCR helpers (`describe_pcr`, `extend_pcr`, `lock_pcr`).
 
 ## 7. Features and dependencies
 
@@ -265,6 +270,7 @@ Node tests that call anything but `POST /evidence` / `POST /certificate` first u
 | File | Covers |
 |---|---|
 | `crates/ra-server/tests/attestation_tests.rs` | Provider selection and errors |
+| `crates/ra-server/tests/body_budget_tests.rs` | `BodyBudget` reservations: growing until exhausted, returned on drop, oversized requests refused |
 | `crates/ra-server/tests/certificate_tests.rs` | `POST /certificate`: accepted chains (direct, via intermediate), every refusal, one replacement only, bootstrap routes gone afterwards, gating before and after |
 | `crates/ra-server/tests/nitro_tests.rs` | Nitro / mock documents (mock off-enclave) |
 | `crates/ra-server/tests/router_tests.rs` | `POST /evidence` over the mock provider: nonce, key binding, certificate, bad nonces |
