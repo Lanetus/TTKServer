@@ -33,6 +33,9 @@ exceptions = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Path-only dev-dependencies (e.g. `ttk-ra-client` -> relay/storage/root, which
+# breaks a publish cycle) are stripped on publish, so they are not real wildcards.
+allow-wildcard-paths = true
 highlight = "all"
 deny = []
 skip = []
