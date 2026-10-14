@@ -91,10 +91,7 @@ impl fmt::Debug for CertificateStore {
 
 impl CertificateStore {
     /// Creates a store presenting `cert` with the RA-TLS `key`, with no trusted roots.
-    pub fn new(
-        cert: CertificateDer<'static>,
-        key: &PrivateKeyDer<'_>,
-    ) -> Result<Self, BoxError> {
+    pub fn new(cert: CertificateDer<'static>, key: &PrivateKeyDer<'_>) -> Result<Self, BoxError> {
         let signing_key = any_supported_type(key)?;
         Ok(Self {
             current: RwLock::new(Arc::new(CertifiedKey::new(vec![cert], signing_key.clone()))),
