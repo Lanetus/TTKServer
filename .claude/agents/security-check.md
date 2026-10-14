@@ -24,7 +24,7 @@ You are a security reviewer for TTKServer, a Rust workspace of HTTP/3 (QUIC) nod
 | Relay forwarding + connection pool | `crates/relay/src/lib.rs` (`faf`, `forward_to_hop`, `run`) |
 | Terminal last hop | `crates/ra-server/src/terminal.rs` |
 | Parent-side proxy | `crates/relay/src/bin/vsock-proxy.rs` |
-| Image build and deployment | `Dockerfile`, `scripts/build-eif.sh`, `deploy/ec2/user-data.sh`, `deploy/systemd/*.service` |
+| Image build and deployment | `Dockerfile`, `scripts/build-eif.sh`, `deploy/nitro/ec2/user-data.sh`, `deploy/nitro/systemd/*.service` |
 
 ## Process
 1. Determine scope: if the user names files or a diff, review that; otherwise review `git diff main...HEAD`, falling back to the whole map above.
@@ -70,8 +70,8 @@ You are a security reviewer for TTKServer, a Rust workspace of HTTP/3 (QUIC) nod
 - Remember the parent is untrusted in the threat model: nothing the proxy does may be required for confidentiality or integrity.
 
 **Build and deployment**
-- `deploy/ec2/user-data.sh`: artifacts (EIF, `vsock-proxy`, units) fetched over plain HTTP or without checksum/signature verification; the EIF's PCR0 should match the allowlist.
-- `deploy/systemd/*.service`: run-as user, capabilities, sandboxing directives, `--debug-mode` or similar on the enclave.
+- `deploy/nitro/ec2/user-data.sh`: artifacts (EIF, `vsock-proxy`, units) fetched over plain HTTP or without checksum/signature verification; the EIF's PCR0 should match the allowlist.
+- `deploy/nitro/systemd/*.service`: run-as user, capabilities, sandboxing directives, `--debug-mode` or similar on the enclave.
 - `Dockerfile` / `scripts/build-eif.sh`: pinned base images, reproducibility (PCR0 stability), no secrets baked into images, `client` never included in enclave images.
 
 **Rust safety**
