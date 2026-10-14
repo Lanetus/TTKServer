@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.0] - 2026-10-14
+
+### Changed
+- `vsock-proxy` and `vsock-proxy-tcp` now exit cleanly (status 0) on `SIGTERM` / `SIGINT`, so systemd stops the units without reporting a failure.
+
 ## [6.4.0] - 2026-10-14
 
 ### Added
@@ -507,7 +512,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.4.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.5.0...HEAD
+[6.5.0]: https://github.com/Lanetus/TTKServer/compare/v6.4.0...v6.5.0
 [6.4.0]: https://github.com/Lanetus/TTKServer/compare/v6.3.0...v6.4.0
 [6.3.0]: https://github.com/Lanetus/TTKServer/compare/v6.2.1...v6.3.0
 [6.2.1]: https://github.com/Lanetus/TTKServer/compare/v6.2.0...v6.2.1
