@@ -141,13 +141,23 @@ fn report_data_rejects_oversized_or_unsupported_inputs() {
         Err(AttestationError::InvalidInput(_))
     ));
 
-    let with_nonce = AttestationParams {
+    let with_key = AttestationParams {
         user_data: Some(vec![1; 32]),
+        public_key: Some(vec![2; 16]),
+        ..Default::default()
+    };
+    assert!(matches!(
+        report_data(&with_key),
+        Err(AttestationError::InvalidInput(_))
+    ));
+
+    let oversized_with_nonce = AttestationParams {
+        user_data: Some(vec![1; 33]),
         nonce: Some(vec![2; 16]),
         ..Default::default()
     };
     assert!(matches!(
-        report_data(&with_nonce),
+        report_data(&oversized_with_nonce),
         Err(AttestationError::InvalidInput(_))
     ));
 }
@@ -206,12 +216,12 @@ fn session_reports_its_name_and_propagates_errors() {
     let err = session.generate_document(&params).unwrap_err();
     assert!(err.to_string().contains("provider"), "{err}");
 
-    let with_nonce = AttestationParams {
-        nonce: Some(vec![2; 8]),
+    let with_key = AttestationParams {
+        public_key: Some(vec![2; 8]),
         ..params
     };
     assert!(matches!(
-        session.generate_document(&with_nonce),
+        session.generate_document(&with_key),
         Err(AttestationError::InvalidInput(_))
     ));
 }

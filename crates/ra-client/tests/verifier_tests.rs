@@ -25,8 +25,8 @@ use std::time::Duration;
 use ttk_ra_client::trust::RootSignerTrustStore;
 use ttk_ra_client::verifier::sev_snp::{AmdProduct, AmdRoots};
 use ttk_ra_client::verifier::{
-    dcap, is_bound_to, media_type, nitro, sev_snp, verify_evidence, ImageTrustStore, Policy,
-    TeeKind, TrustStore,
+    dcap, is_bound_to, media_type, nitro, sev_snp, verify_evidence, verify_evidence_with_nonce,
+    ImageTrustStore, Policy, TeeKind, TrustStore,
 };
 use ttk_ra_client::{EnclaveCertVerifier, RootImageTrustStore};
 use ttk_ra_server::server::create_cert_with_attestation;
@@ -88,6 +88,22 @@ fn builtin_amd_ask_certificates_are_signed_by_their_arks() {
             .unwrap_or_else(|e| panic!("{:?} ARK: {e}", r.product));
         ask.verify_signature(Some(ark.public_key()))
             .unwrap_or_else(|e| panic!("{:?} ASK: {e}", r.product));
+    }
+}
+
+#[test]
+fn builtin_amd_asvk_certificates_are_signed_by_their_arks() {
+    for r in AmdRoots::builtin() {
+        let (_, ark) = X509Certificate::from_der(&r.ark).unwrap();
+        let (_, asvk) = X509Certificate::from_der(&r.asvk).unwrap();
+        asvk.verify_signature(Some(ark.public_key()))
+            .unwrap_or_else(|e| panic!("{:?} ASVK: {e}", r.product));
+        assert!(
+            asvk.subject().to_string().contains("SEV-VLEK"),
+            "{:?}: {}",
+            r.product,
+            asvk.subject()
+        );
     }
 }
 
@@ -310,11 +326,14 @@ fn sgx_body(report_data: &[u8], mrenclave: u8, debug: bool) -> Vec<u8> {
     body
 }
 
-/// A test AMD PKI: ARK → ASK → VCEK (ECDSA P-384 instead of RSA-PSS) for one chip.
+/// A test AMD PKI: ARK → ASK → VCEK for one chip and ARK → ASVK → VLEK (ECDSA P-384 instead
+/// of RSA-PSS).
 struct AmdPki {
     roots: AmdRoots,
     vcek: Vec<u8>,
     vcek_key: EcdsaKeyPair,
+    vlek: Vec<u8>,
+    vlek_key: EcdsaKeyPair,
     chip_id: [u8; 64],
     tcb: [u8; 8],
 }
@@ -324,6 +343,14 @@ fn amd_pki() -> AmdPki {
     let ark = cert("ARK-Test", &ark_key, true, None, vec![]);
     let ask_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
     let ask = cert("SEV-Test", &ask_key, true, Some((&ark, &ark_key)), vec![]);
+    let asvk_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
+    let asvk = cert(
+        "SEV-VLEK-Test",
+        &asvk_key,
+        true,
+        Some((&ark, &ark_key)),
+        vec![],
+    );
 
     let chip_id = [0xC5; 64];
     // Milan layout: bl, tee, reserved x4, snp, ucode
@@ -345,22 +372,53 @@ fn amd_pki() -> AmdPki {
             CustomExtension::from_oid_content(&[1, 3, 6, 1, 4, 1, 3704, 1, 4], chip_id.to_vec()),
         ],
     );
+    // A VLEK has the TCB extensions but no hwID: it is not tied to one chip.
+    let vlek_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
+    let vlek = cert(
+        "SEV-VLEK",
+        &vlek_key,
+        false,
+        Some((&asvk, &asvk_key)),
+        vec![
+            spl(1, tcb[0]),
+            spl(2, tcb[1]),
+            spl(3, tcb[6]),
+            spl(8, tcb[7]),
+        ],
+    );
     AmdPki {
         roots: AmdRoots {
             product: AmdProduct::Milan,
             ark: ark.der().to_vec(),
             ask: ask.der().to_vec(),
+            asvk: asvk.der().to_vec(),
         },
         vcek: vcek.der().to_vec(),
         vcek_key: signer(&vcek_key, &ECDSA_P384_SHA384_FIXED_SIGNING),
+        vlek: vlek.der().to_vec(),
+        vlek_key: signer(&vlek_key, &ECDSA_P384_SHA384_FIXED_SIGNING),
         chip_id,
         tcb,
     }
 }
 
-/// Builds a signed SEV-SNP attestation report.
+/// Builds a VCEK-signed SEV-SNP attestation report.
 fn build_snp_report(pki: &AmdPki, report_data: &[u8], measurement: u8, debug: bool) -> Vec<u8> {
+    build_snp_report_signed(pki, report_data, measurement, debug, false)
+}
+
+/// Builds an SEV-SNP attestation report signed by the VLEK if `vlek`, else by the VCEK.
+fn build_snp_report_signed(
+    pki: &AmdPki,
+    report_data: &[u8],
+    measurement: u8,
+    debug: bool,
+    vlek: bool,
+) -> Vec<u8> {
     let mut report = vec![0u8; 0x4A0];
+    if vlek {
+        report[0x48] = 1 << 2; // FLAGS.SIGNING_KEY = VLEK
+    }
     report[0..4].copy_from_slice(&3u32.to_le_bytes());
     let policy: u64 = (1 << 17) | if debug { 1 << 19 } else { 0 };
     report[0x08..0x10].copy_from_slice(&policy.to_le_bytes());
@@ -370,7 +428,8 @@ fn build_snp_report(pki: &AmdPki, report_data: &[u8], measurement: u8, debug: bo
     report[0x180..0x188].copy_from_slice(&pki.tcb);
     report[0x1A0..0x1E0].copy_from_slice(&pki.chip_id);
 
-    let signature = sign(&pki.vcek_key, &report[..0x2A0]);
+    let key = if vlek { &pki.vlek_key } else { &pki.vcek_key };
+    let signature = sign(key, &report[..0x2A0]);
     for (i, component) in signature.chunks(48).enumerate() {
         let start = 0x2A0 + 72 * i;
         for (j, b) in component.iter().rev().enumerate() {
@@ -911,4 +970,139 @@ fn cert_verifier_rejects_tdx_evidence_with_builtin_roots() {
         err.to_string().contains("PCK certificate chain is invalid"),
         "{err}"
     );
+}
+
+#[test]
+fn vlek_signed_snp_report_verifies_through_the_asvk() {
+    let amd = amd_pki();
+    let trust = test_trust(&intel_pki(), &amd);
+    let binding = [0x42; 32];
+    let report = build_snp_report_signed(&amd, &binding, 7, false, true);
+
+    let evidence = verify_evidence(
+        &snp_cmw(&report, &amd.vlek),
+        &binding,
+        UnixTime::now(),
+        &trust,
+        &RootImageTrustStore::default(),
+        Policy::default(),
+    )
+    .expect("a VLEK-signed report should verify");
+    assert_eq!(evidence.tee, TeeKind::SevSnp);
+    assert!(evidence.measurements["measurement"].iter().all(|b| *b == 7));
+}
+
+#[test]
+fn snp_signing_key_must_match_its_certificate_chain() {
+    let amd = amd_pki();
+    let trust = test_trust(&intel_pki(), &amd);
+    let binding = [0x42; 32];
+    let verify = |report: &[u8], cert: &[u8]| {
+        verify_evidence(
+            &snp_cmw(report, cert),
+            &binding,
+            UnixTime::now(),
+            &trust,
+            &RootImageTrustStore::default(),
+            Policy::default(),
+        )
+        .unwrap_err()
+    };
+
+    // A VLEK-flagged report with the VCEK: the VCEK is not certified by the ASVK.
+    let vlek_report = build_snp_report_signed(&amd, &binding, 0, false, true);
+    let err = verify(&vlek_report, &amd.vcek);
+    assert!(err.contains("not signed by a pinned AMD ASVK"), "{err}");
+
+    // A VCEK-flagged report with the VLEK: the VLEK is not certified by the ASK.
+    let vcek_report = build_snp_report(&amd, &binding, 0, false);
+    let err = verify(&vcek_report, &amd.vlek);
+    assert!(err.contains("not signed by a pinned AMD ASK"), "{err}");
+
+    // A VLEK-flagged report signed by the VCEK key, carried with the VLEK certificate.
+    let mut forged = build_snp_report(&amd, &binding, 0, false);
+    forged[0x48] = 1 << 2;
+    let err = verify(&forged, &amd.vlek);
+    assert!(err.contains("signature is invalid for its VLEK"), "{err}");
+
+    // SIGNING_KEY = 7: unsigned report.
+    let mut unsigned = vcek_report.clone();
+    unsigned[0x48] = 7 << 2;
+    let err = verify(&unsigned, &amd.vcek);
+    assert!(err.contains("not signed by a VCEK or VLEK"), "{err}");
+}
+
+#[test]
+fn fresh_tdx_and_snp_evidence_binds_the_nonce_in_the_report_data() {
+    let intel = intel_pki();
+    let amd = amd_pki();
+    let trust = test_trust(&intel, &amd);
+    let binding = [0x42; 32];
+    let nonce = b"verifier nonce";
+    let report_data = ttk_core::fresh_evidence::report_data(&binding, Some(nonce)).unwrap();
+    assert_eq!(report_data[..32], binding);
+    assert_eq!(report_data[32..], Sha256::digest(nonce)[..]);
+
+    let cases = [
+        (
+            TeeKind::Tdx,
+            record(
+                media_type::TDX,
+                build_quote(TeeKind::Tdx, &td_body(&report_data, 7, false), &intel),
+            ),
+        ),
+        (
+            TeeKind::SevSnp,
+            snp_cmw(
+                &build_snp_report_signed(&amd, &report_data, 7, false, true),
+                &amd.vlek,
+            ),
+        ),
+    ];
+    for (tee, cmw) in cases {
+        let verify = |binding: &[u8], nonce: &[u8]| {
+            verify_evidence_with_nonce(
+                &cmw,
+                binding,
+                nonce,
+                UnixTime::now(),
+                &trust,
+                &RootImageTrustStore::default(),
+                Policy::default(),
+            )
+        };
+        let evidence = verify(&binding, nonce).unwrap_or_else(|e| panic!("{tee}: {e}"));
+        assert_eq!(evidence.tee, tee);
+
+        let err = verify(&binding, b"other nonce").unwrap_err();
+        assert!(err.contains("and the nonce"), "{tee}: {err}");
+        let err = verify(&[0x43; 32], nonce).unwrap_err();
+        assert!(err.contains("and the nonce"), "{tee}: {err}");
+
+        // Without a nonce check, the hash in the second half is not zero padding.
+        let err = verify_evidence(
+            &cmw,
+            &binding,
+            UnixTime::now(),
+            &trust,
+            &RootImageTrustStore::default(),
+            Policy::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("report data does not match"), "{tee}: {err}");
+    }
+
+    // Startup Evidence (zero-padded report data) does not answer a nonce.
+    let startup = snp_cmw(&build_snp_report(&amd, &binding, 7, false), &amd.vcek);
+    let err = verify_evidence_with_nonce(
+        &startup,
+        &binding,
+        nonce,
+        UnixTime::now(),
+        &trust,
+        &RootImageTrustStore::default(),
+        Policy::default(),
+    )
+    .unwrap_err();
+    assert!(err.contains("and the nonce"), "{err}");
 }

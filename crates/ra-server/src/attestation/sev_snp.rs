@@ -4,13 +4,17 @@
 //! Inside an SEV-SNP guest, Linux 6.7+ exposes `/sys/kernel/config/tsm/report` (see
 //! [`super::tsm`]). Writing the 64-byte `REPORT_DATA` to an entry's `inblob` and reading
 //! `outblob` returns the report signed by the AMD Secure Processor; `auxblob` returns the
-//! certificate table the host attached to the extended report, which normally holds the VCEK.
+//! certificate table the host attached to the extended report, which normally holds the key
+//! that signed the report: the chip's VCEK (Versioned Chip Endorsement Key), or, on clouds that
+//! sign with a VLEK (Versioned Loaded Endorsement Key, e.g. AWS EC2), the VLEK. The report's
+//! `SIGNING_KEY` flags say which one is expected.
 //!
-//! If the host does not supply certificates, the VCEK must be provided out of band: set
-//! `TTK_SEV_SNP_VCEK` to a VCEK certificate (DER or PEM) fetched from the AMD Key Distribution
-//! Service for this chip and TCB.
+//! If the host does not supply certificates, the key must be provided out of band: set
+//! `TTK_SEV_SNP_VCEK` to the VCEK (or, for VLEK-signed reports, VLEK) certificate (DER or PEM),
+//! e.g. fetched from the AMD Key Distribution Service for this chip and TCB.
 //!
-//! The report and VCEK are wrapped as a CMW collection of type
+//! The report and its endorsement key certificate (VCEK or VLEK, in the `vcek` member) are
+//! wrapped as a CMW collection of type
 //! `media_type::SEV_SNP_COLLECTION` (`{"report": Evidence record, "vcek": Endorsement record}`),
 //! which the client's
 //! `ttk_ra_client::verifier::sev_snp` verifies them.
@@ -32,7 +36,8 @@ const DEVICE: &str = "/dev/sev-guest";
 /// Value of an entry's `provider` attribute when the SEV-SNP guest driver serves it.
 const TSM_PROVIDER_SEV: &str = "sev_guest";
 
-/// Environment variable naming a VCEK certificate file, used when the host supplies none.
+/// Environment variable naming the VCEK (or, for VLEK-signed reports, VLEK) certificate file,
+/// used when the host supplies none.
 pub const VCEK_ENV: &str = "TTK_SEV_SNP_VCEK";
 
 /// `ATTESTATION_REPORT` layout (SEV-SNP ABI specification).
@@ -44,6 +49,41 @@ const OFFSET_REPORT_DATA: usize = 0x50;
 const VCEK_GUID: [u8; 16] = [
     0x63, 0xda, 0x75, 0x8d, 0xe6, 0x64, 0x45, 0x64, 0xad, 0xc5, 0xf4, 0xb9, 0x3b, 0xe8, 0xac, 0xcd,
 ];
+
+/// VLEK GUID in the extended-report certificate table: a8074bc2-a25a-483e-aae6-39c045a0b8a1.
+const VLEK_GUID: [u8; 16] = [
+    0xa8, 0x07, 0x4b, 0xc2, 0xa2, 0x5a, 0x48, 0x3e, 0xaa, 0xe6, 0x39, 0xc0, 0x45, 0xa0, 0xb8, 0xa1,
+];
+
+/// Key that signed an SEV-SNP report (`FLAGS.SIGNING_KEY`, bits 4:2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigningKey {
+    /// Versioned Chip Endorsement Key, derived from the chip's secrets (value 0).
+    Vcek,
+    /// Versioned Loaded Endorsement Key, provisioned by a cloud provider (value 1).
+    Vlek,
+}
+
+/// Decoding of the `SIGNING_KEY` field.
+impl SigningKey {
+    /// Reads `SIGNING_KEY` from the report `FLAGS`; `None` for an unsigned report (7) or a
+    /// reserved value.
+    pub fn from_flags(flags: u32) -> Option<Self> {
+        match (flags >> 2) & 0b111 {
+            0 => Some(Self::Vcek),
+            1 => Some(Self::Vlek),
+            _ => None,
+        }
+    }
+
+    /// `"VCEK"` or `"VLEK"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Vcek => "VCEK",
+            Self::Vlek => "VLEK",
+        }
+    }
+}
 
 /// Size of one certificate table entry: GUID (16), offset (u32), length (u32).
 const CERT_TABLE_ENTRY_LEN: usize = 24;
@@ -60,7 +100,8 @@ pub struct SevSnpSession {
 pub struct SevSnpEvidence {
     /// The raw 1184-byte `ATTESTATION_REPORT`.
     pub report: Vec<u8>,
-    /// DER-encoded VCEK certificate.
+    /// DER-encoded certificate of the key that signed the report: the VCEK, or the VLEK for
+    /// VLEK-signed reports.
     pub vcek: Vec<u8>,
 }
 
@@ -84,8 +125,8 @@ impl SevSnpSession {
         })
     }
 
-    /// Uses the VCEK certificate (DER or PEM) in the file at `path` instead of the certificate the
-    /// host attaches to the report.
+    /// Uses the VCEK or VLEK certificate (DER or PEM) in the file at `path` instead of the
+    /// certificate the host attaches to the report.
     pub fn with_vcek_file(self, path: impl AsRef<Path>) -> Result<Self, AttestationError> {
         let path = path.as_ref();
         let vcek = std::fs::read(path).map_err(|e| {
@@ -97,7 +138,8 @@ impl SevSnpSession {
         self.with_vcek(&vcek)
     }
 
-    /// Uses `vcek` (DER or PEM) instead of the certificate the host attaches to the report.
+    /// Uses `vcek`, a VCEK or VLEK certificate (DER or PEM), instead of the certificate the host
+    /// attaches to the report.
     pub fn with_vcek(mut self, vcek: &[u8]) -> Result<Self, AttestationError> {
         self.vcek = Some(parse_certificate(vcek)?);
         Ok(self)
@@ -135,9 +177,10 @@ impl AttestationProvider for SevSnpSession {
 
 /// Reads a report from an existing configfs-tsm `entry` directory for `report_data`.
 ///
-/// The VCEK is taken from the entry's certificate table (`auxblob`), unless `vcek` (DER) is
-/// given. Checks that the entry is served by the SEV-SNP guest driver, that no concurrent
-/// writer changed the request, and that the report carries `report_data` and is VCEK-signed.
+/// The VCEK (or, for a VLEK-signed report, the VLEK) is taken from the entry's certificate table
+/// (`auxblob`), unless `vcek` (DER) is given. Checks that the entry is served by the SEV-SNP
+/// guest driver, that no concurrent writer changed the request, and that the report carries
+/// `report_data` and is signed by a VCEK or VLEK.
 pub fn evidence_from_entry(
     entry: &Path,
     report_data: &[u8; REPORT_DATA_LEN],
@@ -147,38 +190,43 @@ pub fn evidence_from_entry(
     evidence_from_response(response, report_data, vcek)
 }
 
-/// Checks the report in `response` and pairs it with its VCEK.
+/// Checks the report in `response` and pairs it with the certificate of its signing key.
 fn evidence_from_response(
     response: tsm::TsmReport,
     report_data: &[u8; REPORT_DATA_LEN],
     vcek: Option<&[u8]>,
 ) -> Result<SevSnpEvidence, AttestationError> {
     let report = response.outblob;
-    check_report(&report, report_data)?;
+    let signing_key = check_report(&report, report_data)?;
 
     let vcek = match vcek {
         Some(vcek) => vcek.to_vec(),
         None => response
             .auxblob
             .as_deref()
-            .map(vcek_from_cert_table)
+            .map(|table| match signing_key {
+                SigningKey::Vcek => vcek_from_cert_table(table),
+                SigningKey::Vlek => vlek_from_cert_table(table),
+            })
             .transpose()?
             .flatten()
             .ok_or_else(|| {
+                let key = signing_key.name();
                 AttestationError::UnexpectedResponse(format!(
-                    "the host did not attach a VCEK certificate to the SEV-SNP report; set \
-                     {VCEK_ENV} to this chip's VCEK from the AMD Key Distribution Service"
+                    "the host did not attach a {key} certificate to the SEV-SNP report; set \
+                     {VCEK_ENV} to the {key} certificate (AMD Key Distribution Service)"
                 ))
             })?,
     };
     Ok(SevSnpEvidence { report, vcek })
 }
 
-/// Checks that `report` is a VCEK-signed SEV-SNP report whose `REPORT_DATA` is `report_data`.
+/// Checks that `report` is an SEV-SNP report signed by a VCEK or VLEK whose `REPORT_DATA` is
+/// `report_data`, and returns its signing key.
 fn check_report(
     report: &[u8],
     report_data: &[u8; REPORT_DATA_LEN],
-) -> Result<(), AttestationError> {
+) -> Result<SigningKey, AttestationError> {
     if report.len() != REPORT_LEN {
         return Err(AttestationError::DocumentDecodingFailed(format!(
             "SEV-SNP report is {} bytes, expected {REPORT_LEN}",
@@ -195,24 +243,33 @@ fn check_report(
             .try_into()
             .expect("4-byte slice"),
     );
-    if (flags >> 2) & 0b111 != 0 {
-        return Err(AttestationError::Unsupported(
-            "SEV-SNP report is signed by a VLEK, which the client does not support".into(),
-        ));
-    }
-    Ok(())
+    SigningKey::from_flags(flags).ok_or_else(|| {
+        AttestationError::Unsupported(
+            "SEV-SNP report is not signed by a VCEK or VLEK, which the client requires".into(),
+        )
+    })
 }
 
-/// Finds the VCEK in an extended-report certificate table.
+/// Finds the VCEK in an extended-report certificate table (see [`cert_from_table`]).
+pub fn vcek_from_cert_table(table: &[u8]) -> Result<Option<Vec<u8>>, AttestationError> {
+    cert_from_table(table, &VCEK_GUID)
+}
+
+/// Finds the VLEK in an extended-report certificate table (see [`cert_from_table`]).
+pub fn vlek_from_cert_table(table: &[u8]) -> Result<Option<Vec<u8>>, AttestationError> {
+    cert_from_table(table, &VLEK_GUID)
+}
+
+/// Finds the certificate with `guid` in an extended-report certificate table.
 ///
 /// The table is a list of `{guid, offset, length}` entries terminated by an all-zero GUID;
 /// offsets are relative to the start of the table. GUIDs are matched in both the RFC 4122 byte
 /// order and the little-endian (EFI) layout.
-pub fn vcek_from_cert_table(table: &[u8]) -> Result<Option<Vec<u8>>, AttestationError> {
+fn cert_from_table(table: &[u8], wanted: &[u8; 16]) -> Result<Option<Vec<u8>>, AttestationError> {
     let malformed = |msg: &str| {
         AttestationError::DocumentDecodingFailed(format!("SEV-SNP certificate table {msg}"))
     };
-    let vcek_guid_le = guid_to_le(&VCEK_GUID);
+    let wanted_le = guid_to_le(wanted);
     for entry in table.chunks(CERT_TABLE_ENTRY_LEN) {
         if entry.len() < CERT_TABLE_ENTRY_LEN {
             return Err(malformed("has a truncated entry"));
@@ -221,7 +278,7 @@ pub fn vcek_from_cert_table(table: &[u8]) -> Result<Option<Vec<u8>>, Attestation
         if guid.iter().all(|b| *b == 0) {
             break;
         }
-        if guid != VCEK_GUID && guid != vcek_guid_le {
+        if guid != wanted && guid != wanted_le {
             continue;
         }
         let offset = u32::from_le_bytes(entry[16..20].try_into().expect("4-byte slice")) as usize;
@@ -248,12 +305,12 @@ fn guid_to_le(guid: &[u8; 16]) -> [u8; 16] {
 fn parse_certificate(bytes: &[u8]) -> Result<Vec<u8>, AttestationError> {
     let der = if bytes.starts_with(b"-----BEGIN") {
         CertificateDer::from_pem_slice(bytes)
-            .map_err(|e| AttestationError::InvalidInput(format!("invalid VCEK PEM: {e:?}")))?
+            .map_err(|e| AttestationError::InvalidInput(format!("invalid VCEK/VLEK PEM: {e:?}")))?
             .to_vec()
     } else {
         // Certificate table entries may be zero-padded after the DER structure.
         let (rest, _) = x509_parser::parse_x509_certificate(bytes).map_err(|e| {
-            AttestationError::InvalidInput(format!("invalid VCEK certificate: {e}"))
+            AttestationError::InvalidInput(format!("invalid VCEK/VLEK certificate: {e}"))
         })?;
         bytes[..bytes.len() - rest.len()].to_vec()
     };
@@ -261,7 +318,7 @@ fn parse_certificate(bytes: &[u8]) -> Result<Vec<u8>, AttestationError> {
 }
 
 /// Wraps SEV-SNP `evidence` as a CMW collection of type [`media_type::SEV_SNP_COLLECTION`]:
-/// the report as an Evidence record, the VCEK as an Endorsement record.
+/// the report as an Evidence record, its VCEK or VLEK certificate as an Endorsement record.
 pub fn wrap_evidence_as_cmw(evidence: SevSnpEvidence) -> Cmw {
     Cmw::Collection(CmwCollection {
         collection_type: Some(media_type::SEV_SNP_COLLECTION.to_string()),

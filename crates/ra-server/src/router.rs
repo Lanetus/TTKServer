@@ -24,11 +24,13 @@
 //! `POST /evidence` gives a Verifier freshness (RFC 9334 §10): the request body is the raw
 //! nonce (1 to [`MAX_NONCE_LEN`] bytes, else `400`), and the server asks the TEE for new Evidence
 //! bound, like the startup Evidence, to the RA-TLS key (`user_data` = SHA-256 of its
-//! SubjectPublicKeyInfo), with the nonce in the attestation document's `nonce` field. The
+//! SubjectPublicKeyInfo), with the nonce in the attestation document's `nonce` field (Nitro) or
+//! its SHA-256 in the second half of the 64-byte report data (TDX, SEV-SNP: see
+//! [`ttk_core::fresh_evidence::report_data`]). The
 //! response is a [`FreshEvidence`] CMW collection: that Evidence and the certificate currently
 //! presented (self-signed or CA-issued), which the Verifier compares with the one from its TLS
 //! handshake. At most [`MAX_CONCURRENT_ATTESTATIONS`] requests are attested at
-//! once; further ones get `503`. Providers that cannot carry a nonce (TDX, SEV-SNP) answer `500`.
+//! once; further ones get `503`.
 //!
 //! `POST /certificate` takes a certificate chain (PEM, leaf first, or one DER certificate) issued
 //! by a trusted root authority for the current RA-TLS certificate (same key and evidence, see

@@ -51,7 +51,8 @@ pub mod media_type {
     /// AMD SEV-SNP attestation report, the [`SEV_SNP_REPORT_LABEL`] member of an
     /// [`SEV_SNP_COLLECTION`].
     pub const SEV_SNP_REPORT: &str = "application/vnd.ttk.amd-sev-snp-report";
-    /// DER X.509 certificate (RFC 2585): the VCEK, the [`SEV_SNP_VCEK_LABEL`] member of an
+    /// DER X.509 certificate (RFC 2585): the VCEK (or VLEK, for VLEK-signed reports), the
+    /// [`SEV_SNP_VCEK_LABEL`] member of an
     /// [`SEV_SNP_COLLECTION`].
     pub const PKIX_CERT: &str = "application/pkix-cert";
     /// Collection type (RFC 4151 tag URI, not registered) of AMD SEV-SNP evidence: the report
@@ -59,7 +60,7 @@ pub mod media_type {
     pub const SEV_SNP_COLLECTION: &str = "tag:lanetus.github.io,2026:sev-snp-evidence";
     /// Label of the report in an [`SEV_SNP_COLLECTION`].
     pub const SEV_SNP_REPORT_LABEL: &str = "report";
-    /// Label of the VCEK in an [`SEV_SNP_COLLECTION`].
+    /// Label of the VCEK (or VLEK) in an [`SEV_SNP_COLLECTION`].
     pub const SEV_SNP_VCEK_LABEL: &str = "vcek";
     /// Collection type (RFC 4151 tag URI, not registered) of the `POST /evidence` response:
     /// fresh Evidence and the RA-TLS certificate it is bound to (see [`crate::FreshEvidence`]).

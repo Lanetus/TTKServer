@@ -12,8 +12,8 @@ use std::time::Duration;
 use ttk_ra_client::verifier::{verify_evidence, Policy, TeeKind, TrustStore};
 use ttk_ra_client::RootImageTrustStore;
 use ttk_ra_server::attestation::sev_snp::{
-    evidence_from_entry, report_data, vcek_from_cert_table, wrap_evidence_as_cmw, SevSnpSession,
-    REPORT_DATA_LEN,
+    evidence_from_entry, report_data, vcek_from_cert_table, vlek_from_cert_table,
+    wrap_evidence_as_cmw, SevSnpSession, SigningKey, REPORT_DATA_LEN,
 };
 use ttk_ra_server::attestation::AttestationError;
 use ttk_ra_server::AttestationParams;
@@ -24,6 +24,10 @@ const MILAN_VCEK: &[u8] = include_bytes!("fixtures/sev_snp_milan_vcek.der");
 /// VCEK GUID 63da758d-e664-4564-adc5-f4b93be8accd in RFC 4122 byte order.
 const VCEK_GUID: [u8; 16] = [
     0x63, 0xda, 0x75, 0x8d, 0xe6, 0x64, 0x45, 0x64, 0xad, 0xc5, 0xf4, 0xb9, 0x3b, 0xe8, 0xac, 0xcd,
+];
+/// VLEK GUID a8074bc2-a25a-483e-aae6-39c045a0b8a1 in RFC 4122 byte order.
+const VLEK_GUID: [u8; 16] = [
+    0xa8, 0x07, 0x4b, 0xc2, 0xa2, 0x5a, 0x48, 0x3e, 0xaa, 0xe6, 0x39, 0xc0, 0x45, 0xa0, 0xb8, 0xa1,
 ];
 /// ARK GUID c0b406a4-a803-4952-9743-3fb6014cd0ae.
 const ARK_GUID: [u8; 16] = [
@@ -173,9 +177,43 @@ fn truncated_report_is_rejected() {
 }
 
 #[test]
-fn vlek_signed_report_is_rejected() {
+fn vlek_signed_report_takes_the_vlek_from_the_cert_table() {
+    // The fixture's VCEK stands in for a VLEK: the provider only picks it by GUID.
     let mut report = MILAN_REPORT.to_vec();
     report[0x48] |= 1 << 2; // SIGNING_KEY = VLEK
+    let table = cert_table(&[(le(VCEK_GUID), b"vcek"), (le(VLEK_GUID), MILAN_VCEK)]);
+    let entry = fake_entry("sev_guest", &report, &table);
+    let evidence = evidence_from_entry(&entry.0, &milan_report_data(), None).unwrap();
+    assert_eq!(evidence.vcek, MILAN_VCEK);
+
+    let table = cert_table(&[(le(VCEK_GUID), MILAN_VCEK)]);
+    let entry = fake_entry("sev_guest", &report, &table);
+    let err = evidence_from_entry(&entry.0, &milan_report_data(), None).unwrap_err();
+    assert!(err.to_string().contains("did not attach a VLEK"), "{err}");
+}
+
+#[test]
+fn vlek_guid_is_found_in_both_byte_orders() {
+    for guid in [VLEK_GUID, le(VLEK_GUID)] {
+        let table = cert_table(&[(le(VCEK_GUID), b"vcek"), (guid, MILAN_VCEK)]);
+        assert_eq!(vlek_from_cert_table(&table).unwrap().unwrap(), MILAN_VCEK);
+    }
+}
+
+#[test]
+fn signing_key_is_read_from_the_report_flags() {
+    assert_eq!(SigningKey::from_flags(0), Some(SigningKey::Vcek));
+    assert_eq!(
+        SigningKey::from_flags(1 << 2 | 0b11),
+        Some(SigningKey::Vlek)
+    );
+    assert_eq!(SigningKey::from_flags(7 << 2), None);
+}
+
+#[test]
+fn unsigned_report_is_rejected() {
+    let mut report = MILAN_REPORT.to_vec();
+    report[0x48] |= 7 << 2; // SIGNING_KEY = none
     let entry = fake_entry("sev_guest", &report, b"");
     let err = evidence_from_entry(&entry.0, &milan_report_data(), Some(MILAN_VCEK)).unwrap_err();
     assert!(matches!(err, AttestationError::Unsupported(_)), "{err}");
@@ -232,6 +270,28 @@ fn report_data_is_user_data_zero_padded() {
     let data = report_data(&params).unwrap();
     assert_eq!(data[..32], [7; 32]);
     assert_eq!(data[32..], [0; 32]);
+}
+
+#[test]
+fn report_data_with_a_nonce_is_user_data_then_the_nonce_hash() {
+    use sha2::{Digest, Sha256};
+    let params = AttestationParams {
+        user_data: Some(vec![7; 32]),
+        nonce: Some(b"nonce".to_vec()),
+        ..Default::default()
+    };
+    let data = report_data(&params).unwrap();
+    assert_eq!(data[..32], [7; 32]);
+    assert_eq!(data[32..], Sha256::digest(b"nonce")[..]);
+
+    let oversized = AttestationParams {
+        user_data: Some(vec![7; 33]),
+        ..params
+    };
+    assert!(matches!(
+        report_data(&oversized),
+        Err(AttestationError::InvalidInput(_))
+    ));
 }
 
 #[test]

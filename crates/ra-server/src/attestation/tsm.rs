@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub const CONFIGFS_TSM_REPORT: &str = "/sys/kernel/config/tsm/report";
 
 /// Size of the report data bound into TDX and SEV-SNP evidence.
-pub const REPORT_DATA_LEN: usize = 64;
+pub use ttk_core::fresh_evidence::REPORT_DATA_LEN;
 
 /// Distinguishes the configfs entries created by this process.
 static ENTRY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -107,26 +107,23 @@ pub fn request_in_entry(
     Ok(TsmReport { outblob, auxblob })
 }
 
-/// Builds the 64-byte report data for `params`: `user_data`, zero-padded.
+/// Builds the 64-byte report data for `params` ([`ttk_core::fresh_evidence::report_data`]):
+/// `user_data` zero-padded, or, with a `nonce`, `user_data` (at most 32 bytes) zero-padded to 32
+/// bytes followed by the SHA-256 of the nonce.
 ///
-/// TDX and SEV-SNP bind only 64 bytes of caller data, so `nonce` and `public_key` are rejected;
-/// bind them by hashing them into `user_data` instead.
+/// `public_key` is rejected: TDX and SEV-SNP bind only 64 bytes of caller data, so bind the key
+/// by hashing it into `user_data` instead.
 pub fn report_data(params: &AttestationParams) -> Result<[u8; REPORT_DATA_LEN], AttestationError> {
-    if params.nonce.is_some() || params.public_key.is_some() {
+    if params.public_key.is_some() {
         return Err(AttestationError::InvalidInput(
-            "report data can only carry user_data; hash the nonce or public key into it".into(),
+            "report data cannot carry a public key; hash it into user_data".into(),
         ));
     }
-    let user_data = params.user_data.as_deref().unwrap_or_default();
-    if user_data.len() > REPORT_DATA_LEN {
-        return Err(AttestationError::InvalidInput(format!(
-            "user_data is {} bytes, at most {REPORT_DATA_LEN} are supported",
-            user_data.len()
-        )));
-    }
-    let mut report_data = [0u8; REPORT_DATA_LEN];
-    report_data[..user_data.len()].copy_from_slice(user_data);
-    Ok(report_data)
+    ttk_core::fresh_evidence::report_data(
+        params.user_data.as_deref().unwrap_or_default(),
+        params.nonce.as_deref(),
+    )
+    .map_err(AttestationError::InvalidInput)
 }
 
 /// Reads a text attribute of a configfs entry, without the trailing newline.
