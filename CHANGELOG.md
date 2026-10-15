@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.7] - 2026-10-15
+
+### Changed
+- **BREAKING:** `certify-server` requires `--ca-cert` and `--ca-key`; it no longer creates a new root CA or uses default `auth-test-ca.*` file names. `--server-name` is now also the issued certificate's common name (default: the node's IP).
+- Trimmed unused public API across `ttk-core`, `ttk-ra-client`, `ttk-ra-server`, `ttk-relay`, `ttk-root` and `ttk-storage` (including the `ttk_root::auth` CA generation helpers and several Nitro attestation helpers).
+
 ## [6.5.6] - 2026-10-15
 
 ### Changed
@@ -553,7 +559,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.5.6...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.5.7...HEAD
+[6.5.7]: https://github.com/Lanetus/TTKServer/compare/v6.5.6...v6.5.7
 [6.5.6]: https://github.com/Lanetus/TTKServer/compare/v6.5.5...v6.5.6
 [6.5.5]: https://github.com/Lanetus/TTKServer/compare/v6.5.4...v6.5.5
 [6.5.4]: https://github.com/Lanetus/TTKServer/compare/v6.5.3...v6.5.4
