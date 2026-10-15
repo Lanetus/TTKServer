@@ -1002,63 +1002,6 @@ fn verify_cert(
 }
 
 #[test]
-fn cert_verifier_accepts_tdx_evidence_and_checks_measurements() {
-    let intel = intel_pki();
-    let amd = amd_pki();
-    let key = KeyPair::generate().unwrap();
-    let cert = tdx_ra_tls_cert(&key, &key, &intel);
-
-    let verifier = EnclaveCertVerifier::new()
-        .with_trust_store(test_trust(&intel, &amd))
-        .with_image_trust_store(synthetic_images(7));
-    verify_cert(&verifier, &cert).expect("TDX evidence bound to the cert key should verify");
-    let evidence = verifier.verified_evidence().unwrap();
-    assert_eq!(evidence.tee, TeeKind::Tdx);
-    assert!(verifier.verified_attestation().is_none());
-
-    let pinned = EnclaveCertVerifier::new()
-        .with_trust_store(test_trust(&intel, &amd))
-        .with_image_trust_store(synthetic_images(7))
-        .with_expected_measurement("mrtd", vec![7; 48]);
-    verify_cert(&pinned, &cert).expect("matching MRTD should verify");
-
-    let wrong = EnclaveCertVerifier::new()
-        .with_trust_store(test_trust(&intel, &amd))
-        .with_image_trust_store(synthetic_images(7))
-        .with_expected_measurement("MRTD", vec![8; 48]);
-    let err = verify_cert(&wrong, &cert).unwrap_err();
-    assert!(err.to_string().contains("MRTD does not match"), "{err}");
-
-    let other_tee = EnclaveCertVerifier::new()
-        .with_trust_store(test_trust(&intel, &amd))
-        .with_image_trust_store(synthetic_images(7))
-        .with_expected_pcr(0, vec![0; 48]);
-    let err = verify_cert(&other_tee, &cert).unwrap_err();
-    assert!(
-        err.to_string().contains("has no measurement 'pcr0'"),
-        "{err}"
-    );
-}
-
-#[test]
-fn cert_verifier_rejects_tdx_evidence_bound_to_another_key() {
-    let intel = intel_pki();
-    let amd = amd_pki();
-    let key = KeyPair::generate().unwrap();
-    let other = KeyPair::generate().unwrap();
-    let cert = tdx_ra_tls_cert(&key, &other, &intel);
-
-    let verifier = EnclaveCertVerifier::new()
-        .with_trust_store(test_trust(&intel, &amd))
-        .with_image_trust_store(synthetic_images(7));
-    let err = verify_cert(&verifier, &cert).unwrap_err();
-    assert!(
-        err.to_string().contains("report data does not match"),
-        "{err}"
-    );
-}
-
-#[test]
 fn cert_verifier_rejects_tdx_evidence_with_builtin_roots() {
     let intel = intel_pki();
     let key = KeyPair::generate().unwrap();

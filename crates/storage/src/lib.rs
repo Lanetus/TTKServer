@@ -3,7 +3,7 @@
 //! [`ttk_ra_server::terminal::Terminal`].
 //!
 //! The file service answers `/faf` messages that upload or download files, stored by content
-//! (SHA-256) in a [`BlobStore`].
+//! (SHA-256) in a [`BlobStore`]. The wire types are in [`ttk_core::file_message`].
 //!
 //! Messages and replies are CBOR (RFC 8949) maps whose values are byte strings, so a file
 //! travels as raw bytes rather than base64:
@@ -16,20 +16,20 @@
 //!
 //! The SHA-256 is the raw 32-byte digest; the stored blob's name is its lowercase hex.
 //!
-//! A [`FileError`] is a reply like any other, sealed to the sender: relays see the same `200`
+//! A `FileError` is a reply like any other, sealed to the sender: relays see the same `200`
 //! for a missing file as for a found one.
 
-pub use ttk_ra_server::{EvalError, Evaluator};
+pub use ttk_ra_server::EvalError;
 
 pub mod adaptors;
 
 use crate::adaptors::BlobStore;
 use log::debug;
 use sha2::{Digest, Sha256};
+use ttk_core::file_message::{FileError, FileRequest, FileResponse, SHA256_LEN};
+use ttk_ra_server::Evaluator;
 
-pub use ttk_core::file_message::{FileError, FileRequest, FileResponse, SHA256_LEN};
-
-/// An [`Evaluator`] answering [`FileRequest`]s from a content-addressed [`BlobStore`].
+/// An [`Evaluator`] answering `FileRequest`s from a content-addressed [`BlobStore`].
 #[derive(Debug)]
 pub struct FileService<S> {
     store: S,
@@ -42,7 +42,7 @@ impl<S: BlobStore> FileService<S> {
     }
 
     /// Answers one request: a missing file is a [`FileError::NotFound`] reply, not an error.
-    pub async fn handle(&self, request: FileRequest) -> Result<FileResponse, EvalError> {
+    async fn handle(&self, request: FileRequest) -> Result<FileResponse, EvalError> {
         Ok(match request {
             FileRequest::Upload(file) => {
                 let hash = Sha256::digest(&file).to_vec();
@@ -73,14 +73,14 @@ impl<S: BlobStore> Evaluator for FileService<S> {
 
 /// Returns the stored name (lowercase hex) of the blob with SHA-256 `hash`. Rejecting anything
 /// but a 32-byte digest keeps a download from naming any other object.
-pub fn blob_name(hash: &[u8]) -> Result<String, EvalError> {
+fn blob_name(hash: &[u8]) -> Result<String, EvalError> {
     if hash.len() != SHA256_LEN {
         return Err(format!("invalid SHA-256: expected {SHA256_LEN} bytes").into());
     }
     Ok(hex_encode(hash))
 }
 
-/// Helper function to format bytes as a hex string.
-pub fn hex_encode(bytes: &[u8]) -> String {
+/// Formats `bytes` as a lowercase hex string.
+fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }

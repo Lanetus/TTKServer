@@ -20,12 +20,12 @@ use crate::media_type;
 pub const REPORT_DATA_LEN: usize = 64;
 
 /// Largest `user_data` [`report_data`] binds together with a nonce.
-pub const NONCE_BOUND_USER_DATA_LEN: usize = REPORT_DATA_LEN / 2;
+const NONCE_BOUND_USER_DATA_LEN: usize = REPORT_DATA_LEN / 2;
 
 /// Builds the 64-byte report data of TEEs that bind only that much caller data (TDX, SEV-SNP).
 ///
 /// Without a nonce: `user_data` (at most [`REPORT_DATA_LEN`] bytes), zero-padded. With one:
-/// `user_data` (at most [`NONCE_BOUND_USER_DATA_LEN`] bytes) zero-padded to 32 bytes, then the
+/// `user_data` (at most `NONCE_BOUND_USER_DATA_LEN` bytes) zero-padded to 32 bytes, then the
 /// SHA-256 of the nonce. The RA-TLS key binding is a 32-byte SHA-256, so startup Evidence is
 /// `binding || 0^32` and `POST /evidence` Evidence is `binding || SHA-256(nonce)`.
 pub fn report_data(

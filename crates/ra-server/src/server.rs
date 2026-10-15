@@ -40,7 +40,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower_service::Service;
 use zeroize::Zeroizing;
 
-pub use super::router::Evidence;
+use super::router::Evidence;
 
 pub use ttk_core::ATTESTATION_OID;
 
@@ -119,11 +119,11 @@ const LISTEN_ADDR: &str = "0.0.0.0:4433";
 
 /// Environment variable that overrides the default UDP listen address `0.0.0.0:4433`
 /// (a socket address such as `127.0.0.1:4444`). Only used with [`USE_UDP_ENV`].
-pub const LISTEN_ADDR_ENV: &str = "TTK_LISTEN_ADDR";
+const LISTEN_ADDR_ENV: &str = "TTK_LISTEN_ADDR";
 
 /// Environment variable that, set to `1`, makes [`Listener::from_env`] pick a regular UDP
 /// socket instead of vsock (for running outside an enclave).
-pub const USE_UDP_ENV: &str = "TTK_USE_UDP";
+const USE_UDP_ENV: &str = "TTK_USE_UDP";
 
 /// Default vsock port the QUIC endpoint listens on, unless [`VSOCK_PORT_ENV`] overrides it.
 const VSOCK_PORT: u32 = 5000;
@@ -141,16 +141,16 @@ pub const MAX_REQUEST_BODY: usize = 1024 * 1024;
 pub const MAX_REQUEST_HEADERS: u64 = 16 * 1024;
 
 /// Time allowed for a request's body to arrive; slower requests get `408 Request Timeout`.
-pub const REQUEST_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const REQUEST_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Validity of the RA-TLS certificate, in days. A CA-issued replacement copies it, and the
 /// certificate can't be renewed in place: the node must be restarted (new key and Evidence) and
 /// authorized again before it expires, or clients stop connecting. The server logs a warning
 /// [`CERT_EXPIRY_WARNING`] before, and an error once it has expired.
-pub const CERT_VALIDITY_DAYS: i64 = 30;
+const CERT_VALIDITY_DAYS: i64 = 30;
 
 /// How long before the RA-TLS certificate expires the server starts warning about it.
-pub const CERT_EXPIRY_WARNING: std::time::Duration = std::time::Duration::from_secs(3 * 24 * 3600);
+const CERT_EXPIRY_WARNING: std::time::Duration = std::time::Duration::from_secs(3 * 24 * 3600);
 
 /// Most QUIC connections served at once; further connection attempts are refused.
 pub const MAX_CONNECTIONS: usize = 1024;
@@ -158,29 +158,29 @@ pub const MAX_CONNECTIONS: usize = 1024;
 /// Most QUIC connections served at once from one IP address. Over vsock every connection
 /// has a synthetic address of its own, so the parent's `vsock-proxy` applies its own per-IP
 /// limit instead.
-pub const MAX_CONNECTIONS_PER_SOURCE: usize = 64;
+const MAX_CONNECTIONS_PER_SOURCE: usize = 64;
 
 /// Time allowed for the QUIC handshake and HTTP/3 setup of a new connection; slower ones are
 /// dropped so that they don't hold one of the [`MAX_CONNECTIONS`].
-pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A connection with no request in progress for this long is closed, whether or not the peer
 /// keeps it alive at the QUIC level (PINGs). Also applies before the first request.
-pub const CONNECTION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CONNECTION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Longest a connection is served: after this it gets an HTTP/3 GOAWAY, its requests in
 /// progress get up to [`CONNECTION_DRAIN_TIMEOUT`] to finish, and it is closed.
-pub const CONNECTION_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const CONNECTION_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 /// Time the requests in progress on a connection get to finish once it is closed for its age.
-pub const CONNECTION_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CONNECTION_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Most concurrent requests (bidirectional streams) per connection.
-pub const MAX_STREAMS_PER_CONNECTION: u32 = 16;
+const MAX_STREAMS_PER_CONNECTION: u32 = 16;
 
 /// Flow-control window for all streams of one connection together, in bytes: bounds the request
 /// data a connection can have buffered at once.
-pub const CONNECTION_RECEIVE_WINDOW: u32 = 4 * 1024 * 1024;
+const CONNECTION_RECEIVE_WINDOW: u32 = 4 * 1024 * 1024;
 
 /// Most request body bytes held in memory across all requests of a server at once (a
 /// [`BodyBudget`]); a request whose body does not fit gets `503 Service Unavailable`.
@@ -188,7 +188,7 @@ pub const CONNECTION_RECEIVE_WINDOW: u32 = 4 * 1024 * 1024;
 /// Without it, [`MAX_CONNECTIONS`] x [`MAX_STREAMS_PER_CONNECTION`] x [`MAX_REQUEST_BODY`] is
 /// 16 GiB. With it, the worst case is about 1 GiB of bodies, plus up to 2 MiB per relay forward
 /// and the per-connection QUIC state: enclaves are given 4 GiB (`TTK_ENCLAVE_MEMORY`).
-pub const MAX_IN_FLIGHT_BODY_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_IN_FLIGHT_BODY_BYTES: usize = 1024 * 1024 * 1024;
 
 /// A budget of request body bytes shared by all requests of a server, so that concurrent
 /// requests cannot hold more than a fixed amount of memory in bodies.
@@ -360,7 +360,7 @@ impl Server {
     ///
     /// Must be called within a Tokio runtime.
     #[cfg(target_os = "linux")]
-    pub fn bind_vsock(port: u32) -> Result<Self, BoxError> {
+    fn bind_vsock(port: u32) -> Result<Self, BoxError> {
         let (quic_config, identity) = attest()?;
         let socket = super::vsock::VsockUdpSocket::bind(port)?;
         let runtime = quinn::default_runtime().ok_or("no async runtime found")?;
@@ -385,24 +385,14 @@ impl Server {
         }
     }
 
-    /// When the RA-TLS certificate expires (see [`CERT_VALIDITY_DAYS`]).
-    pub fn certificate_expiry(&self) -> std::time::SystemTime {
-        self.expires_at
-    }
-
     /// Name of the attestation provider in use (e.g. `"aws-nitro"`, `"mock"`).
-    pub fn provider_name(&self) -> &'static str {
+    fn provider_name(&self) -> &'static str {
         self.provider.name()
     }
 
     /// Returns the address the endpoint is bound to.
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.endpoint.local_addr()
-    }
-
-    /// Returns the Evidence this server presents.
-    pub fn evidence(&self) -> &Evidence {
-        &self.evidence
     }
 
     /// Returns the RA-TLS private key (PKCS#8 DER, ECDSA P-256), e.g. to open values sealed to
@@ -442,8 +432,8 @@ impl Server {
 
     /// Accepts QUIC connections and serves the base routes merged with `routes` over HTTP/3
     /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections (or
-    /// [`MAX_CONNECTIONS_PER_SOURCE`] from one IP address), new ones are refused; see
-    /// [`HANDSHAKE_TIMEOUT`], [`CONNECTION_IDLE_TIMEOUT`] and [`CONNECTION_MAX_AGE`] for how long
+    /// `MAX_CONNECTIONS_PER_SOURCE` from one IP address), new ones are refused; see
+    /// `HANDSHAKE_TIMEOUT`, `CONNECTION_IDLE_TIMEOUT` and `CONNECTION_MAX_AGE` for how long
     /// a connection holds its place.
     pub async fn serve_with(self, routes: Router) {
         let app = build_router(

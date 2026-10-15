@@ -51,7 +51,7 @@ pub struct FafRelay {
 }
 
 /// The message of a [`FafRequest`], sealed to its last hop with
-/// [`seal_body`](crate::seal::seal_body).
+/// [`seal_body_with_key`](crate::seal::seal_body_with_key).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FafBody {
     /// The message key, sealed to the last hop's RA-TLS key. Never null.

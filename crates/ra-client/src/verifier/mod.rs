@@ -32,8 +32,10 @@ use ttk_core::cmw::{ind, Cmw, CmwCollection, CmwRecord};
 pub use ttk_core::media_type;
 
 /// Trust anchors and accepted images the verifiers check evidence against (defined in
-/// [`crate::trust`] and [`ttk_core::image_trust`]).
-pub use crate::{ImageMeasurement, ImageTrustStore, TrustStore};
+/// `crate::trust` and [`ttk_core::image_trust`]).
+use crate::ImageTrustStore;
+pub use crate::TrustStore;
+pub use ttk_core::image_trust::ImageMeasurement;
 
 /// The trusted execution environment that produced a piece of evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,7 +67,7 @@ impl fmt::Display for TeeKind {
 impl TeeKind {
     /// Returns the TEE whose evidence `cmw` carries, judged by its type alone: the media type
     /// of a record, or the collection type of a collection.
-    pub fn from_cmw(cmw: &Cmw) -> Option<Self> {
+    pub(crate) fn from_cmw(cmw: &Cmw) -> Option<Self> {
         match cmw {
             Cmw::Record(record) => match record.media_type()? {
                 media_type::AWS_NITRO => Some(Self::AwsNitro),
@@ -98,7 +100,7 @@ pub struct VerifiedEvidence {
     pub debug: bool,
     /// `true` if the evidence is a mock Nitro document signed by the mock root CA (accepted only
     /// with [`Policy::allow_mock`]).
-    pub mock: bool,
+    mock: bool,
     /// The decoded Nitro attestation document, for Nitro evidence.
     pub nitro: Option<nitro::AttestationDocument>,
 }
@@ -220,7 +222,7 @@ fn appraise(
 
 /// `TDATTRIBUTES` bit `SEPT_VE_DISABLE`: the TD gets no #VE on EPT violations, which the host
 /// could otherwise inject at will to attack the guest kernel.
-pub const TD_ATTRIBUTE_SEPT_VE_DISABLE: u64 = 1 << 28;
+const TD_ATTRIBUTE_SEPT_VE_DISABLE: u64 = 1 << 28;
 
 /// Requires a non-debug TDX `evidence` to have [`TD_ATTRIBUTE_SEPT_VE_DISABLE`] set; other TEEs
 /// pass.

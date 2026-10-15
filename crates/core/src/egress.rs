@@ -21,7 +21,7 @@ pub enum HopAddressClass {
     Private,
     /// An address never valid as a next hop: unspecified, "this network" (`0/8`), link-local
     /// (`169.254/16`, including cloud metadata and DNS endpoints, and `fe80::/10`), the EC2
-    /// IPv6 service endpoints (`fd00:ec2::/64`, including [`IMDS_V6`]), multicast, broadcast,
+    /// IPv6 service endpoints (`fd00:ec2::/64`, including `fd00:ec2::254`), multicast, broadcast,
     /// IETF protocol assignments (`192.0.0/24`), the deprecated 6to4 relay anycast
     /// (`192.88.99/24`) and IPv6 site-local (`fec0::/10`) ranges, documentation (`192.0.2/24`, `198.51.100/24`,
     /// `203.0.113/24`, `2001:db8::/32`), benchmarking (`198.18/15`), reserved (`240/4`),
@@ -51,12 +51,12 @@ pub fn is_permitted_hop_port(port: u16) -> bool {
 }
 
 /// The EC2 instance metadata service (IMDS) address over IPv4.
-pub const IMDS_V4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
+const IMDS_V4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
 
 /// The EC2 instance metadata service (IMDS) address over IPv6 (Nitro instances).
-pub const IMDS_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
+const IMDS_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
 
-/// Whether `ip` is the EC2 instance metadata service ([`IMDS_V4`] or [`IMDS_V6`]), which only
+/// Whether `ip` is the EC2 instance metadata service (`169.254.169.254` or `fd00:ec2::254`), which only
 /// a parent operator may open to the enclave (`vsock-proxy-tcp --allow-imds`), never a peer.
 /// IPv4-mapped IPv6 addresses are checked as their IPv4 address.
 pub fn is_instance_metadata_address(ip: IpAddr) -> bool {

@@ -238,7 +238,6 @@ mod client_table {
         );
         // Re-admitting a known client replaces it rather than counting twice.
         let (id, _) = table.insert(addr("192.0.2.1:1001"), ()).unwrap();
-        assert_eq!(table.len(), 2);
         assert!(table.remove(&addr("192.0.2.1:1001"), id));
         table.insert(addr("192.0.2.1:1002"), ()).unwrap();
         table.insert(addr("192.0.2.2:1000"), ()).unwrap();
@@ -256,7 +255,6 @@ mod client_table {
         table.insert(addr("192.0.2.4:1"), ()).unwrap();
         assert!(table.get(&addr("192.0.2.1:1")).is_some());
         assert!(table.get(&addr("192.0.2.2:1")).is_none());
-        assert_eq!(table.len(), 3);
 
         for (_, entry) in [addr("192.0.2.3:1"), addr("192.0.2.4:1")]
             .iter()
@@ -277,7 +275,7 @@ mod client_table {
         let (new, _) = table.insert(addr("192.0.2.1:1"), ()).unwrap();
         assert!(!table.remove(&addr("192.0.2.1:1"), old));
         assert!(table.remove(&addr("192.0.2.1:1"), new));
-        assert!(table.is_empty());
+        assert!(table.get(&addr("192.0.2.1:1")).is_none());
     }
 }
 

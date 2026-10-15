@@ -20,7 +20,7 @@ pub const FAF_MAX_CLOCK_SKEW: u64 = 30;
 
 /// Most message ids remembered at once. When full of unexpired ids, new bodies are refused
 /// ([`ReplayError::Busy`]) rather than letting replays through or growing without bound.
-pub const MAX_REMEMBERED_MESSAGES: usize = 262_144;
+const MAX_REMEMBERED_MESSAGES: usize = 262_144;
 
 /// Why a body was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +29,7 @@ pub enum ReplayError {
     Stale,
     /// Its message id was already accepted.
     Replayed,
-    /// [`MAX_REMEMBERED_MESSAGES`] unexpired ids are already remembered.
+    /// `MAX_REMEMBERED_MESSAGES` unexpired ids are already remembered.
     Busy,
 }
 
@@ -54,7 +54,7 @@ pub struct ReplayGuard {
     capacity: usize,
 }
 
-/// An empty guard remembering at most [`MAX_REMEMBERED_MESSAGES`] ids.
+/// An empty guard remembering at most `MAX_REMEMBERED_MESSAGES` ids.
 impl Default for ReplayGuard {
     /// Same as [`ReplayGuard::new`].
     fn default() -> Self {
@@ -64,7 +64,7 @@ impl Default for ReplayGuard {
 
 /// Acceptance of bodies.
 impl ReplayGuard {
-    /// An empty guard remembering at most [`MAX_REMEMBERED_MESSAGES`] ids.
+    /// An empty guard remembering at most `MAX_REMEMBERED_MESSAGES` ids.
     pub fn new() -> Self {
         Self::with_capacity(MAX_REMEMBERED_MESSAGES)
     }
@@ -102,15 +102,5 @@ impl ReplayGuard {
         }
         seen.insert(message_id, sent_at.saturating_add(FAF_FRESHNESS_WINDOW));
         Ok(())
-    }
-
-    /// Number of ids currently remembered (expired ones included until the next cleanup).
-    pub fn len(&self) -> usize {
-        self.seen.lock().unwrap_or_else(|e| e.into_inner()).len()
-    }
-
-    /// Whether no id is remembered.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }

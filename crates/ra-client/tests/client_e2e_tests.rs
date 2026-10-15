@@ -1,8 +1,11 @@
 //! End-to-end tests: the `ttk-ra-server` server on a free local port (mock attestation), queried by the
 //! `TtkClient` library.
 
+#[path = "../../ra-server/tests/support/nitro_doc.rs"]
+mod nitro_doc;
 #[path = "../../ra-server/tests/support/test_ca.rs"]
 mod test_ca;
+use nitro_doc::parse_attestation_document;
 use test_ca::SignForTests;
 
 use base64::Engine as _;
@@ -10,7 +13,6 @@ use std::net::SocketAddr;
 use ttk_ra_client::verifier::TeeKind;
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient, MAX_RESPONSE_BODY};
 use ttk_ra_server::attestation::media_type;
-use ttk_ra_server::attestation::nitro_doc::parse_attestation_document;
 use ttk_ra_server::server::{Server, MAX_REQUEST_HEADERS};
 use ttk_ra_server::Cmw;
 
@@ -136,17 +138,17 @@ async fn verified_evidence_is_available_after_connecting() {
 
     let evidence = verifier.verified_evidence().expect("evidence is recorded");
     assert_eq!(evidence.tee, TeeKind::AwsNitro);
-    assert_eq!(
-        verifier.verified_attestation().unwrap().module_id,
-        "aws-nitro-enclaves-mock"
-    );
+    assert_eq!(evidence.nitro.unwrap().module_id, "aws-nitro-enclaves-mock");
     client.close().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn strict_client_rejects_the_mock_server() {
     let addr = start_server();
-    let err = TtkClient::connect(addr, "localhost").await.err().unwrap();
+    let err = TtkClient::connect_with_verifier(addr, "localhost", EnclaveCertVerifier::new())
+        .await
+        .err()
+        .unwrap();
     assert!(err.to_string().contains("MOCK"), "{err}");
 }
 

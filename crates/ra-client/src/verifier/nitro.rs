@@ -21,17 +21,15 @@ const MAX_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestationDocument {
     pub module_id: String,
-    pub timestamp: u64,
-    pub digest: String,
-    pub pcrs: BTreeMap<usize, Vec<u8>>,
-    pub certificate: Vec<u8>,
+    timestamp: u64,
+    digest: String,
+    pcrs: BTreeMap<usize, Vec<u8>>,
+    certificate: Vec<u8>,
     pub cabundle: Vec<Vec<u8>>,
     #[serde(default)]
-    pub public_key: Option<Vec<u8>>,
+    user_data: Option<Vec<u8>>,
     #[serde(default)]
-    pub user_data: Option<Vec<u8>>,
-    #[serde(default)]
-    pub nonce: Option<Vec<u8>>,
+    pub(super) nonce: Option<Vec<u8>>,
 }
 
 /// Structural checks on a decoded attestation document.

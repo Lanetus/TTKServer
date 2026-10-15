@@ -8,7 +8,7 @@
 //!   `POST /faf` request format (re-exported from `ttk_core::faf`), relay address parsing and
 //!   connecting to the nodes on a route.
 //! - [`verifier`]: appraisal of TEE Evidence against vendor roots and policy.
-//! - [`trust`]: the vendor trust anchors ([`TrustStore`]) and the root servers' pinned images.
+//! - `trust`: the vendor trust anchors ([`TrustStore`]) and the root servers' pinned images.
 //! - [`images`]: the accepted enclave images, fetched from the root servers
 //!   ([`RootImageTrustStore`]).
 //! - [`seal`]: onion encryption of `POST /faf` requests to the nodes' RA-TLS keys (RFC 9180 HPKE),
@@ -21,7 +21,7 @@
 
 mod client;
 pub mod images;
-pub mod trust;
+mod trust;
 pub mod verifier;
 
 use crate::seal::SALT_DIGITS;
@@ -32,16 +32,14 @@ pub use images::RootImageTrustStore;
 pub use trust::TrustStore;
 pub use ttk_core::egress::{classify_hop_address, is_permitted_hop_port, HopAddressClass};
 pub use ttk_core::faf::{FafBody, FafRelay, FafRequest, DEFAULT_RELAY_PORT, FAF_PATH};
-pub use ttk_core::image_trust::{
-    parse_image_allowlist, ImageMeasurement, ImageTrustStore, RootSignerTrustStore,
-};
+pub use ttk_core::image_trust::{parse_image_allowlist, ImageTrustStore, RootSignerTrustStore};
 pub use ttk_core::seal;
 
 /// Boxed error type that can cross task boundaries.
 type SendError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Time allowed for the RA-TLS handshake with each resolved address of a node.
-pub const RELAY_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const RELAY_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Strips the salt from a relay address `"<server> <salt>"` and returns `<server>`. The salt
 /// must be [`SALT_DIGITS`] decimal digits; with `salt_required` false, `"<server>"` alone is
@@ -93,7 +91,7 @@ pub fn parse_relay_server(relay_server: &str) -> Result<(String, u16), String> {
 
 /// Resolves `host` (see [`resolve_node`]) and connects over `transport` to the first of its
 /// addresses that completes an RA-TLS handshake (verified by `verifier`) within
-/// [`RELAY_CONNECT_TIMEOUT`], e.g. falling back from `::1` to `127.0.0.1` for `localhost`.
+/// `RELAY_CONNECT_TIMEOUT` (3 s), e.g. falling back from `::1` to `127.0.0.1` for `localhost`.
 pub async fn connect_to_node(
     transport: ClientTransport,
     host: &str,

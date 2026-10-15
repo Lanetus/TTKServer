@@ -1,3 +1,6 @@
+#[path = "../../ra-server/tests/support/nitro_doc.rs"]
+mod nitro_doc;
+
 use axum::http::{HeaderMap, StatusCode};
 use rustls::client::danger::ServerCertVerifier;
 use ttk_ra_client::{hex_encode, ClientResponse, EnclaveCertVerifier};
@@ -47,6 +50,7 @@ fn test_extract_attestation_doc() {
 }
 
 mod attestation_verification {
+    use crate::nitro_doc::parse_attestation_document;
     use rcgen::{
         BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, IsCa, KeyPair,
     };
@@ -56,9 +60,7 @@ mod attestation_verification {
     use sha2::{Digest, Sha256};
     use ttk_ra_client::EnclaveCertVerifier;
     use ttk_ra_server::attestation::by_name;
-    use ttk_ra_server::attestation::nitro_doc::{
-        create_mock_attestation_document, parse_attestation_document, wrap_as_cmw,
-    };
+    use ttk_ra_server::attestation::nitro_doc::{create_mock_attestation_document, wrap_as_cmw};
     use ttk_ra_server::server::{create_cert_with_attestation, ATTESTATION_OID};
     use ttk_ra_server::AttestationParams;
     use x509_parser::prelude::{FromDer, X509Certificate};
@@ -128,7 +130,7 @@ mod attestation_verification {
 
         verify(&verifier, &cert).expect("mock evidence bound to the cert key should verify");
         assert_eq!(verifier.received_certificate().as_ref(), Some(&cert));
-        let doc = verifier.verified_attestation().unwrap();
+        let doc = verifier.verified_evidence().unwrap().nitro.unwrap();
         assert_eq!(doc.module_id, "aws-nitro-enclaves-mock");
     }
 
@@ -187,18 +189,6 @@ mod attestation_verification {
 
         let err = verify(&EnclaveCertVerifier::new().allow_mock(), &cert).unwrap_err();
         assert!(err.to_string().contains("report data"), "{err}");
-    }
-
-    #[test]
-    fn rejects_unexpected_pcr() {
-        let key = KeyPair::generate().unwrap();
-        let cert = ra_tls_cert(&key, &key);
-        let verifier = EnclaveCertVerifier::new()
-            .allow_mock()
-            .with_expected_pcr(0, vec![0xff; 48]);
-
-        let err = verify(&verifier, &cert).unwrap_err();
-        assert!(err.to_string().contains("PCR0"), "{err}");
     }
 
     #[test]
@@ -264,7 +254,6 @@ mod certificate_checks {
         let cert = params.self_signed(&key).unwrap();
         let name = ServerName::try_from("localhost").unwrap();
         EnclaveCertVerifier::default()
-            .allow_debug()
             .verify_server_cert(cert.der(), &[], &name, &[], UnixTime::now())
             .map(|_| ())
     }

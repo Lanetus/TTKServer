@@ -11,7 +11,7 @@
 //!
 //! TDX `TDATTRIBUTES` are reported as the `tdattributes` measurement (8 bytes, little endian);
 //! the verifier's policy requires `SEPT_VE_DISABLE` for non-debug TDs (see
-//! [`super::TD_ATTRIBUTE_SEPT_VE_DISABLE`]).
+//! `TD_ATTRIBUTE_SEPT_VE_DISABLE`).
 //!
 //! Not evaluated: TCB status and QE identity against Intel PCS collateral (TCB Info, QE
 //! Identity, PCK CRLs). A genuine but out-of-date or revoked platform is therefore accepted.

@@ -30,10 +30,6 @@ precedence. RUST_LOG=info enables logs.
 /// Default vsock port the TCP proxy listens on, matching `S3Store`'s default in `ttk-storage`.
 pub const DEFAULT_TCP_VSOCK_PORT: u32 = 8001;
 
-/// Conventional vsock port of the `vsock-proxy-tcp` instance forwarding to the instance metadata
-/// service (`--allow-imds`), matching `TTK_IMDS_VSOCK_PORT` of the `s3-server` image.
-pub const IMDS_TCP_VSOCK_PORT: u32 = 8002;
-
 /// What a `vsock-proxy-tcp` invocation accepts and where it forwards.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TcpProxyConfig {

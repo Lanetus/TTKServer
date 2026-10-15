@@ -26,7 +26,6 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
 use log::{debug, warn};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use ttk_core::faf::{FafRequest, FAF_PATH};
 use ttk_core::replay::{ReplayError, ReplayGuard};
@@ -51,25 +50,6 @@ impl<E: Evaluator> Terminal<E> {
     /// Wraps `server`, answering `/faf` messages with `evaluator`.
     pub fn new(server: Server, evaluator: E) -> Self {
         Self { server, evaluator }
-    }
-
-    /// Attests, builds the RA-TLS identity and binds a terminal node answering with `evaluator`
-    /// to UDP `addr`.
-    ///
-    /// Must be called within a Tokio runtime. Binding port 0 picks a free port; see
-    /// [`local_addr`](Self::local_addr).
-    pub fn bind(addr: SocketAddr, evaluator: E) -> Result<Self, BoxError> {
-        Ok(Self::new(Server::bind(addr)?, evaluator))
-    }
-
-    /// Returns the address the endpoint is bound to.
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.server.local_addr()
-    }
-
-    /// Returns the wrapped attested server (e.g. its presented certificate chain).
-    pub fn server(&self) -> &Server {
-        &self.server
     }
 
     /// Serves the base routes and `POST /faf` over HTTP/3 until the endpoint closes.

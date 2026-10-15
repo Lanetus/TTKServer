@@ -4,8 +4,9 @@
 //! random nonce to `POST /evidence` and appraises the fresh Evidence, then signs a certificate
 //! for the node's RA-TLS key as the CA and installs it with `POST /certificate`.
 //!
-//! The CA is read from `--ca-cert` / `--ca-key` (PEM); if neither file exists a new root CA is
-//! created and written there. Nodes trust only the built-in TTK root CA
+//! The CA is read from `--ca-cert` / `--ca-key` (PEM, both required). The issued certificate's
+//! subject common name is `--server-name`, or the node's IP address if it is not given. Nodes
+//! trust only the built-in TTK root CA
 //! (`ttk_core::TTK_ROOT_CA_PEM`), so a running node accepts the certificate only if the CA is
 //! that root (or an intermediate it issued). The enclave images never include this binary.
 
@@ -13,29 +14,29 @@ use log::{error, info, warn};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use ttk_ra_server::server::BoxError;
-use ttk_root::auth::{authorize, AuthorizeOptions, CertificateAuthority, DEFAULT_CA_NAME};
+use ttk_root::auth::{authorize, AuthorizeOptions, CertificateAuthority};
 
 /// Usage text of this binary.
 const CERTIFY_SERVER_USAGE: &str = "\
 Usage: certify-server [OPTIONS]
 
 Options:
-  -a, --addr <ADDR>         Node socket address (default: 127.0.0.1:4433)
-  -s, --server-name <NAME>  SNI server name (default: localhost)
-      --ca-cert <FILE>      CA certificate, PEM (default: auth-test-ca.pem)
-      --ca-key <FILE>       CA private key, PEM PKCS#8 (default: auth-test-ca.key)
+  -a, --addr <ADDR>         Node socket address (required)
+  -s, --server-name <NAME>  SNI server name and the certificate's common name
+                            (default: the node's IP address)
+      --ca-cert <FILE>      CA certificate, PEM (required)
+      --ca-key <FILE>       CA private key, PEM PKCS#8 (required)
   -o, --out <FILE>          Also write the installed chain (PEM) to FILE
   -h, --help                Print help information
 
-If neither CA file exists, a new root CA is created and written to them.
 TTK_ALLOW_MOCK_ATTESTATION=1 accepts mock attestation (local development).
 
 Example:
   TTK_ATTESTATION=mock TTK_USE_UDP=1 cargo run --bin root
   TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --bin certify-server -- \
-    --ca-cert TTK_Root_CA.pem --ca-key TTK_Root_CA.key
+    --addr 127.0.0.1:4433 --ca-cert TTK_Root_CA.pem --ca-key TTK_Root_CA.key
 
-Nodes trust only the built-in TTK root CA: a newly created CA is refused by them.
+Nodes trust only the built-in TTK root CA (or an intermediate it issued).
 ";
 
 /// What a `certify-server` invocation should do.
@@ -43,8 +44,8 @@ Nodes trust only the built-in TTK root CA: a newly created CA is refused by them
 struct CertifyServerArgs {
     /// Node socket address.
     addr: SocketAddr,
-    /// SNI server name.
-    server_name: String,
+    /// SNI server name and the issued certificate's common name; `None` = the node's IP address.
+    server_name: Option<String>,
     /// CA certificate file.
     ca_cert: PathBuf,
     /// CA private key file.
@@ -56,13 +57,11 @@ struct CertifyServerArgs {
 /// Parses `certify-server` arguments (without the program name). Returns `Ok(None)` if help was
 /// requested.
 fn parse_certify_server_args(args: &[String]) -> Result<Option<CertifyServerArgs>, String> {
-    let mut parsed = CertifyServerArgs {
-        addr: "127.0.0.1:4433".parse().expect("valid address"),
-        server_name: "localhost".to_string(),
-        ca_cert: PathBuf::from("auth-test-ca.pem"),
-        ca_key: PathBuf::from("auth-test-ca.key"),
-        out: None,
-    };
+    let mut addr: Option<SocketAddr> = None;
+    let mut server_name = None;
+    let mut ca_cert = None;
+    let mut ca_key = None;
+    let mut out = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
@@ -75,60 +74,37 @@ fn parse_certify_server_args(args: &[String]) -> Result<Option<CertifyServerArgs
         };
         match arg.as_str() {
             "--addr" | "-a" => {
-                let addr = value()?;
-                parsed.addr = addr
-                    .parse()
-                    .map_err(|e| format!("invalid address {addr}: {e}"))?;
+                let value = value()?;
+                addr = Some(
+                    value
+                        .parse()
+                        .map_err(|e| format!("invalid address {value}: {e}"))?,
+                );
             }
-            "--server-name" | "-s" => parsed.server_name = value()?,
-            "--ca-cert" => parsed.ca_cert = value()?.into(),
-            "--ca-key" => parsed.ca_key = value()?.into(),
-            "--out" | "-o" => parsed.out = Some(value()?.into()),
+            "--server-name" | "-s" => server_name = Some(value()?),
+            "--ca-cert" => ca_cert = Some(value()?.into()),
+            "--ca-key" => ca_key = Some(value()?.into()),
+            "--out" | "-o" => out = Some(value()?.into()),
             _ => return Err(format!("unknown argument {arg}")),
         }
     }
-    Ok(Some(parsed))
+    Ok(Some(CertifyServerArgs {
+        addr: addr.ok_or("--addr is required")?,
+        server_name,
+        ca_cert: ca_cert.ok_or("--ca-cert is required")?,
+        ca_key: ca_key.ok_or("--ca-key is required")?,
+        out,
+    }))
 }
 
-/// Loads the CA from `cert` and `key`, or creates and writes a new one if neither exists.
-fn load_or_create_ca(cert: &Path, key: &Path) -> Result<CertificateAuthority, BoxError> {
-    match (cert.exists(), key.exists()) {
-        (true, true) => {
-            let ca = CertificateAuthority::from_pem(
-                &std::fs::read_to_string(cert)?,
-                &std::fs::read_to_string(key)?,
-            )?;
-            info!("Loaded CA from {}", cert.display());
-            Ok(ca)
-        }
-        (false, false) => {
-            let ca = CertificateAuthority::generate(DEFAULT_CA_NAME)?;
-            std::fs::write(cert, ca.cert_pem())?;
-            write_private(key, &ca.key_pem())?;
-            info!(
-                "Created a new CA: certificate {}, key {} (nodes trust only the built-in TTK \
-                 root CA, so they will refuse it)",
-                cert.display(),
-                key.display()
-            );
-            Ok(ca)
-        }
-        _ => Err(format!(
-            "only one of {} and {} exists; give both or neither",
-            cert.display(),
-            key.display()
-        )
-        .into()),
-    }
-}
-
-/// Writes `contents` to `path`, readable by the owner only where supported.
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    std::io::Write::write_all(&mut options.open(path)?, contents.as_bytes())
+/// Loads the CA from its PEM certificate `cert` and PEM (PKCS#8) key `key`.
+fn load_ca(cert: &Path, key: &Path) -> Result<CertificateAuthority, BoxError> {
+    let read = |path: &Path| {
+        std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))
+    };
+    let ca = CertificateAuthority::from_pem(&read(cert)?, &read(key)?)?;
+    info!("Loaded CA from {}", cert.display());
+    Ok(ca)
 }
 
 /// Entry point for the `certify-server` binary.
@@ -149,7 +125,7 @@ async fn main() {
         }
     };
 
-    let ca = match load_or_create_ca(&args.ca_cert, &args.ca_key) {
+    let ca = match load_ca(&args.ca_cert, &args.ca_key) {
         Ok(ca) => ca,
         Err(e) => {
             error!("CA: {e}");
@@ -163,8 +139,11 @@ async fn main() {
         options.allow_mock = true;
     }
 
-    info!("Authorizing node {} (SNI: {})", args.addr, args.server_name);
-    match authorize(args.addr, &args.server_name, &ca, &options).await {
+    let server_name = args
+        .server_name
+        .unwrap_or_else(|| args.addr.ip().to_string());
+    info!("Authorizing node {} (SNI and CN: {server_name})", args.addr);
+    match authorize(args.addr, &server_name, &ca, &options).await {
         Ok(chain) => {
             let pem = ttk_root::auth::pem(&chain);
             info!("Installed CA-issued certificate:\n{pem}");

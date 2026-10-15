@@ -14,14 +14,14 @@
 //!
 //! When forwarding a [`FafRequest`], the relay is itself a RATS (RFC 9334) Relying Party: it
 //! only sends the request to a next hop whose RA-TLS attestation verifies. Verified connections
-//! are kept open and reused (see [`MAX_POOLED_RELAYS`]), so the RA-TLS handshake and attestation
+//! are kept open and reused (up to `MAX_POOLED_RELAYS`, 64), so the RA-TLS handshake and attestation
 //! check happen once per next hop rather than once per request.
 //!
 //! Because the next hop comes from the request, a relay also limits where it may send traffic:
 //! never to link-local, multicast, broadcast or unspecified addresses, and to loopback or private
 //! addresses only with [`Relay::allow_private_next_hops`] (see
 //! [`classify_hop_address`]). It caps the hops left in a
-//! request at [`MAX_RELAYS`] and the requests it forwards at once at [`MAX_CONCURRENT_FORWARDS`],
+//! request at [`MAX_RELAYS`] and the requests it forwards at once at `MAX_CONCURRENT_FORWARDS` (256),
 //! and answers every forwarding failure with the same `502 relay failed`, so a client can't use
 //! it to probe the network.
 
@@ -50,10 +50,10 @@ use ttk_ra_server::server::{env_u32, BoxError, Listener, Server, PARENT_CID};
 type SendError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Time allowed for forwarding a `/faf` request to its next hop, RA-TLS handshake included.
-pub const RELAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const RELAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Environment variable that makes [`run`] accept mock attestation from next hops.
-pub const ALLOW_MOCK_RELAY_ENV: &str = "TTK_ALLOW_MOCK_ATTESTATION";
+const ALLOW_MOCK_RELAY_ENV: &str = "TTK_ALLOW_MOCK_ATTESTATION";
 
 /// Default vsock port of the parent's `vsock-proxy` for outbound connections, unless
 /// [`OUTBOUND_VSOCK_PORT_ENV`] overrides it.
@@ -61,14 +61,14 @@ const OUTBOUND_VSOCK_PORT: u32 = 5001;
 
 /// Environment variable that makes [`run`] accept loopback and private next-hop addresses (see
 /// [`Relay::allow_private_next_hops`]).
-pub const ALLOW_PRIVATE_NEXT_HOPS_ENV: &str = "TTK_ALLOW_PRIVATE_NEXT_HOPS";
+const ALLOW_PRIVATE_NEXT_HOPS_ENV: &str = "TTK_ALLOW_PRIVATE_NEXT_HOPS";
 
 /// Most relay entries a `/faf` request may carry; longer routes are answered `400`.
 pub const MAX_RELAYS: usize = 8;
 
 /// Most `/faf` requests a relay forwards at once; beyond it, requests are answered
 /// `503 Service Unavailable`.
-pub const MAX_CONCURRENT_FORWARDS: usize = 256;
+const MAX_CONCURRENT_FORWARDS: usize = 256;
 
 /// Body of every `502` answer: forwarding failures are not told apart, so that a client can't
 /// learn from them whether an address resolves, listens or attests.
@@ -80,30 +80,30 @@ const INVALID_RELAY: &str = "invalid relay";
 
 /// Earliest a `502` is answered after the request arrived (plus up to [`FAILURE_JITTER`]), so
 /// that a refused address can't be told from an unreachable one by timing.
-pub const FAILURE_MIN_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+const FAILURE_MIN_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Upper bound of the random delay added to [`FAILURE_MIN_DELAY`].
-pub const FAILURE_JITTER: std::time::Duration = std::time::Duration::from_millis(500);
+const FAILURE_JITTER: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Environment variable that overrides the default outbound vsock port `5001`.
-pub const OUTBOUND_VSOCK_PORT_ENV: &str = "TTK_OUTBOUND_VSOCK_PORT";
+const OUTBOUND_VSOCK_PORT_ENV: &str = "TTK_OUTBOUND_VSOCK_PORT";
 
 /// Environment variable that overrides the parent's CID (default [`PARENT_CID`], `3`) for
 /// outbound connections.
-pub const PARENT_CID_ENV: &str = "TTK_PARENT_CID";
+const PARENT_CID_ENV: &str = "TTK_PARENT_CID";
 
 /// Builds the verifier used to attest a next hop. Called once per new connection, so each
 /// connection gets its own verifier state.
-pub type RelayVerifierFactory = Arc<dyn Fn() -> EnclaveCertVerifier + Send + Sync>;
+type RelayVerifierFactory = Arc<dyn Fn() -> EnclaveCertVerifier + Send + Sync>;
 
 /// Most next-hop connections kept open for reuse at once. Next hops beyond this limit are still
 /// served, over a one-off connection closed after the request.
-pub const MAX_POOLED_RELAYS: usize = 64;
+const MAX_POOLED_RELAYS: usize = 64;
 
 /// Longest a pooled next-hop connection is reused. A new connection re-attests the hop against
 /// the current accepted images, so a hop whose image was removed from the root servers'
 /// allowlist stops being used within this time.
-pub const POOLED_CONNECTION_MAX_AGE: std::time::Duration = ROOT_IMAGES_REFRESH_INTERVAL;
+const POOLED_CONNECTION_MAX_AGE: std::time::Duration = ROOT_IMAGES_REFRESH_INTERVAL;
 
 /// Runs the relay node: attests, builds the RA-TLS identity, then serves HTTP/3 until the
 /// endpoint closes.
@@ -161,18 +161,10 @@ impl Relay {
         }
     }
 
-    /// Attests, builds the RA-TLS identity and binds a relay node to UDP `addr`.
-    ///
-    /// Must be called within a Tokio runtime. Binding port 0 picks a free port; see
-    /// [`local_addr`](Self::local_addr).
-    pub fn bind(addr: SocketAddr) -> Result<Self, BoxError> {
-        Ok(Self::new(Server::bind(addr)?))
-    }
-
     /// Sets the policy for attesting next hops.
     ///
     /// Defaults to [`EnclaveCertVerifier::new`], which accepts only genuine TEE evidence.
-    pub fn with_verifier(
+    fn with_verifier(
         mut self,
         verifier: impl Fn() -> EnclaveCertVerifier + Send + Sync + 'static,
     ) -> Self {
@@ -196,19 +188,9 @@ impl Relay {
 
     /// Sets how next hops are reached. Defaults to [`ClientTransport::Udp`]; from inside an
     /// enclave, use [`ClientTransport::Vsock`] to go through the parent's `vsock-proxy`.
-    pub fn with_transport(mut self, transport: ClientTransport) -> Self {
+    fn with_transport(mut self, transport: ClientTransport) -> Self {
         self.transport = transport;
         self
-    }
-
-    /// Returns the address the endpoint is bound to.
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.server.local_addr()
-    }
-
-    /// Returns the wrapped attested server (e.g. its presented certificate chain).
-    pub fn server(&self) -> &Server {
-        &self.server
     }
 
     /// Serves the base routes and `POST /faf` over HTTP/3 until the endpoint closes.

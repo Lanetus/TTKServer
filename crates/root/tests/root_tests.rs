@@ -14,18 +14,24 @@ use rustls::DigitallySignedStruct;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use ttk_core::image_trust::ImageTrustStore;
+use ttk_core::image_trust::{ImageTrustStore, RootAttestation, ROOT_ATTESTATION_PATH};
 use ttk_ra_server::server::Server;
-use ttk_root::{FileImageTrustStore, Root, RootAttestation, ROOT_ATTESTATION_PATH};
+use ttk_root::{FileImageTrustStore, Root};
 
 const IMAGE_A: &str = "7807833a90cc86f5a853a1f49043a568f3428f6b03eb983aed99899fbfa77d6b86b34fa934e318dd3741debca32c0aba";
 const IMAGE_B: &str = "1de927770d7a1c250ba364440947226ed9af7250ae25fdad391c3cd87d0044b1e4a4e96810bc8f2dfc9160fcf0742c8d";
 
-/// Starts `root`, unlocked with a test CA certificate, on a free local port and returns its
-/// address.
-fn start(root: Root) -> SocketAddr {
-    root.server().sign_for_tests().unwrap();
-    let addr = root.local_addr().unwrap();
+/// A server on a free local port, unlocked with a test CA certificate.
+fn signed_server() -> Server {
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    server.sign_for_tests().unwrap();
+    server
+}
+
+/// Starts a root node over `server` serving `images` and returns its address.
+fn start(server: Server, images: &dyn ImageTrustStore) -> SocketAddr {
+    let addr = server.local_addr().unwrap();
+    let root = Root::with_image_trust_store(server, images);
     tokio::spawn(async move { root.serve().await.unwrap() });
     addr
 }
@@ -143,7 +149,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn root_attestation_serves_the_builtin_accepted_images() {
-    let addr = start(Root::bind("127.0.0.1:0".parse().unwrap()).unwrap());
+    let addr = start(signed_server(), &FileImageTrustStore::builtin());
 
     let expected: Vec<String> = FileImageTrustStore::builtin()
         .image_allowlist()
@@ -157,8 +163,7 @@ async fn root_attestation_serves_the_builtin_accepted_images() {
 #[tokio::test(flavor = "multi_thread")]
 async fn root_attestation_serves_a_custom_image_trust_store() {
     let images = FileImageTrustStore::parse(&format!("{IMAGE_A}\n{IMAGE_B}")).unwrap();
-    let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let addr = start(Root::with_image_trust_store(server, &images));
+    let addr = start(signed_server(), &images);
 
     let body = fetch(addr).await;
     assert_eq!(body.measurements, vec![IMAGE_A, IMAGE_B]);
@@ -166,7 +171,7 @@ async fn root_attestation_serves_a_custom_image_trust_store() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn base_routes_are_still_served() {
-    let addr = start(Root::bind("127.0.0.1:0".parse().unwrap()).unwrap());
+    let addr = start(signed_server(), &FileImageTrustStore::builtin());
     assert_eq!(get(addr, "/evidence.cmw").await.status, 200);
     assert_eq!(get(addr, "/").await.status, 200);
 }

@@ -11,8 +11,8 @@
 //!   is [`SALT_DIGITS`] random decimal digits.
 //! - **The body** is for the last node only: `body.message` is encrypted with a fresh
 //!   AES-256-GCM message key, and `body.key` is that key sealed to the last node. The encrypted
-//!   plaintext is a [`BODY_HEADER_LEN`]-byte header (send time as big-endian Unix seconds, then a
-//!   random [`MESSAGE_ID_LEN`]-byte message id) followed by the message, and the associated data
+//!   plaintext is a 24-byte header (send time as big-endian Unix seconds, then a
+//!   random 16-byte message id) followed by the message, and the associated data
 //!   binds it to `body.key`; the last node rejects stale and repeated bodies (see
 //!   [`crate::replay`]), so a hop that saw a request can't have it evaluated again.
 //! - **The response** of the last node is encrypted with the same message key (see
@@ -49,9 +49,9 @@ const KEY_INFO: &[u8] = b"ttk-faf/v1 message key";
 const MESSAGE_AAD_PREFIX: &[u8] = b"ttk-faf/v2 message ";
 
 /// Length of the random id of each sealed body.
-pub const MESSAGE_ID_LEN: usize = 16;
+pub(crate) const MESSAGE_ID_LEN: usize = 16;
 /// Length of the header in front of a body's message: 8-byte send time, then the message id.
-pub const BODY_HEADER_LEN: usize = 8 + MESSAGE_ID_LEN;
+const BODY_HEADER_LEN: usize = 8 + MESSAGE_ID_LEN;
 
 /// AES-GCM associated data of a sealed response, separating it from the request message sealed
 /// under the same message key.
@@ -122,15 +122,10 @@ impl NodeSecretKey {
             .map(Self)
             .map_err(|_| SealError::new("invalid P-256 private key"))
     }
-
-    /// Returns the matching public key.
-    pub fn public_key(&self) -> NodePublicKey {
-        NodePublicKey(<Kem as hpke::Kem>::sk_to_pk(&self.0))
-    }
 }
 
 /// The AES-256-GCM message key of a `/faf` body: chosen by the client in [`seal_body_with_key`],
-/// recovered by the last node in [`open_body_with_key`], and used by both for the response.
+/// recovered by the last node in [`open_body_envelope`], and used by both for the response.
 #[derive(Clone)]
 pub struct MessageKey([u8; MESSAGE_KEY_LEN]);
 
@@ -171,13 +166,8 @@ pub fn open_address(node: &NodeSecretKey, sealed: &str) -> Result<String, SealEr
     String::from_utf8(address).map_err(|_| SealError::new("relay address is not UTF-8"))
 }
 
-/// Encrypts `message` for `last`, the last node of the route, under a fresh message key.
-pub fn seal_body(last: &NodePublicKey, message: &[u8]) -> Result<FafBody, SealError> {
-    seal_body_with_key(last, message).map(|(body, _)| body)
-}
-
-/// Like [`seal_body`], but also returns the message key, to open the last node's response
-/// with [`open_response`].
+/// Encrypts `message` for `last`, the last node of the route, under a fresh message key, which
+/// is also returned to open the last node's response with [`open_response`].
 pub fn seal_body_with_key(
     last: &NodePublicKey,
     message: &[u8],
@@ -228,20 +218,7 @@ pub struct OpenedBody {
     pub sent_at: u64,
 }
 
-/// Decrypts a body sealed to this node with [`seal_body`], returning the message.
-pub fn open_body(node: &NodeSecretKey, body: &FafBody) -> Result<Vec<u8>, SealError> {
-    open_body_envelope(node, body).map(|opened| opened.message)
-}
-
-/// Like [`open_body`], but also returns the message key, to answer with [`seal_response`].
-pub fn open_body_with_key(
-    node: &NodeSecretKey,
-    body: &FafBody,
-) -> Result<(MessageKey, Vec<u8>), SealError> {
-    open_body_envelope(node, body).map(|opened| (opened.key, opened.message))
-}
-
-/// Decrypts a body sealed to this node, returning its message key, message, id and send time.
+/// Decrypts a body sealed to this node with [`seal_body_with_key`], returning its message key, message, id and send time.
 /// Freshness and uniqueness are left to the caller (see [`crate::replay::ReplayGuard`]).
 pub fn open_body_envelope(node: &NodeSecretKey, body: &FafBody) -> Result<OpenedBody, SealError> {
     let undecryptable = || SealError::new("body can't be decrypted");

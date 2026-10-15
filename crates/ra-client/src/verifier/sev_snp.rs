@@ -68,7 +68,7 @@ const OID_UCODE_SPL: &str = "1.3.6.1.4.1.3704.1.3.8";
 const OID_FMC_SPL: &str = "1.3.6.1.4.1.3704.1.3.9";
 const OID_HW_ID: &str = "1.3.6.1.4.1.3704.1.4";
 
-/// AMD processor families and their pinned roots (defined in [`crate::trust`]).
+/// AMD processor families and their pinned roots (defined in `crate::trust`).
 pub use crate::trust::{AmdProduct, AmdRoots};
 
 /// Verifies the SEV-SNP `report` and the DER certificate `vcek_der` of its signing key (the VCEK,

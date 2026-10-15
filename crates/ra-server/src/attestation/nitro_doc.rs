@@ -1,61 +1,7 @@
 //! Nitro attestation-document helpers shared by the real (`nitro`) and `mock` providers:
-//! COSE_Sign1 payload extraction, parsing, mock document creation (`mock` feature only) and CMW
-//! wrapping.
+//! mock document creation (`mock` feature only) and CMW wrapping.
 
-use super::AttestationError;
 use crate::Cmw;
-use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
-use std::io::Cursor;
-
-/// Extracts the CBOR-encoded payload from a COSE_Sign1 structure (RFC 9052).
-///
-/// Supports both tagged (CBOR Tag 18) and untagged 4-element CBOR arrays.
-pub fn extract_cose_payload(document: &[u8]) -> Result<Vec<u8>, AttestationError> {
-    let value: ciborium::value::Value = ciborium::de::from_reader(Cursor::new(document))
-        .map_err(|e| AttestationError::DocumentDecodingFailed(format!("Invalid CBOR: {e}")))?;
-
-    let items = match value {
-        ciborium::value::Value::Tag(18, boxed) => match *boxed {
-            ciborium::value::Value::Array(arr) => arr,
-            _ => {
-                return Err(AttestationError::DocumentDecodingFailed(
-                    "COSE_Sign1 tag 18 did not contain an array".to_string(),
-                ))
-            }
-        },
-        ciborium::value::Value::Array(arr) => arr,
-        _ => {
-            return Err(AttestationError::DocumentDecodingFailed(
-                "Attestation document is not a COSE_Sign1 structure".to_string(),
-            ))
-        }
-    };
-
-    if items.len() < 4 {
-        return Err(AttestationError::DocumentDecodingFailed(format!(
-            "COSE_Sign1 structure has only {} elements, expected 4",
-            items.len()
-        )));
-    }
-
-    match &items[2] {
-        ciborium::value::Value::Bytes(payload) => Ok(payload.clone()),
-        _ => Err(AttestationError::DocumentDecodingFailed(
-            "COSE_Sign1 structure payload is not a byte string".to_string(),
-        )),
-    }
-}
-
-/// Parses the payload of an AWS Nitro attestation document into an [`AttestationDoc`].
-pub fn parse_attestation_document(document: &[u8]) -> Result<AttestationDoc, AttestationError> {
-    let payload = extract_cose_payload(document)?;
-    AttestationDoc::from_binary(&payload).map_err(|e| {
-        AttestationError::DocumentDecodingFailed(format!("Failed to parse AttestationDoc: {e:?}"))
-    })
-}
-
-/// `module_id` of mock attestation documents.
-pub const MOCK_MODULE_ID: &str = "aws-nitro-enclaves-mock";
 
 #[cfg(feature = "mock")]
 pub use mock_doc::create_mock_attestation_document;
@@ -64,7 +10,7 @@ pub use mock_doc::create_mock_attestation_document;
 /// neither the (public) mock root key nor any way to sign mock Evidence.
 #[cfg(feature = "mock")]
 mod mock_doc {
-    use super::{AttestationError, MOCK_MODULE_ID};
+    use crate::attestation::AttestationError;
     use crate::AttestationParams;
     use aws_nitro_enclaves_nsm_api::api::{AttestationDoc, Digest};
     use ciborium::value::Value;
@@ -78,9 +24,12 @@ mod mock_doc {
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    /// `module_id` of mock attestation documents.
+    const MOCK_MODULE_ID: &str = "aws-nitro-enclaves-mock";
+
     /// Mock root CA certificate (DER), shared with the client verifier, which trusts it only when
     /// mock attestation is explicitly allowed.
-    const MOCK_ROOT_CERT: &[u8] = crate::attestation::MOCK_NITRO_ROOT_CERT;
+    const MOCK_ROOT_CERT: &[u8] = ttk_core::MOCK_NITRO_ROOT_CERT;
 
     /// PKCS#8 private key of the mock root CA. **Deliberately public test material**: anyone can
     /// sign "mock" evidence with it, which is why clients accept mock evidence only on opt-in.
