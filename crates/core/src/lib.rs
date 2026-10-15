@@ -24,6 +24,7 @@ pub mod faf;
 pub mod file_message;
 pub mod fresh_evidence;
 pub mod image_trust;
+pub mod replay;
 pub mod seal;
 #[cfg(target_os = "linux")]
 pub mod vsock;

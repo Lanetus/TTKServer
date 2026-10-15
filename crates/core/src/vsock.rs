@@ -284,7 +284,11 @@ pub enum OutboundRequest {
 }
 
 /// Checks that `host` is a DNS host name a resolve request may carry: 1 to
-/// [`MAX_HOST_NAME_LEN`] ASCII letters, digits, `-` and `.`, with no empty label.
+/// [`MAX_HOST_NAME_LEN`] ASCII letters, digits, `-` and `.`, with no empty label, and a last
+/// label starting with a letter (so it is never a numeric IPv4 address in disguise).
+///
+/// The parent resolves the names: it learns which next hops a relay contacts and may answer
+/// anything. Its answers are egress-filtered again, and RA-TLS still authenticates the hop.
 pub fn check_host_name(host: &str) -> io::Result<()> {
     let valid = !host.is_empty()
         && host.len() <= MAX_HOST_NAME_LEN
@@ -294,7 +298,14 @@ pub fn check_host_name(host: &str) -> io::Result<()> {
                 && label
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        });
+        })
+        // The last label must start with a letter: otherwise `getaddrinfo` may read the name as
+        // a numeric IPv4 address (`2130706433`, `0x7f000001`, `127.1`).
+        && host
+            .trim_end_matches('.')
+            .rsplit('.')
+            .next()
+            .is_some_and(|label| label.starts_with(|c: char| c.is_ascii_alphabetic()));
     if valid {
         Ok(())
     } else {

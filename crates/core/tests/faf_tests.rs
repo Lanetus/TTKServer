@@ -34,6 +34,34 @@ fn sealed_address_opens_to_the_server_and_a_fresh_salt() {
 }
 
 #[test]
+fn sealed_body_carries_its_send_time_and_a_random_id() {
+    let (secret, public) = key_pair();
+    let (body, _) = seal::seal_body_at(&public, b"hi", 1_234).unwrap();
+    let opened = seal::open_body_envelope(&secret, &body).unwrap();
+    assert_eq!(opened.message, b"hi");
+    assert_eq!(opened.sent_at, 1_234);
+
+    let now = seal::unix_now();
+    let other =
+        seal::open_body_envelope(&secret, &seal::seal_body(&public, b"hi").unwrap()).unwrap();
+    assert!(other.sent_at.abs_diff(now) <= 1);
+    assert_ne!(other.message_id, opened.message_id);
+}
+
+#[test]
+fn a_body_message_only_opens_with_its_own_key_envelope() {
+    let (secret, public) = key_pair();
+    let body = seal::seal_body(&public, b"hi").unwrap();
+    // Another sealing of a different key, with the same message: authentication fails.
+    let other = seal::seal_body(&public, b"hi").unwrap();
+    let mixed = FafBody {
+        key: other.key,
+        message: body.message,
+    };
+    assert!(seal::open_body(&secret, &mixed).is_err());
+}
+
+#[test]
 fn sealed_body_opens_only_for_the_last_hop() {
     let (secret, public) = key_pair();
     let body = seal::seal_body(&public, b"hello relay").unwrap();

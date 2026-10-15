@@ -12,6 +12,17 @@
 //! Checks: ARK → ASK → VCEK or ARK → ASVK → VLEK chain (RSA-PSS), validity periods, the VCEK's
 //! `hwID` (VLEKs are not chip-specific) and the TCB extensions match the report, and the
 //! report's ECDSA P-384 signature. Revocation (CRL) checks are not supported.
+//!
+//! The guest policy is chosen by the host at launch and is not part of the measurement, so it is
+//! checked here: a guest that allows a migration agent (`MIGRATE_MA`, which can export its
+//! memory) is rejected, as is a report requested from a VMPL other than 0 (the guest's most
+//! privileged level; otherwise a more privileged component could have shaped it). The debug bit
+//! is reported as [`VerifiedEvidence::debug`] and left to the verifier's policy.
+//!
+//! The `measurement` (launch digest) covers only what was measured at launch: the firmware, and
+//! the kernel, initrd and command line only if the guest boots them directly with their hashes
+//! in the measured firmware (SEV "kernel hashes"). An image allowlisted by `measurement` must be
+//! launched that way, or the rest of its boot chain is unmeasured.
 
 use super::{field, le_u64, verify_ecdsa, TeeKind, TrustStore, VerifiedEvidence};
 use rustls_pki_types::UnixTime;
@@ -25,6 +36,7 @@ const SIGNED_LEN: usize = 0x2A0;
 
 const OFFSET_VERSION: usize = 0x00;
 const OFFSET_POLICY: usize = 0x08;
+const OFFSET_VMPL: usize = 0x30;
 const OFFSET_SIGNATURE_ALGO: usize = 0x34;
 const OFFSET_FLAGS: usize = 0x48;
 const OFFSET_REPORT_DATA: usize = 0x50;
@@ -37,8 +49,14 @@ const OFFSET_CHIP_ID: usize = 0x1A0;
 
 /// `SIGNATURE_ALGO` value for ECDSA P-384 with SHA-384.
 const SIG_ALGO_ECDSA_P384_SHA384: u32 = 1;
+/// Guest policy bit that must be one (reserved, "must be one" in the SEV-SNP ABI).
+const POLICY_RESERVED_MBO: u64 = 1 << 17;
+/// Guest policy bit allowing a migration agent, which can export the guest's memory.
+const POLICY_MIGRATE_MA: u64 = 1 << 18;
 /// Guest policy bit allowing the hypervisor to debug the guest.
 const POLICY_DEBUG: u64 = 1 << 19;
+/// The only VMPL a report is accepted from: the guest's most privileged level.
+const REQUIRED_VMPL: u32 = 0;
 /// `FLAGS` bit set when the chip ID is masked (all zeros) in the report.
 const FLAG_MASK_CHIP_ID: u32 = 1 << 1;
 
@@ -73,6 +91,19 @@ pub fn verify(
     }
     if le_u32(report, OFFSET_SIGNATURE_ALGO) != SIG_ALGO_ECDSA_P384_SHA384 {
         return Err("SEV-SNP report is not signed with ECDSA P-384".into());
+    }
+    let policy = le_u64(report, OFFSET_POLICY);
+    if policy & POLICY_RESERVED_MBO == 0 {
+        return Err("SEV-SNP guest policy is malformed (reserved bit 17 is clear)".into());
+    }
+    if policy & POLICY_MIGRATE_MA != 0 {
+        return Err("SEV-SNP guest policy allows a migration agent (MIGRATE_MA)".into());
+    }
+    let vmpl = le_u32(report, OFFSET_VMPL);
+    if vmpl != REQUIRED_VMPL {
+        return Err(format!(
+            "SEV-SNP report was requested from VMPL {vmpl}, expected {REQUIRED_VMPL}"
+        ));
     }
     let flags = le_u32(report, OFFSET_FLAGS);
     let signing_key = match (flags >> 2) & 0b111 {
@@ -113,7 +144,7 @@ pub fn verify(
         tee: TeeKind::SevSnp,
         report_data: field(report, OFFSET_REPORT_DATA, 64),
         measurements,
-        debug: le_u64(report, OFFSET_POLICY) & POLICY_DEBUG != 0,
+        debug: policy & POLICY_DEBUG != 0,
         mock: false,
         nitro: None,
     })

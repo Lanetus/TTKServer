@@ -21,7 +21,8 @@
 #   TTK_ENCLAVE_CPUS=2
 #   TTK_ENCLAVE_MEMORY=4096            # MiB; the server's worst case (MAX_IN_FLIGHT_BODY_BYTES)
 #                                      # needs about 2.5 GiB, so keep at least 4096
-#   TTK_ENCLAVE_EXTRA_ARGS=--debug-mode   # debug only: zeroes PCRs, so strict clients reject it
+#   TTK_ENCLAVE_EXTRA_ARGS=--debug-mode   # debug only: zeroes PCRs, so strict clients reject it;
+#   TTK_ALLOW_DEBUG_MODE=1                # ...and refused unless this is set too
 #
 # Status: nitro-cli describe-enclaves; logs: journalctl -u ttk-terminal-enclave
 
@@ -41,7 +42,10 @@ Environment=TTK_ENCLAVE_CID=17
 Environment=TTK_ENCLAVE_CPUS=2
 Environment=TTK_ENCLAVE_MEMORY=4096
 Environment=TTK_ENCLAVE_EXTRA_ARGS=
+Environment=TTK_ALLOW_DEBUG_MODE=0
 EnvironmentFile=-/etc/default/ttk-terminal-enclave
+# A debug-mode enclave must be asked for twice, so a stray EXTRA_ARGS can't start one.
+ExecStartPre=/bin/sh -c 'case "$${TTK_ENCLAVE_EXTRA_ARGS}" in *--debug-mode*) [ "$${TTK_ALLOW_DEBUG_MODE}" = 1 ] || { echo "TTK_ENCLAVE_EXTRA_ARGS has --debug-mode: set TTK_ALLOW_DEBUG_MODE=1 to run a debug enclave" >&2; exit 1; } ;; esac'
 # Clear an enclave left over from an unclean stop, so its CID and resources are free.
 ExecStartPre=-/usr/bin/nitro-cli terminate-enclave --enclave-name ${TTK_ENCLAVE_NAME}
 ExecStart=/usr/bin/nitro-cli run-enclave \
@@ -53,6 +57,23 @@ ExecStart=/usr/bin/nitro-cli run-enclave \
     $TTK_ENCLAVE_EXTRA_ARGS
 ExecStop=/usr/bin/nitro-cli terminate-enclave --enclave-name ${TTK_ENCLAVE_NAME}
 TimeoutStartSec=120
+
+# Sandboxing: nitro-cli needs root, /dev/nitro_enclaves, the EIF, vsock and its sockets and logs
+# under /run and /var/log, but nothing else.
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

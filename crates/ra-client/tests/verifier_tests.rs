@@ -163,7 +163,11 @@ fn real_tdx_quote_verifies_against_its_root() {
     assert_eq!(evidence.tee, TeeKind::Tdx);
     assert_eq!(evidence.report_data, TDX_QUOTE[48 + 520..48 + 584]);
     assert_eq!(evidence.measurements["mrtd"], TDX_QUOTE[48 + 136..48 + 184]);
-    assert_eq!(evidence.measurements.len(), 9);
+    assert_eq!(
+        evidence.measurements["tdattributes"],
+        TDX_QUOTE[48 + 120..48 + 128]
+    );
+    assert_eq!(evidence.measurements.len(), 10);
 }
 
 #[test]
@@ -256,7 +260,16 @@ fn intel_pki() -> IntelPki {
         vec![],
     );
     let pck_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-    let pck = cert("Test PCK", &pck_key, false, Some((&ca, &ca_key)), vec![]);
+    // Every genuine PCK certificate carries the Intel SGX extensions.
+    let sgx_extensions =
+        CustomExtension::from_oid_content(&[1, 2, 840, 113741, 1, 13, 1], vec![0x30, 0x00]);
+    let pck = cert(
+        "Test PCK",
+        &pck_key,
+        false,
+        Some((&ca, &ca_key)),
+        vec![sgx_extensions],
+    );
     IntelPki {
         root: root.der().to_vec(),
         chain_pem: format!("{}{}{}", pck.pem(), ca.pem(), root.pem()),
@@ -311,8 +324,13 @@ fn build_quote(tee: TeeKind, body: &[u8], pki: &IntelPki) -> Vec<u8> {
 }
 
 fn td_body(report_data: &[u8], mrtd: u8, debug: bool) -> Vec<u8> {
+    td_body_with_attributes(report_data, mrtd, u64::from(debug) | (1 << 28))
+}
+
+/// A TDX report body with `TDATTRIBUTES` = `attributes`.
+fn td_body_with_attributes(report_data: &[u8], mrtd: u8, attributes: u64) -> Vec<u8> {
     let mut body = vec![0u8; 584];
-    body[120] = u8::from(debug);
+    body[120..128].copy_from_slice(&attributes.to_le_bytes());
     body[136..184].fill(mrtd);
     body[520..520 + report_data.len()].copy_from_slice(report_data);
     body
@@ -415,13 +433,26 @@ fn build_snp_report_signed(
     debug: bool,
     vlek: bool,
 ) -> Vec<u8> {
+    let policy: u64 = (1 << 17) | if debug { 1 << 19 } else { 0 };
+    build_snp_report_with(pki, report_data, measurement, policy, 0, vlek)
+}
+
+/// Builds an SEV-SNP attestation report with guest `policy`, requested from `vmpl`.
+fn build_snp_report_with(
+    pki: &AmdPki,
+    report_data: &[u8],
+    measurement: u8,
+    policy: u64,
+    vmpl: u32,
+    vlek: bool,
+) -> Vec<u8> {
     let mut report = vec![0u8; 0x4A0];
     if vlek {
         report[0x48] = 1 << 2; // FLAGS.SIGNING_KEY = VLEK
     }
     report[0..4].copy_from_slice(&3u32.to_le_bytes());
-    let policy: u64 = (1 << 17) | if debug { 1 << 19 } else { 0 };
     report[0x08..0x10].copy_from_slice(&policy.to_le_bytes());
+    report[0x30..0x34].copy_from_slice(&vmpl.to_le_bytes());
     report[0x34..0x38].copy_from_slice(&1u32.to_le_bytes());
     report[0x50..0x50 + report_data.len()].copy_from_slice(report_data);
     report[0x90..0xC0].fill(measurement);
@@ -1038,6 +1069,77 @@ fn cert_verifier_rejects_tdx_evidence_with_builtin_roots() {
         err.to_string().contains("PCK certificate chain is invalid"),
         "{err}"
     );
+}
+
+#[test]
+fn tdx_evidence_without_sept_ve_disable_is_rejected() {
+    let intel = intel_pki();
+    let trust = test_trust(&intel, &amd_pki());
+    let binding = [0x42; 32];
+    let verify = |attributes: u64| {
+        let body = td_body_with_attributes(&binding, 7, attributes);
+        let cmw = record(media_type::TDX, build_quote(TeeKind::Tdx, &body, &intel));
+        verify_evidence(
+            &cmw,
+            &binding,
+            UnixTime::now(),
+            &trust,
+            &synthetic_images(7),
+            Policy::default(),
+        )
+    };
+    verify(1 << 28).expect("SEPT_VE_DISABLE set should verify");
+    let err = verify(0).unwrap_err();
+    assert!(err.contains("SEPT_VE_DISABLE"), "{err}");
+}
+
+#[test]
+fn pck_certificate_without_sgx_extensions_is_rejected() {
+    let mut intel = intel_pki();
+    // Re-issue the PCK leaf without the Intel SGX extensions.
+    let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+    let root = cert("Test SGX Root CA", &root_key, true, None, vec![]);
+    let pck_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+    let pck = cert(
+        "Test PCK",
+        &pck_key,
+        false,
+        Some((&root, &root_key)),
+        vec![],
+    );
+    intel.root = root.der().to_vec();
+    intel.chain_pem = format!("{}{}", pck.pem(), root.pem());
+    intel.pck = signer(&pck_key, &ECDSA_P256_SHA256_FIXED_SIGNING);
+    let trust = test_trust(&intel, &amd_pki());
+
+    let quote = build_quote(TeeKind::Sgx, &sgx_body(&[0x42; 32], 7, false), &intel);
+    let err = dcap::verify(&quote, TeeKind::Sgx, UnixTime::now(), &trust).unwrap_err();
+    assert!(err.contains("Intel SGX extensions"), "{err}");
+}
+
+#[test]
+fn snp_guest_policy_and_vmpl_are_checked() {
+    let amd = amd_pki();
+    let trust = test_trust(&intel_pki(), &amd);
+    let binding = [0x42; 32];
+    let verify = |report: &[u8]| sev_snp::verify(report, &amd.vcek, UnixTime::now(), &trust);
+
+    let smt = (1 << 16) | (1 << 17);
+    verify(&build_snp_report_with(&amd, &binding, 7, smt, 0, false))
+        .expect("a policy with SMT allowed and VMPL 0 should verify");
+
+    let migratable = (1 << 17) | (1 << 18);
+    let err = verify(&build_snp_report_with(
+        &amd, &binding, 7, migratable, 0, false,
+    ))
+    .unwrap_err();
+    assert!(err.contains("MIGRATE_MA"), "{err}");
+
+    let err = verify(&build_snp_report_with(&amd, &binding, 7, 0, 0, false)).unwrap_err();
+    assert!(err.contains("reserved bit 17"), "{err}");
+
+    let err = verify(&build_snp_report_with(&amd, &binding, 7, 1 << 17, 1, false)).unwrap_err();
+    assert!(err.contains("VMPL 1"), "{err}");
 }
 
 #[test]

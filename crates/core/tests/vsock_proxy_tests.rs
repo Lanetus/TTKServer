@@ -209,3 +209,132 @@ mod tcp {
         assert_eq!(parse_tcp_proxy_args(&args(&["-h"]), no_env).unwrap(), None);
     }
 }
+
+mod client_table {
+    use std::net::SocketAddr;
+    use std::sync::atomic::Ordering;
+    use ttk_core::vsock_proxy::{confirms_client, ClientRefused, ClientTable};
+
+    fn addr(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn only_short_header_packets_confirm_a_client() {
+        assert!(confirms_client(&[0x40, 1, 2]));
+        assert!(!confirms_client(&[0xC0, 0, 0, 0, 1])); // long header (Initial)
+        assert!(!confirms_client(&[0xF0, 0, 0, 0, 1])); // long header (Retry)
+        assert!(!confirms_client(&[]));
+    }
+
+    #[test]
+    fn clients_per_ip_are_limited() {
+        let mut table = ClientTable::new(10, 2);
+        table.insert(addr("192.0.2.1:1000"), ()).unwrap();
+        table.insert(addr("192.0.2.1:1001"), ()).unwrap();
+        assert_eq!(
+            table.insert(addr("192.0.2.1:1002"), ()).unwrap_err(),
+            ClientRefused::PerIpLimit
+        );
+        // Re-admitting a known client replaces it rather than counting twice.
+        let (id, _) = table.insert(addr("192.0.2.1:1001"), ()).unwrap();
+        assert_eq!(table.len(), 2);
+        assert!(table.remove(&addr("192.0.2.1:1001"), id));
+        table.insert(addr("192.0.2.1:1002"), ()).unwrap();
+        table.insert(addr("192.0.2.2:1000"), ()).unwrap();
+    }
+
+    #[test]
+    fn a_full_table_evicts_the_oldest_unconfirmed_client() {
+        let mut table = ClientTable::new(3, 10);
+        let (_, first) = table.insert(addr("192.0.2.1:1"), ()).unwrap();
+        table.insert(addr("192.0.2.2:1"), ()).unwrap();
+        table.insert(addr("192.0.2.3:1"), ()).unwrap();
+        first.store(true, Ordering::Relaxed);
+
+        // The first client is confirmed, so the second (oldest unconfirmed) makes room.
+        table.insert(addr("192.0.2.4:1"), ()).unwrap();
+        assert!(table.get(&addr("192.0.2.1:1")).is_some());
+        assert!(table.get(&addr("192.0.2.2:1")).is_none());
+        assert_eq!(table.len(), 3);
+
+        for (_, entry) in [addr("192.0.2.3:1"), addr("192.0.2.4:1")]
+            .iter()
+            .map(|a| (a, table.get(a).unwrap()))
+        {
+            entry.confirmed.store(true, Ordering::Relaxed);
+        }
+        assert_eq!(
+            table.insert(addr("192.0.2.5:1"), ()).unwrap_err(),
+            ClientRefused::Full
+        );
+    }
+
+    #[test]
+    fn a_stale_relay_task_does_not_remove_its_replacement() {
+        let mut table = ClientTable::new(3, 3);
+        let (old, _) = table.insert(addr("192.0.2.1:1"), ()).unwrap();
+        let (new, _) = table.insert(addr("192.0.2.1:1"), ()).unwrap();
+        assert!(!table.remove(&addr("192.0.2.1:1"), old));
+        assert!(table.remove(&addr("192.0.2.1:1"), new));
+        assert!(table.is_empty());
+    }
+}
+
+mod imds_filter {
+    use ttk_core::vsock_proxy_tcp::{check_imds_request, MAX_IMDS_REQUEST_HEAD};
+
+    fn request(line: &str, headers: &str) -> Vec<u8> {
+        format!("{line}\r\nHost: 127.0.0.1\r\n{headers}\r\n").into_bytes()
+    }
+
+    #[test]
+    fn credential_requests_pass() {
+        for line in [
+            "PUT /latest/api/token HTTP/1.1",
+            "GET /latest/meta-data/iam/security-credentials/ HTTP/1.1",
+            "GET /latest/meta-data/iam/security-credentials/ttk-s3-role HTTP/1.1",
+            "GET /latest/meta-data/iam/security-credentials-extended/ttk-s3-role HTTP/1.1",
+        ] {
+            let req = request(line, "X-aws-ec2-metadata-token-ttl-seconds: 21600\r\n");
+            assert_eq!(check_imds_request(&req), Ok(Some(req.len())), "{line}");
+        }
+        // A pipelined second request is left for the next check.
+        let mut two = request("PUT /latest/api/token HTTP/1.1", "Content-Length: 0\r\n");
+        let first = two.len();
+        two.extend(request("GET /latest/user-data HTTP/1.1", ""));
+        assert_eq!(check_imds_request(&two), Ok(Some(first)));
+        assert!(check_imds_request(&two[first..]).is_err());
+    }
+
+    #[test]
+    fn other_metadata_and_bodies_are_refused() {
+        for line in [
+            "GET /latest/user-data HTTP/1.1",
+            "GET /latest/meta-data/ HTTP/1.1",
+            "GET /latest/meta-data/iam/security-credentials/../../user-data HTTP/1.1",
+            "GET /latest/meta-data/iam/security-credentials/role?x=1 HTTP/1.1",
+            "GET /latest/meta-data/iam/security-credentials/%2e%2e HTTP/1.1",
+            "POST /latest/api/token HTTP/1.1",
+            "GET /latest/api/token HTTP/1.1",
+            "PUT /latest/api/token HTTP/2",
+            "PUT  /latest/api/token HTTP/1.1",
+        ] {
+            assert!(check_imds_request(&request(line, "")).is_err(), "{line}");
+        }
+        for headers in ["Content-Length: 5\r\n", "Transfer-Encoding: chunked\r\n"] {
+            let req = request("PUT /latest/api/token HTTP/1.1", headers);
+            assert!(check_imds_request(&req).is_err(), "{headers}");
+        }
+    }
+
+    #[test]
+    fn incomplete_and_oversized_heads() {
+        assert_eq!(
+            check_imds_request(b"PUT /latest/api/token HTTP/1.1\r\n"),
+            Ok(None)
+        );
+        let huge = vec![b'a'; MAX_IMDS_REQUEST_HEAD + 1];
+        assert!(check_imds_request(&huge).is_err());
+    }
+}

@@ -198,19 +198,25 @@ async fn faf_reuses_the_next_hop_connection_across_sequential_and_concurrent_req
     let terminal = start_terminal();
     let client = connect(start_relay()).await;
     let terminal_key = node_key(terminal).await;
-    let req = FafRequest {
+    // A fresh body each time: the terminal evaluates each body only once.
+    let req = || FafRequest {
         relays: vec![plain(terminal)],
         body: body_for(&terminal_key),
     };
 
     // The first request pools the next-hop connection; the later ones reuse it.
     for _ in 0..3 {
-        let response = client.post_json("/faf", &req).await.unwrap();
+        let response = client.post_json("/faf", &req()).await.unwrap();
         assert_eq!(response.status, 200, "{:?}", response.text());
     }
     // Concurrent requests share the pooled connection as separate HTTP/3 streams.
-    let send = || client.post_json("/faf", &req);
-    let (a, b, c, d) = tokio::join!(send(), send(), send(), send());
+    let (r1, r2, r3, r4) = (req(), req(), req(), req());
+    let (a, b, c, d) = tokio::join!(
+        client.post_json("/faf", &r1),
+        client.post_json("/faf", &r2),
+        client.post_json("/faf", &r3),
+        client.post_json("/faf", &r4)
+    );
     for response in [a, b, c, d] {
         assert_eq!(response.unwrap().status, 200);
     }

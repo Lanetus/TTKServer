@@ -53,6 +53,7 @@ TTK_ENCLAVE_CID=16
 TTK_ENCLAVE_CPUS=2
 TTK_ENCLAVE_MEMORY=4096       # MiB; at least 4096 (worst case of the server's request limits); raise it if nitro-cli reports the EIF needs more
 TTK_ENCLAVE_EXTRA_ARGS=""     # e.g. --debug-mode (debug only: zeroes PCRs)
+TTK_ALLOW_DEBUG_MODE=0        # 1 to let the unit start an enclave with --debug-mode
 TTK_RELAY_LISTEN=0.0.0.0:443
 
 # s3-server only: the bucket's region (must match the AWS_REGION baked into the EIF), the S3
@@ -149,6 +150,7 @@ TTK_ENCLAVE_CID=$TTK_ENCLAVE_CID
 TTK_ENCLAVE_CPUS=$TTK_ENCLAVE_CPUS
 TTK_ENCLAVE_MEMORY=$TTK_ENCLAVE_MEMORY
 TTK_ENCLAVE_EXTRA_ARGS=$TTK_ENCLAVE_EXTRA_ARGS
+TTK_ALLOW_DEBUG_MODE=$TTK_ALLOW_DEBUG_MODE
 EOF
 cat > /etc/default/vsock-proxy << EOF
 TTK_ENCLAVE_CID=$TTK_ENCLAVE_CID

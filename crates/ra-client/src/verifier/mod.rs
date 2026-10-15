@@ -212,9 +212,32 @@ fn appraise(
             return Err(format!("{tee} evidence comes from a debug-mode TEE"));
         }
     } else {
+        check_td_attributes(&evidence)?;
         check_image_allowed(&evidence, images)?;
     }
     Ok(evidence)
+}
+
+/// `TDATTRIBUTES` bit `SEPT_VE_DISABLE`: the TD gets no #VE on EPT violations, which the host
+/// could otherwise inject at will to attack the guest kernel.
+pub const TD_ATTRIBUTE_SEPT_VE_DISABLE: u64 = 1 << 28;
+
+/// Requires a non-debug TDX `evidence` to have [`TD_ATTRIBUTE_SEPT_VE_DISABLE`] set; other TEEs
+/// pass.
+fn check_td_attributes(evidence: &VerifiedEvidence) -> Result<(), String> {
+    if evidence.tee != TeeKind::Tdx {
+        return Ok(());
+    }
+    let attributes = evidence
+        .measurements
+        .get("tdattributes")
+        .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
+        .map(u64::from_le_bytes)
+        .ok_or("TDX evidence has no TD attributes")?;
+    if attributes & TD_ATTRIBUTE_SEPT_VE_DISABLE == 0 {
+        return Err("TDX evidence comes from a TD without SEPT_VE_DISABLE".into());
+    }
+    Ok(())
 }
 
 /// Returns the measurement of `evidence` that `kind` names, the value an [`ImageTrustStore`]
