@@ -8,7 +8,6 @@
 //!
 //! - [`attestation`]: hardware-agnostic Attester providers and the CMW evidence wrapper.
 //! - [`certificate`]: the replaceable RA-TLS certificate (`POST /certificate`).
-//! - [`egress`]: the egress policy for peer-chosen destinations (re-exported from [`ttk_core`]).
 //! - [`server`]: the HTTP/3 Attester endpoint, serving Evidence from inside the TEE.
 //! - [`terminal`]: the terminal node, the last hop of `POST /faf`, answered by an [`Evaluator`].
 //! - [`router`]: the server's base HTTP routes (`GET /`, `GET /evidence.cmw`, `POST /evidence`,
@@ -23,7 +22,6 @@ use std::future::Future;
 pub mod attestation;
 pub mod certificate;
 
-pub use ttk_core::egress;
 pub mod router;
 pub mod server;
 pub mod terminal;
@@ -32,7 +30,7 @@ pub use ttk_core::vsock;
 
 // Re-export common types and functions for convenience
 pub use attestation::cmw;
-pub use attestation::cmw::{Cmw, CmwCollection, CmwRecord, CmwType};
+pub use attestation::cmw::{Cmw, CmwCollection, CmwRecord};
 
 /// Parameters for requesting an attestation document from the Nitro Security Module.
 #[derive(Debug, Clone, Default, PartialEq)]

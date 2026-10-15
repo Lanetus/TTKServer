@@ -1,17 +1,20 @@
 //! Tests for the base routes ([`ttk_ra_server::router`]), `POST /evidence` over the mock provider.
 #![cfg(feature = "mock")]
 
+#[path = "support/nitro_doc.rs"]
+mod nitro_doc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use nitro_doc::parse_attestation_document;
 use rcgen::KeyPair;
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tower_service::Service;
 use ttk_core::FreshEvidence;
-use ttk_ra_server::attestation::{self, media_type, nitro_doc::parse_attestation_document};
+use ttk_ra_server::attestation::{self, media_type};
 use ttk_ra_server::certificate::{CertificateStore, CERT_DNS_NAME};
 use ttk_ra_server::router::{build_router, Evidence, MAX_NONCE_LEN};
 use ttk_ra_server::server::create_cert_with_attestation;

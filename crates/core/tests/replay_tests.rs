@@ -10,7 +10,10 @@ fn a_fresh_body_is_accepted_once() {
     assert_eq!(guard.accept([1; 16], NOW, NOW), Ok(()));
     assert_eq!(guard.accept([1; 16], NOW, NOW), Err(ReplayError::Replayed));
     assert_eq!(guard.accept([2; 16], NOW, NOW + 1), Ok(()));
-    assert_eq!(guard.len(), 2);
+    assert_eq!(
+        guard.accept([2; 16], NOW, NOW + 1),
+        Err(ReplayError::Replayed)
+    );
 }
 
 #[test]
@@ -52,5 +55,6 @@ fn a_full_guard_refuses_until_ids_expire() {
         guard.accept([2; 16], NOW + 10, later),
         Err(ReplayError::Replayed)
     );
-    assert_eq!(guard.len(), 2);
+    // Both remembered ids are still fresh, so the guard is full again.
+    assert_eq!(guard.accept([4; 16], later, later), Err(ReplayError::Busy));
 }

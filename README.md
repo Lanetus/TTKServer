@@ -186,8 +186,8 @@ To embed the client in your own Relying Party, use `ttk_ra_client`:
 ```rust
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 
-let verifier = EnclaveCertVerifier::new()
-    .with_expected_pcr(0, expected_pcr0); // reference values for your enclave image
+// Accepts only enclave images published by the root servers
+let verifier = EnclaveCertVerifier::new();
 let mut client = TtkClient::connect_with_verifier(addr, "localhost", verifier).await?;
 let resp = client.get("/evidence.cmw").await?;
 ```

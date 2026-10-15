@@ -265,7 +265,7 @@ pub const MAX_RESOLVED_ADDRESSES: usize = 16;
 
 /// Time allowed for the parent to answer a resolve request ([`resolve_via_parent`]), and for
 /// the parent's own lookup ([`answer_resolve`]).
-pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What an outbound vsock connection asks the parent's `vsock-proxy` for, read by
 /// [`read_outbound_request`].
@@ -382,7 +382,7 @@ pub async fn read_resolved<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<V
     Ok(addresses)
 }
 
-/// Parent side of a resolve request: looks `host` up (within [`RESOLVE_TIMEOUT`]) and answers
+/// Parent side of a resolve request: looks `host` up (within `RESOLVE_TIMEOUT`) and answers
 /// the addresses `permit` accepts (the egress policy), deduplicated, on `writer`. A failed
 /// lookup is answered with no addresses. Returns how many addresses were answered.
 pub async fn answer_resolve<W: AsyncWrite + Unpin>(
@@ -410,7 +410,7 @@ pub async fn answer_resolve<W: AsyncWrite + Unpin>(
 }
 
 /// Enclave side of a resolve request over `stream` (any connection to the parent's
-/// `vsock-proxy`): sends the request and reads the answer, within [`RESOLVE_TIMEOUT`].
+/// `vsock-proxy`): sends the request and reads the answer, within `RESOLVE_TIMEOUT`.
 pub async fn resolve_over<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     host: &str,

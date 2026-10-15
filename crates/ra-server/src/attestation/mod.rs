@@ -12,13 +12,12 @@ use std::fmt;
 
 pub use ttk_core::cmw;
 pub use ttk_core::media_type;
-pub use ttk_core::MOCK_NITRO_ROOT_CERT;
 
 #[cfg(any(feature = "nitro", feature = "mock"))]
 pub mod nitro_doc;
 
 #[cfg(feature = "nitro")]
-pub mod nitro;
+mod nitro;
 #[cfg(feature = "nitro")]
 pub use nitro::NsmSession;
 
@@ -32,7 +31,7 @@ pub mod sev_snp;
 pub mod tdx;
 
 #[cfg(feature = "mock")]
-pub mod mock;
+mod mock;
 #[cfg(feature = "mock")]
 pub use mock::MockSession;
 

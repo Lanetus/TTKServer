@@ -18,7 +18,7 @@
 //! state (see [`super::router`]): until the replacement, only `POST /evidence` and
 //! `POST /certificate`; after it, every other route (on connections that negotiated the
 //! CA-issued certificate) and no longer those two. The trusted root is the built-in TTK root
-//! authority ([`TTK_ROOT_CA_PEM`], see [`CertificateStore::load_builtin_trusted_roots`]);
+//! authority ([`TTK_ROOT_CA_PEM`], see `CertificateStore::load_builtin_trusted_roots`);
 //! [`CertificateStore::set_trusted_roots`] overrides it. Without trusted roots every replacement
 //! is refused.
 
@@ -118,7 +118,7 @@ impl CertificateStore {
     }
 
     /// Whether trusted root authorities are configured, i.e. whether a replacement can succeed.
-    pub fn has_trusted_roots(&self) -> bool {
+    pub(crate) fn has_trusted_roots(&self) -> bool {
         self.verifier
             .read()
             .unwrap_or_else(|e| e.into_inner())
@@ -126,7 +126,7 @@ impl CertificateStore {
     }
 
     /// Trusts the built-in TTK root authority ([`TTK_ROOT_CA_PEM`]).
-    pub fn load_builtin_trusted_roots(&self) -> Result<(), BoxError> {
+    pub(crate) fn load_builtin_trusted_roots(&self) -> Result<(), BoxError> {
         let mut roots = RootCertStore::empty();
         for cert in CertificateDer::pem_slice_iter(TTK_ROOT_CA_PEM) {
             roots.add(cert?)?;
@@ -206,7 +206,7 @@ impl ResolvesServerCert for CertificateStore {
 
 /// Parses a request body as a certificate chain: PEM `CERTIFICATE` blocks, or one DER
 /// certificate.
-pub fn parse_chain(body: &[u8]) -> Result<Vec<CertificateDer<'static>>, CertificateError> {
+pub(crate) fn parse_chain(body: &[u8]) -> Result<Vec<CertificateDer<'static>>, CertificateError> {
     let chain = if body.trim_ascii_start().starts_with(b"-----BEGIN") {
         CertificateDer::pem_slice_iter(body)
             .collect::<Result<Vec<_>, _>>()

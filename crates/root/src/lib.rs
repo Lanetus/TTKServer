@@ -23,10 +23,9 @@ pub mod auth;
 
 use axum::routing::get;
 use axum::{Json, Router};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use ttk_core::image_trust::{parse_image_allowlist, ImageTrustStore};
-pub use ttk_core::image_trust::{RootAttestation, ROOT_ATTESTATION_PATH};
+use ttk_core::image_trust::{RootAttestation, ROOT_ATTESTATION_PATH};
 use ttk_ra_server::server::{BoxError, Listener, Server};
 
 /// Image measurements (enclave image checksums) of the verified enclave images.
@@ -36,7 +35,7 @@ const IMAGE_ALLOWLIST: &str = include_str!("image_allowlist.txt");
 #[derive(Debug, Clone)]
 pub struct FileImageTrustStore {
     /// Image measurements of the verified enclave images.
-    pub image_allowlist: Vec<Vec<u8>>,
+    image_allowlist: Vec<Vec<u8>>,
 }
 
 /// Construction from allowlist text.
@@ -89,24 +88,6 @@ impl Root {
             server,
             attestation: RootAttestation::from_image_trust_store(images),
         }
-    }
-
-    /// Attests, builds the RA-TLS identity and binds a root node to UDP `addr`.
-    ///
-    /// Must be called within a Tokio runtime. Binding port 0 picks a free port; see
-    /// [`local_addr`](Self::local_addr).
-    pub fn bind(addr: SocketAddr) -> Result<Self, BoxError> {
-        Ok(Self::new(Server::bind(addr)?))
-    }
-
-    /// Returns the address the endpoint is bound to.
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.server.local_addr()
-    }
-
-    /// Returns the wrapped attested server (e.g. its presented certificate chain).
-    pub fn server(&self) -> &Server {
-        &self.server
     }
 
     /// Serves the base routes and `GET /root-attestation` over HTTP/3 until the endpoint

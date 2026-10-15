@@ -1,36 +1,15 @@
 //! AWS Nitro Security Module (NSM) provider.
 //!
 //! Opens `/dev/nsm` with RAII ([`NsmSession`]) and produces hardware-rooted Nitro Attestation
-//! Documents, wrapped as CMWs. Document parsing helpers live in [`super::nitro_doc`].
+//! Documents, wrapped as CMWs. The CMW wrapping helper lives in [`super::nitro_doc`].
 
 use super::nitro_doc::wrap_as_cmw;
 use super::{AttestationError, AttestationProvider};
-pub use crate::AttestationParams;
+use crate::AttestationParams;
 use crate::Cmw;
-use aws_nitro_enclaves_nsm_api::api::Digest;
 use aws_nitro_enclaves_nsm_api::api::{Request, Response};
 use aws_nitro_enclaves_nsm_api::driver::{nsm_exit, nsm_init, nsm_process_request};
-use sha2::{Digest as _, Sha256};
 use std::path::Path;
-
-/// Information about the connected Nitro Security Module runtime and configuration.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NsmDescription {
-    /// Major API version of the NSM.
-    pub version_major: u16,
-    /// Minor API version of the NSM.
-    pub version_minor: u16,
-    /// Patch version of the NSM.
-    pub version_patch: u16,
-    /// Module identifier for the NSM.
-    pub module_id: String,
-    /// Maximum number of Platform Configuration Registers (PCRs).
-    pub max_pcrs: u16,
-    /// The indices of PCRs that are read-only / locked.
-    pub locked_pcrs: std::collections::BTreeSet<u16>,
-    /// Digest algorithm used for PCR values.
-    pub digest: Digest,
-}
 
 /// An open session with the Nitro Security Module (`/dev/nsm`).
 ///
@@ -59,7 +38,7 @@ impl AttestationProvider for NsmSession {
     }
 }
 
-/// NSM operations: opening a session, attestation requests and PCR management.
+/// NSM operations: opening a session and attestation requests.
 impl NsmSession {
     /// Opens a new session with the Nitro Security Module.
     ///
@@ -76,28 +55,10 @@ impl NsmSession {
         Ok(Self { fd })
     }
 
-    /// Creates an [`NsmSession`] from an existing raw file descriptor.
-    pub fn from_raw_fd(fd: i32) -> Result<Self, AttestationError> {
-        if fd < 0 {
-            return Err(AttestationError::DeviceOpenFailed(
-                "Invalid file descriptor provided".to_string(),
-            ));
-        }
-        Ok(Self { fd })
-    }
-
-    /// Returns the underlying raw file descriptor.
-    pub fn raw_fd(&self) -> i32 {
-        self.fd
-    }
-
     /// Requests an Attestation Document from the NSM.
     ///
     /// Returns the raw COSE_Sign1 formatted document bytes.
-    pub fn create_attestation(
-        &self,
-        params: &AttestationParams,
-    ) -> Result<Vec<u8>, AttestationError> {
+    fn create_attestation(&self, params: &AttestationParams) -> Result<Vec<u8>, AttestationError> {
         let request = Request::Attestation {
             user_data: params.user_data.as_ref().map(|d| d.clone().into()),
             nonce: params.nonce.as_ref().map(|n| n.clone().into()),
@@ -106,80 +67,6 @@ impl NsmSession {
 
         match nsm_process_request(self.fd, request) {
             Response::Attestation { document } => Ok(document),
-            Response::Error(err) => Err(AttestationError::Driver(format!("{err:?}"))),
-            other => Err(AttestationError::UnexpectedResponse(format!("{other:?}"))),
-        }
-    }
-
-    /// Convenience method to create an attestation document binding an ephemeral RA-TLS key.
-    ///
-    /// Supplies the SHA-256 of `spki_der`, the certificate's DER SubjectPublicKeyInfo, as
-    /// `user_data`: the binding verifiers check (not a hash of the whole certificate).
-    pub fn create_attestation_for_key(&self, spki_der: &[u8]) -> Result<Vec<u8>, AttestationError> {
-        let params = AttestationParams {
-            user_data: Some(Sha256::digest(spki_der).to_vec()),
-            ..Default::default()
-        };
-        self.create_attestation(&params)
-    }
-
-    /// Describes the connected Nitro Security Module capabilities and configuration.
-    pub fn describe_nsm(&self) -> Result<NsmDescription, AttestationError> {
-        match nsm_process_request(self.fd, Request::DescribeNSM) {
-            Response::DescribeNSM {
-                version_major,
-                version_minor,
-                version_patch,
-                module_id,
-                max_pcrs,
-                locked_pcrs,
-                digest,
-            } => Ok(NsmDescription {
-                version_major,
-                version_minor,
-                version_patch,
-                module_id,
-                max_pcrs,
-                locked_pcrs,
-                digest,
-            }),
-            Response::Error(err) => Err(AttestationError::Driver(format!("{err:?}"))),
-            other => Err(AttestationError::UnexpectedResponse(format!("{other:?}"))),
-        }
-    }
-
-    /// Requests cryptographic entropy (random bytes) from the NSM.
-    pub fn get_random(&self) -> Result<Vec<u8>, AttestationError> {
-        match nsm_process_request(self.fd, Request::GetRandom) {
-            Response::GetRandom { random } => Ok(random),
-            Response::Error(err) => Err(AttestationError::Driver(format!("{err:?}"))),
-            other => Err(AttestationError::UnexpectedResponse(format!("{other:?}"))),
-        }
-    }
-
-    /// Describes a Platform Configuration Register (PCR) at `index`.
-    /// Returns `(locked, data)`.
-    pub fn describe_pcr(&self, index: u16) -> Result<(bool, Vec<u8>), AttestationError> {
-        match nsm_process_request(self.fd, Request::DescribePCR { index }) {
-            Response::DescribePCR { lock, data } => Ok((lock, data)),
-            Response::Error(err) => Err(AttestationError::Driver(format!("{err:?}"))),
-            other => Err(AttestationError::UnexpectedResponse(format!("{other:?}"))),
-        }
-    }
-
-    /// Extends a Platform Configuration Register (PCR) at `index` with `data`.
-    pub fn extend_pcr(&self, index: u16, data: Vec<u8>) -> Result<Vec<u8>, AttestationError> {
-        match nsm_process_request(self.fd, Request::ExtendPCR { index, data }) {
-            Response::ExtendPCR { data } => Ok(data),
-            Response::Error(err) => Err(AttestationError::Driver(format!("{err:?}"))),
-            other => Err(AttestationError::UnexpectedResponse(format!("{other:?}"))),
-        }
-    }
-
-    /// Locks a Platform Configuration Register (PCR) at `index` against further modification.
-    pub fn lock_pcr(&self, index: u16) -> Result<(), AttestationError> {
-        match nsm_process_request(self.fd, Request::LockPCR { index }) {
-            Response::LockPCR => Ok(()),
             Response::Error(err) => Err(AttestationError::Driver(format!("{err:?}"))),
             other => Err(AttestationError::UnexpectedResponse(format!("{other:?}"))),
         }

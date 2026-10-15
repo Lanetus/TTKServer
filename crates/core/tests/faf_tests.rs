@@ -7,9 +7,9 @@ use ttk_core::seal::{self, NodePublicKey, NodeSecretKey, SALT_DIGITS};
 
 /// A fresh RA-TLS-style key pair, as the server generates at startup.
 fn key_pair() -> (NodeSecretKey, NodePublicKey) {
-    let secret =
-        NodeSecretKey::from_pkcs8_der(&KeyPair::generate().unwrap().serialize_der()).unwrap();
-    let public = secret.public_key();
+    let key_pair = KeyPair::generate().unwrap();
+    let secret = NodeSecretKey::from_pkcs8_der(&key_pair.serialize_der()).unwrap();
+    let public = NodePublicKey::from_sec1_bytes(key_pair.public_key_raw()).unwrap();
     (secret, public)
 }
 
@@ -42,8 +42,11 @@ fn sealed_body_carries_its_send_time_and_a_random_id() {
     assert_eq!(opened.sent_at, 1_234);
 
     let now = seal::unix_now();
-    let other =
-        seal::open_body_envelope(&secret, &seal::seal_body(&public, b"hi").unwrap()).unwrap();
+    let other = seal::open_body_envelope(
+        &secret,
+        &seal::seal_body_with_key(&public, b"hi").unwrap().0,
+    )
+    .unwrap();
     assert!(other.sent_at.abs_diff(now) <= 1);
     assert_ne!(other.message_id, opened.message_id);
 }
@@ -51,30 +54,33 @@ fn sealed_body_carries_its_send_time_and_a_random_id() {
 #[test]
 fn a_body_message_only_opens_with_its_own_key_envelope() {
     let (secret, public) = key_pair();
-    let body = seal::seal_body(&public, b"hi").unwrap();
+    let body = seal::seal_body_with_key(&public, b"hi").unwrap().0;
     // Another sealing of a different key, with the same message: authentication fails.
-    let other = seal::seal_body(&public, b"hi").unwrap();
+    let other = seal::seal_body_with_key(&public, b"hi").unwrap().0;
     let mixed = FafBody {
         key: other.key,
         message: body.message,
     };
-    assert!(seal::open_body(&secret, &mixed).is_err());
+    assert!(seal::open_body_envelope(&secret, &mixed).is_err());
 }
 
 #[test]
 fn sealed_body_opens_only_for_the_last_hop() {
     let (secret, public) = key_pair();
-    let body = seal::seal_body(&public, b"hello relay").unwrap();
-    assert_eq!(seal::open_body(&secret, &body).unwrap(), b"hello relay");
+    let body = seal::seal_body_with_key(&public, b"hello relay").unwrap().0;
+    assert_eq!(
+        seal::open_body_envelope(&secret, &body).unwrap().message,
+        b"hello relay"
+    );
 
     let (other, _) = key_pair();
-    assert!(seal::open_body(&other, &body).is_err());
+    assert!(seal::open_body_envelope(&other, &body).is_err());
     // A sealed address isn't a sealed key: the two are domain-separated.
     let swapped = FafBody {
         key: seal::seal_address(&public, "https://server.com").unwrap(),
         ..body.clone()
     };
-    assert!(seal::open_body(&secret, &swapped).is_err());
+    assert!(seal::open_body_envelope(&secret, &swapped).is_err());
     // A tampered message fails authentication.
     let mut message = body.message.into_bytes();
     message[20] = if message[20] == b'A' { b'B' } else { b'A' };
@@ -82,17 +88,17 @@ fn sealed_body_opens_only_for_the_last_hop() {
         key: body.key,
         message: String::from_utf8(message).unwrap(),
     };
-    assert!(seal::open_body(&secret, &tampered).is_err());
+    assert!(seal::open_body_envelope(&secret, &tampered).is_err());
 }
 
 #[test]
 fn response_opens_only_under_the_message_key() {
     let (secret, public) = key_pair();
     let (body, client_key) = seal::seal_body_with_key(&public, b"hi").unwrap();
-    let (node_key, message) = seal::open_body_with_key(&secret, &body).unwrap();
-    assert_eq!(message, b"hi");
+    let opened = seal::open_body_envelope(&secret, &body).unwrap();
+    assert_eq!(opened.message, b"hi");
 
-    let sealed = seal::seal_response(&node_key, b"hello:hi").unwrap();
+    let sealed = seal::seal_response(&opened.key, b"hello:hi").unwrap();
     assert_eq!(
         seal::open_response(&client_key, &sealed).unwrap(),
         b"hello:hi"
@@ -114,8 +120,11 @@ fn node_public_key_comes_from_the_certificate() {
     let secret = NodeSecretKey::from_pkcs8_der(&key_pair.serialize_der()).unwrap();
     let public = NodePublicKey::from_certificate(cert.der()).unwrap();
 
-    let body = seal::seal_body(&public, b"m").unwrap();
-    assert_eq!(seal::open_body(&secret, &body).unwrap(), b"m");
+    let body = seal::seal_body_with_key(&public, b"m").unwrap().0;
+    assert_eq!(
+        seal::open_body_envelope(&secret, &body).unwrap().message,
+        b"m"
+    );
     assert!(NodePublicKey::from_certificate(b"not a certificate").is_err());
 }
 

@@ -38,7 +38,7 @@ const TSM_PROVIDER_SEV: &str = "sev_guest";
 
 /// Environment variable naming the VCEK (or, for VLEK-signed reports, VLEK) certificate file,
 /// used when the host supplies none.
-pub const VCEK_ENV: &str = "TTK_SEV_SNP_VCEK";
+const VCEK_ENV: &str = "TTK_SEV_SNP_VCEK";
 
 /// `ATTESTATION_REPORT` layout (SEV-SNP ABI specification).
 const REPORT_LEN: usize = 0x4A0;

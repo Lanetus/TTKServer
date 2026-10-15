@@ -175,16 +175,6 @@ impl<V> ClientTable<V> {
         }
     }
 
-    /// Number of clients relayed.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether no client is relayed.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     /// The entry of `client`, if relayed.
     pub fn get(&self, client: &SocketAddr) -> Option<&ClientEntry<V>> {
         self.entries.get(client)

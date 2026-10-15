@@ -10,6 +10,7 @@ use rustls::RootCertStore;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use ttk_core::image_trust::ROOT_ATTESTATION_PATH;
 use ttk_core::{Cmw, FreshEvidence};
 use ttk_ra_client::verifier::{nitro, Policy, VerifiedEvidence};
 use ttk_ra_client::{EnclaveCertVerifier, ImageTrustStore, TrustStore, TtkClient};
@@ -19,7 +20,8 @@ use ttk_ra_server::{attestation, AttestationParams};
 use ttk_root::auth::{
     authorize, pem, verify_fresh_evidence, AuthorizeOptions, CertificateAuthority,
 };
-use ttk_root::{FileImageTrustStore, Root, ROOT_ATTESTATION_PATH};
+use ttk_root::{FileImageTrustStore, Root};
+use x509_parser::prelude::{FromDer, X509Certificate};
 
 /// Options accepting mock attestation.
 fn mock_options() -> AuthorizeOptions {
@@ -29,10 +31,46 @@ fn mock_options() -> AuthorizeOptions {
     }
 }
 
+/// A test CA: the [`CertificateAuthority`] and its certificate and key.
+struct TestCa {
+    ca: CertificateAuthority,
+    cert_der: CertificateDer<'static>,
+    cert_pem: String,
+    key_pem: String,
+}
+
+/// Issues as the wrapped [`CertificateAuthority`].
+impl std::ops::Deref for TestCa {
+    type Target = CertificateAuthority;
+
+    fn deref(&self) -> &CertificateAuthority {
+        &self.ca
+    }
+}
+
+/// A new self-signed root CA named `common_name`.
+fn test_ca(common_name: &str) -> TestCa {
+    let key = KeyPair::generate().unwrap();
+    let mut params = CertificateParams::default();
+    params.distinguished_name = DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(DnType::CommonName, common_name);
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let cert = params.self_signed(&key).unwrap();
+    let (cert_pem, key_pem) = (cert.pem(), key.serialize_pem());
+    TestCa {
+        ca: CertificateAuthority::from_pem(&cert_pem, &key_pem).unwrap(),
+        cert_der: cert.der().clone(),
+        cert_pem,
+        key_pem,
+    }
+}
+
 /// A trust store holding only `ca`.
-fn roots(ca: &CertificateAuthority) -> RootCertStore {
+fn roots(ca: &TestCa) -> RootCertStore {
     let mut roots = RootCertStore::empty();
-    roots.add(ca.cert_der().clone()).unwrap();
+    roots.add(ca.cert_der.clone()).unwrap();
     roots
 }
 
@@ -47,7 +85,7 @@ fn ra_tls_store(evidence: &[u8]) -> CertificateStore {
 
 /// Starts a root node on a free local port trusting `ca` (if any; otherwise the built-in TTK
 /// root CA); returns its address.
-fn start_node(ca: Option<&CertificateAuthority>) -> SocketAddr {
+fn start_node(ca: Option<&TestCa>) -> SocketAddr {
     start_node_with_roots(ca.map(roots))
 }
 
@@ -58,18 +96,15 @@ fn start_node_with_roots(roots: Option<RootCertStore>) -> SocketAddr {
     if let Some(roots) = roots {
         server.set_trusted_roots(roots).unwrap();
     }
+    let addr = server.local_addr().unwrap();
     let root = Root::new(server);
-    let addr = root.local_addr().unwrap();
     tokio::spawn(async move { root.serve().await.unwrap() });
     addr
 }
 
 /// Completes a QUIC handshake with the node at `addr`, validating its certificate against `ca`
 /// for [`CERT_DNS_NAME`], and returns the chain it presented.
-async fn presented_chain(
-    addr: SocketAddr,
-    ca: &CertificateAuthority,
-) -> Vec<CertificateDer<'static>> {
+async fn presented_chain(addr: SocketAddr, ca: &TestCa) -> Vec<CertificateDer<'static>> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut crypto = rustls::ClientConfig::builder()
         .with_root_certificates(roots(ca))
@@ -177,24 +212,27 @@ fn mock_policy() -> Policy {
 
 #[test]
 fn issued_certificate_replaces_the_ra_tls_certificate() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let ca = test_ca("Test CA");
     let store = ra_tls_store(b"evidence");
     store.set_trusted_roots(roots(&ca)).unwrap();
 
-    let chain = ca.issue(&store.current_chain()[0]).unwrap();
+    let chain = ca.issue(&store.current_chain()[0], "node").unwrap();
     assert_eq!(chain.len(), 1, "a root CA is not sent in the chain");
+    let (_, leaf) = X509Certificate::from_der(&chain[0]).unwrap();
+    let cn = leaf.subject().iter_common_name().next().unwrap();
+    assert_eq!(cn.as_str().unwrap(), "node");
     store.replace(chain.clone()).unwrap();
     assert_eq!(store.current_chain(), chain);
 }
 
 #[test]
 fn issued_certificate_for_another_key_is_refused() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let ca = test_ca("Test CA");
     let store = ra_tls_store(b"evidence");
     store.set_trusted_roots(roots(&ca)).unwrap();
 
     let other = ra_tls_store(b"evidence").current_chain();
-    let chain = ca.issue(&other[0]).unwrap();
+    let chain = ca.issue(&other[0], "node").unwrap();
     assert!(matches!(
         store.replace(chain),
         Err(CertificateError::Mismatch(_))
@@ -203,31 +241,31 @@ fn issued_certificate_for_another_key_is_refused() {
 
 #[test]
 fn issuing_requires_the_attestation_extension() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let ca = test_ca("Test CA");
     let key = KeyPair::generate().unwrap();
     let plain = CertificateParams::new(vec![CERT_DNS_NAME.to_string()])
         .unwrap()
         .self_signed(&key)
         .unwrap();
-    assert!(ca.issue(plain.der()).is_err());
+    assert!(ca.issue(plain.der(), "node").is_err());
 }
 
 #[test]
 fn ca_round_trips_through_pem() {
-    let generated = CertificateAuthority::generate("Test CA").unwrap();
-    let ca = CertificateAuthority::from_pem(&generated.cert_pem(), &generated.key_pem()).unwrap();
+    let generated = test_ca("Test CA");
+    let ca = CertificateAuthority::from_pem(&generated.cert_pem, &generated.key_pem).unwrap();
     let store = ra_tls_store(b"evidence");
     store.set_trusted_roots(roots(&generated)).unwrap();
     store
-        .replace(ca.issue(&store.current_chain()[0]).unwrap())
+        .replace(ca.issue(&store.current_chain()[0], "node").unwrap())
         .unwrap();
 }
 
 #[test]
 fn ca_key_must_match_its_certificate() {
-    let a = CertificateAuthority::generate("A").unwrap();
-    let b = CertificateAuthority::generate("B").unwrap();
-    assert!(CertificateAuthority::from_pem(&a.cert_pem(), &b.key_pem()).is_err());
+    let a = test_ca("A");
+    let b = test_ca("B");
+    assert!(CertificateAuthority::from_pem(&a.cert_pem, &b.key_pem).is_err());
 }
 
 #[test]
@@ -260,7 +298,7 @@ fn intermediate_ca_with_its_own_subject_sends_its_certificate() {
     trusted.add(root.der().clone()).unwrap();
     store.set_trusted_roots(trusted).unwrap();
 
-    let chain = ca.issue(&store.current_chain()[0]).unwrap();
+    let chain = ca.issue(&store.current_chain()[0], "node").unwrap();
     assert_eq!(chain.len(), 2);
     assert_eq!(&chain[1], intermediate.der());
     store.replace(chain).unwrap();
@@ -268,8 +306,8 @@ fn intermediate_ca_with_its_own_subject_sends_its_certificate() {
 
 #[test]
 fn pem_chain_parses_back() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
-    let chain = vec![ca.cert_der().clone(), ca.cert_der().clone()];
+    let ca = test_ca("Test CA");
+    let chain = vec![ca.cert_der.clone(), ca.cert_der.clone()];
     let parsed = CertificateDer::pem_slice_iter(pem(&chain).as_bytes())
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -354,7 +392,7 @@ fn node_cert_for_other_key() -> CertificateDer<'static> {
 
 #[tokio::test]
 async fn authorize_installs_the_issued_certificate() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let ca = test_ca("Test CA");
     let addr = start_node(Some(&ca));
 
     let chain = authorize(addr, "localhost", &ca, &mock_options())
@@ -377,8 +415,8 @@ async fn authorize_installs_the_issued_certificate() {
 
 #[tokio::test]
 async fn authorize_fails_when_the_node_does_not_trust_the_ca() {
-    let trusted = CertificateAuthority::generate("Trusted CA").unwrap();
-    let other = CertificateAuthority::generate("Other CA").unwrap();
+    let trusted = test_ca("Trusted CA");
+    let other = test_ca("Other CA");
     let addr = start_node(Some(&trusted));
 
     let err = authorize(addr, "localhost", &other, &mock_options())
@@ -389,7 +427,7 @@ async fn authorize_fails_when_the_node_does_not_trust_the_ca() {
 
 #[tokio::test]
 async fn authorize_fails_when_the_node_trusts_only_the_builtin_root() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let ca = test_ca("Test CA");
     let addr = start_node(None);
 
     let err = authorize(addr, "localhost", &ca, &mock_options())
@@ -400,7 +438,7 @@ async fn authorize_fails_when_the_node_trusts_only_the_builtin_root() {
 
 #[tokio::test]
 async fn authorize_fails_when_the_node_trusts_no_ca() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let ca = test_ca("Test CA");
     let addr = start_node_with_roots(Some(RootCertStore::empty()));
 
     let err = authorize(addr, "localhost", &ca, &mock_options())
@@ -411,7 +449,7 @@ async fn authorize_fails_when_the_node_trusts_no_ca() {
 
 #[tokio::test]
 async fn authorize_refuses_mock_attestation_by_default() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let ca = test_ca("Test CA");
     let addr = start_node(Some(&ca));
 
     assert!(
@@ -423,7 +461,7 @@ async fn authorize_refuses_mock_attestation_by_default() {
 
 #[tokio::test]
 async fn authorize_fails_once_the_certificate_is_replaced() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let ca = test_ca("Test CA");
     let addr = start_node(Some(&ca));
     authorize(addr, "localhost", &ca, &mock_options())
         .await
@@ -448,7 +486,7 @@ async fn connect_mock(addr: SocketAddr) -> TtkClient {
 
 #[tokio::test]
 async fn routes_unlock_only_for_connections_opened_after_the_replacement() {
-    let ca = CertificateAuthority::generate("Test CA").unwrap();
+    let ca = test_ca("Test CA");
     let addr = start_node(Some(&ca));
 
     // Self-signed: only the bootstrap routes are served.

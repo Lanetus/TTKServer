@@ -1,6 +1,6 @@
 //! The accepted enclave images (RFC 9334 reference values), fetched from the root servers.
 //!
-//! The root nodes (`ttk_root`, at [`ROOT_SERVERS`]) publish the image measurements of the
+//! The root nodes (`ttk_root`, at `ROOT_SERVERS`) publish the image measurements of the
 //! verified enclave images at [`ROOT_ATTESTATION_PATH`]. [`RootImageTrustStore`] fetches that
 //! list over RA-TLS; each root server's own attestation is checked against the signers pinned in
 //! [`RootSignerTrustStore`], since the image allowlist is not known yet.
@@ -16,16 +16,16 @@ use crate::{ImageTrustStore, RootSignerTrustStore};
 use log::{error, info, warn};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
-pub use ttk_core::image_trust::{RootAttestation, ROOT_ATTESTATION_PATH};
+use ttk_core::image_trust::{RootAttestation, ROOT_ATTESTATION_PATH};
 
 /// Boxed error type that can cross task boundaries.
 type SendError = Box<dyn std::error::Error + Send + Sync>;
 
 /// The root servers publishing the accepted enclave images, tried in order.
-pub const ROOT_SERVERS: &[&str] = &["a.root.ttk-servers.net:443", "b.root.ttk-servers.net:443"];
+const ROOT_SERVERS: &[&str] = &["a.root.ttk-servers.net:443", "b.root.ttk-servers.net:443"];
 
 /// Time allowed for fetching the image list from one root server, RA-TLS handshake included.
-pub const ROOT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+const ROOT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How [`RootImageTrustStore::builtin`] reaches the root servers; see [`set_root_transport`].
 static ROOT_TRANSPORT: Mutex<ClientTransport> = Mutex::new(ClientTransport::Udp);
@@ -72,9 +72,9 @@ impl RootImageTrustStore {
         Err(last_error)
     }
 
-    /// Fetches the list from the built-in [`ROOT_SERVERS`] over `transport`, attesting each
+    /// Fetches the list from the built-in `ROOT_SERVERS` over `transport`, attesting each
     /// root against the pinned [`RootSignerTrustStore`].
-    pub async fn fetch_builtin(transport: ClientTransport) -> Result<Self, SendError> {
+    async fn fetch_builtin(transport: ClientTransport) -> Result<Self, SendError> {
         let verifier =
             EnclaveCertVerifier::new().with_image_trust_store(RootSignerTrustStore::builtin());
         Self::fetch(ROOT_SERVERS, transport, verifier).await
@@ -103,7 +103,7 @@ impl RootImageTrustStore {
 
 /// The list published by the root servers.
 impl ImageTrustStore for RootImageTrustStore {
-    /// Fetches the list from [`ROOT_SERVERS`] (over the transport of [`set_root_transport`]),
+    /// Fetches the list from `ROOT_SERVERS` (over the transport of [`set_root_transport`]),
     /// blocking the calling thread; the fetch runs on a thread of its own, so this may be
     /// called from within a Tokio runtime.
     ///
@@ -141,7 +141,7 @@ impl ImageTrustStore for RootImageTrustStore {
 /// Time after a failed fetch before the root servers are tried again; until then, the last
 /// fetched list stays in use while it is younger than [`ROOT_IMAGES_MAX_AGE`] (otherwise the empty
 /// list rejects every non-debug image).
-pub const ROOT_FETCH_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+const ROOT_FETCH_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Age after which the fetched list is refreshed in the background, so that an image removed from
 /// the root servers' allowlist stops being accepted without restarting the process.
@@ -149,12 +149,12 @@ pub const ROOT_IMAGES_REFRESH_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// Age after which a fetched list that could not be refreshed is no longer used: the verifier
 /// then fails closed (empty list) until a fetch succeeds again.
-pub const ROOT_IMAGES_MAX_AGE: Duration = Duration::from_secs(60 * 60);
+const ROOT_IMAGES_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
 /// Longest an appraisal waits for an in-flight fetch when no usable list is held yet (cold
 /// start, or past [`ROOT_IMAGES_MAX_AGE`]). Relays avoid even this wait with
 /// [`prefetch_root_images`] at startup.
-pub const ROOT_FETCH_WAIT: Duration = Duration::from_secs(2 * ROOT_FETCH_TIMEOUT.as_secs());
+const ROOT_FETCH_WAIT: Duration = Duration::from_secs(2 * ROOT_FETCH_TIMEOUT.as_secs());
 
 /// The process-wide state of the list fetched from the root servers.
 #[derive(Debug)]

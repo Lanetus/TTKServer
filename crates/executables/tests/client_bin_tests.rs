@@ -9,6 +9,7 @@ use sha2::Digest;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Output;
+use ttk_ra_server::server::Server;
 use ttk_ra_server::terminal::Terminal;
 use ttk_relay::Relay;
 use ttk_storage::adaptors::local_memory::MemoryStore;
@@ -18,12 +19,10 @@ use ttk_storage::FileService;
 /// its address. It serves (unlocked with a test CA certificate) until the test's runtime shuts
 /// down.
 fn start_relay() -> SocketAddr {
-    let relay = Relay::bind("127.0.0.1:0".parse().unwrap())
-        .expect("relay should start")
-        .allow_mock()
-        .allow_private_next_hops();
-    relay.server().sign_for_tests().unwrap();
-    let addr = relay.local_addr().unwrap();
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).expect("relay should start");
+    server.sign_for_tests().unwrap();
+    let addr = server.local_addr().unwrap();
+    let relay = Relay::new(server).allow_mock().allow_private_next_hops();
     tokio::spawn(async move { relay.serve().await.unwrap() });
     addr
 }
@@ -31,13 +30,10 @@ fn start_relay() -> SocketAddr {
 /// Starts a file service terminal node (in-memory store, unlocked with a test CA certificate) on
 /// a free local port and returns its address.
 fn start_terminal() -> SocketAddr {
-    let terminal = Terminal::bind(
-        "127.0.0.1:0".parse().unwrap(),
-        FileService::new(MemoryStore::new()),
-    )
-    .expect("terminal should start");
-    terminal.server().sign_for_tests().unwrap();
-    let addr = terminal.local_addr().unwrap();
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).expect("terminal should start");
+    server.sign_for_tests().unwrap();
+    let addr = server.local_addr().unwrap();
+    let terminal = Terminal::new(server, FileService::new(MemoryStore::new()));
     tokio::spawn(async move { terminal.serve().await.unwrap() });
     addr
 }

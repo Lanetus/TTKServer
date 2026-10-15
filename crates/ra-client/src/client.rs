@@ -12,8 +12,8 @@
 //! - Sending HTTP/3 requests and receiving responses using `h3` and `h3-quinn`
 
 use crate::images::LazyRootImages;
-pub use crate::verifier::nitro::AttestationDocument;
-use crate::verifier::{self, ImageTrustStore, Policy, TrustStore, VerifiedEvidence};
+use crate::verifier::{self, Policy, TrustStore, VerifiedEvidence};
+use crate::ImageTrustStore;
 use axum::http::{HeaderMap, Method, Request, StatusCode, Uri};
 use bytes::Buf;
 use log::{debug, info};
@@ -24,12 +24,10 @@ use rustls::Error as RustlsError;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use ttk_core::ATTESTATION_OID;
-pub use ttk_core::PARENT_CID;
 use x509_parser::prelude::*;
 
 /// Custom certificate verifier for Remote Attestation TLS (RA-TLS).
@@ -47,10 +45,7 @@ use x509_parser::prelude::*;
 ///    [`crate::verifier`]), that the TEE is not in debug mode, and that its image measurement
 ///    ([`verifier::image_measurement`]) is in [`ImageTrustStore::image_allowlist`];
 /// 3. the binding: the evidence's report data equals the SHA-256 of the certificate's
-///    SubjectPublicKeyInfo;
-/// 4. any expected measurements configured with
-///    [`with_expected_measurement`](Self::with_expected_measurement) or
-///    [`with_expected_pcr`](Self::with_expected_pcr).
+///    SubjectPublicKeyInfo.
 ///
 /// The TLS handshake signature is verified against the same certificate, proving the peer holds
 /// the attested key.
@@ -58,7 +53,6 @@ use x509_parser::prelude::*;
 pub struct EnclaveCertVerifier {
     received_cert: Arc<Mutex<Option<CertificateDer<'static>>>>,
     verified_evidence: Arc<Mutex<Option<VerifiedEvidence>>>,
-    expected_measurements: BTreeMap<String, Vec<u8>>,
     policy: Policy,
     trust: Arc<TrustStore>,
     images: Option<Arc<dyn ImageTrustStore>>,
@@ -75,37 +69,11 @@ impl EnclaveCertVerifier {
         Self {
             received_cert: Arc::new(Mutex::new(None)),
             verified_evidence: Arc::new(Mutex::new(None)),
-            expected_measurements: BTreeMap::new(),
             policy: Policy::default(),
             trust: Arc::new(TrustStore::builtin()),
             images: None,
             algorithms: rustls::crypto::ring::default_provider().signature_verification_algorithms,
         }
-    }
-
-    /// Requires the evidence measurement `name` to equal `value`.
-    ///
-    /// See [`VerifiedEvidence::measurements`] for the names each TEE reports. Evidence that
-    /// lacks the measurement (e.g. from a different TEE) is rejected.
-    pub fn with_expected_measurement(
-        mut self,
-        name: impl Into<String>,
-        value: impl Into<Vec<u8>>,
-    ) -> Self {
-        self.expected_measurements
-            .insert(name.into().to_lowercase(), value.into());
-        self
-    }
-
-    /// Requires PCR `index` of a Nitro attestation document to equal `value`.
-    pub fn with_expected_pcr(self, index: usize, value: impl Into<Vec<u8>>) -> Self {
-        self.with_expected_measurement(format!("pcr{index}"), value)
-    }
-
-    /// Replaces the built-in vendor roots, e.g. for testing or private deployments.
-    pub fn with_trust_store(mut self, trust: TrustStore) -> Self {
-        self.trust = Arc::new(trust);
-        self
     }
 
     /// Replaces the accepted enclave images fetched from the root servers, e.g. with a list
@@ -120,16 +88,9 @@ impl EnclaveCertVerifier {
     /// Additionally trusts the mock root CA, whose private key is public, so anyone can forge
     /// such documents. They are still fully verified (COSE signature, chain up to the mock root,
     /// certificate checks, key binding, measurements), and their debug-mode PCRs are accepted;
-    /// debug-mode evidence from a real TEE still needs [`allow_debug`](Self::allow_debug).
-    /// Never enable this in production.
+    /// debug-mode evidence from a real TEE is never accepted. Never enable this in production.
     pub fn allow_mock(mut self) -> Self {
         self.policy.allow_mock = true;
-        self
-    }
-
-    /// Accepts evidence from TEEs running in debug mode, whose memory is not confidential.
-    pub fn allow_debug(mut self) -> Self {
-        self.policy.allow_debug = true;
         self
     }
 
@@ -147,12 +108,6 @@ impl EnclaveCertVerifier {
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
-    }
-
-    /// Returns the Nitro attestation document accepted during the last successful verification,
-    /// if the server attested with AWS Nitro.
-    pub fn verified_attestation(&self) -> Option<AttestationDocument> {
-        self.verified_evidence().and_then(|evidence| evidence.nitro)
     }
 
     /// Runs all certificate and attestation checks on `end_entity` at time `now`.
@@ -185,29 +140,7 @@ impl EnclaveCertVerifier {
             Some(images) => images.as_ref(),
             None => &lazy_images,
         };
-        let evidence =
-            verifier::verify_evidence(&cmw_bytes, &binding, now, &self.trust, images, self.policy)?;
-
-        // 4. Reference values
-        for (name, expected) in &self.expected_measurements {
-            match evidence.measurements.get(name) {
-                Some(actual) if actual == expected => {}
-                Some(_) => {
-                    return Err(format!(
-                        "{} does not match the expected value",
-                        name.to_uppercase()
-                    ))
-                }
-                None => {
-                    return Err(format!(
-                        "{} evidence has no measurement '{name}'",
-                        evidence.tee
-                    ))
-                }
-            }
-        }
-
-        Ok(evidence)
+        verifier::verify_evidence(&cmw_bytes, &binding, now, &self.trust, images, self.policy)
     }
 }
 
@@ -328,7 +261,7 @@ pub enum ClientTransport {
     /// From inside an enclave: through the parent's `vsock-proxy` at vsock `cid`:`port`, which
     /// sends the datagrams on to the server over UDP (see `ttk_core::vsock`). Linux only.
     Vsock {
-        /// CID of the proxy, normally [`PARENT_CID`].
+        /// CID of the proxy, normally [`ttk_core::PARENT_CID`].
         cid: u32,
         /// vsock port the proxy accepts outbound connections on.
         port: u32,
@@ -340,7 +273,7 @@ pub const MAX_RESPONSE_BODY: usize = 1024 * 1024;
 
 /// Largest response header section (HTTP/3 `SETTINGS_MAX_FIELD_SECTION_SIZE`) [`TtkClient`]
 /// accepts, in bytes.
-pub const MAX_RESPONSE_HEADERS: u64 = 16 * 1024;
+const MAX_RESPONSE_HEADERS: u64 = 16 * 1024;
 
 /// HTTP/3 client for communicating with TTKServer over QUIC.
 ///
@@ -358,15 +291,6 @@ pub struct TtkClient {
 
 /// Connecting to the server and issuing requests.
 impl TtkClient {
-    /// Connect to the TTKServer at the specified `server_addr` with the given SNI `server_name`,
-    /// accepting only genuine AWS Nitro attestation (see [`EnclaveCertVerifier::new`]).
-    pub async fn connect(
-        server_addr: SocketAddr,
-        server_name: &str,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        Self::connect_with_verifier(server_addr, server_name, EnclaveCertVerifier::new()).await
-    }
-
     /// Connect to the TTKServer using a custom attestation `verifier` policy.
     pub async fn connect_with_verifier(
         server_addr: SocketAddr,
@@ -377,7 +301,7 @@ impl TtkClient {
     }
 
     /// Connect to the TTKServer over `transport`, using a custom attestation `verifier` policy.
-    pub async fn connect_over(
+    pub(crate) async fn connect_over(
         transport: ClientTransport,
         server_addr: SocketAddr,
         server_name: &str,
@@ -464,7 +388,7 @@ impl TtkClient {
     }
 
     /// Retrieve the SHA-256 digest of the peer certificate.
-    pub fn peer_cert_sha256(&self) -> Option<[u8; 32]> {
+    fn peer_cert_sha256(&self) -> Option<[u8; 32]> {
         self.peer_cert.as_ref().map(|c| {
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&Sha256::digest(c.as_ref()));

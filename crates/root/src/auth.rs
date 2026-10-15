@@ -36,19 +36,16 @@ use x509_parser::der_parser::asn1_rs::Tag;
 use x509_parser::prelude::{FromDer, X509Certificate, X509Name};
 
 /// Path of the fresh-Evidence endpoint (body: raw nonce).
-pub const EVIDENCE_PATH: &str = "/evidence";
+const EVIDENCE_PATH: &str = "/evidence";
 
 /// Path of the certificate replacement endpoint (body: PEM chain, leaf first).
-pub const CERTIFICATE_PATH: &str = "/certificate";
+const CERTIFICATE_PATH: &str = "/certificate";
 
 /// Length of the random nonce sent to `POST /evidence`, in bytes.
-pub const NONCE_LEN: usize = 32;
+const NONCE_LEN: usize = 32;
 
-/// Common name of a CA created by [`CertificateAuthority::generate`].
-pub const DEFAULT_CA_NAME: &str = "TTK auth-test CA";
-
-/// Validity of a CA created by [`CertificateAuthority::generate`], in days.
-pub const CA_VALIDITY_DAYS: i64 = 3650;
+/// Validity of a certificate issued by [`CertificateAuthority::issue`], in days.
+const ISSUED_CERT_VALIDITY_DAYS: i64 = 365;
 
 /// A certificate authority issuing certificates for nodes' RA-TLS keys.
 pub struct CertificateAuthority {
@@ -62,30 +59,8 @@ pub struct CertificateAuthority {
     self_signed: bool,
 }
 
-/// Creation, loading and issuance.
+/// Loading and issuance.
 impl CertificateAuthority {
-    /// Creates a new self-signed root CA named `common_name`.
-    pub fn generate(common_name: &str) -> Result<Self, BoxError> {
-        let key = KeyPair::generate()?;
-        let mut params = CertificateParams::default();
-        params.distinguished_name = DistinguishedName::new();
-        params
-            .distinguished_name
-            .push(DnType::CommonName, common_name);
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-        params.not_before = OffsetDateTime::now_utc();
-        params.not_after = params.not_before + Duration::days(CA_VALIDITY_DAYS);
-        let cert = params.self_signed(&key)?;
-        let cert_der = cert.der().clone();
-        Ok(Self {
-            cert_der,
-            issuer: cert,
-            key,
-            self_signed: true,
-        })
-    }
-
     /// Loads a CA from its PEM certificate and PEM (PKCS#8) private key.
     pub fn from_pem(cert_pem: &str, key_pem: &str) -> Result<Self, BoxError> {
         let cert_der = CertificateDer::from_pem_slice(cert_pem.as_bytes())
@@ -112,30 +87,17 @@ impl CertificateAuthority {
         })
     }
 
-    /// The CA certificate, PEM-encoded.
-    pub fn cert_pem(&self) -> String {
-        pem(std::slice::from_ref(&self.cert_der))
-    }
-
-    /// The CA private key, PEM-encoded (PKCS#8).
-    pub fn key_pem(&self) -> String {
-        self.key.serialize_pem()
-    }
-
-    /// The CA certificate, DER-encoded.
-    pub fn cert_der(&self) -> &CertificateDer<'static> {
-        &self.cert_der
-    }
-
     /// Issues a certificate for the node presenting `ra_tls_cert`: same SubjectPublicKeyInfo,
-    /// same attestation extension ([`ATTESTATION_OID`]) byte for byte, same validity period,
-    /// naming [`CERT_DNS_NAME`]. Returns the chain to send to `POST /certificate` (leaf first,
-    /// then the CA certificate unless it is a root).
+    /// same attestation extension ([`ATTESTATION_OID`]) byte for byte, valid from now for
+    /// one year (`ISSUED_CERT_VALIDITY_DAYS`), naming [`CERT_DNS_NAME`], with subject common name
+    /// `common_name`. Returns the chain to send to `POST /certificate` (leaf first, then the CA
+    /// certificate unless it is a root).
     ///
     /// Only issue for a certificate whose Evidence has been appraised (see [`authorize`]).
     pub fn issue(
         &self,
         ra_tls_cert: &CertificateDer<'_>,
+        common_name: &str,
     ) -> Result<Vec<CertificateDer<'static>>, BoxError> {
         let (_, cert) = X509Certificate::from_der(ra_tls_cert)
             .map_err(|e| format!("malformed RA-TLS certificate: {e}"))?;
@@ -154,9 +116,12 @@ impl CertificateAuthority {
 
         let mut params = CertificateParams::default();
         params.distinguished_name = DistinguishedName::new();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, common_name);
         params.subject_alt_names = vec![SanType::DnsName(CERT_DNS_NAME.try_into()?)];
-        params.not_before = cert.validity().not_before.to_datetime();
-        params.not_after = cert.validity().not_after.to_datetime();
+        params.not_before = OffsetDateTime::now_utc();
+        params.not_after = params.not_before + Duration::days(ISSUED_CERT_VALIDITY_DAYS);
         params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         params
@@ -191,8 +156,8 @@ pub struct AuthorizeOptions {
 }
 
 /// Attests the node at `addr`, checks fresh Evidence for a random nonce, issues a certificate
-/// for its RA-TLS key with `ca` and installs it with `POST /certificate`. Returns the installed
-/// chain.
+/// for its RA-TLS key with `ca` and installs it with `POST /certificate`. `server_name` is the
+/// SNI server name and the issued certificate's subject common name. Returns the installed chain.
 pub async fn authorize(
     addr: SocketAddr,
     server_name: &str,
@@ -215,7 +180,7 @@ pub async fn authorize(
     let client = TtkClient::connect_with_verifier(addr, server_name, verifier.clone())
         .await
         .map_err(|e| format!("connecting to {addr}: {e}"))?;
-    let result = authorize_over(&client, &verifier, ca, &images, policy).await;
+    let result = authorize_over(&client, &verifier, ca, server_name, &images, policy).await;
     let _ = client.close().await;
     result
 }
@@ -225,6 +190,7 @@ async fn authorize_over(
     client: &TtkClient,
     verifier: &EnclaveCertVerifier,
     ca: &CertificateAuthority,
+    common_name: &str,
     images: &FileImageTrustStore,
     policy: Policy,
 ) -> Result<Vec<CertificateDer<'static>>, BoxError> {
@@ -265,7 +231,7 @@ async fn authorize_over(
         ttk_ra_client::hex_encode(&nonce)
     );
 
-    let chain = ca.issue(&ra_tls_cert)?;
+    let chain = ca.issue(&ra_tls_cert, common_name)?;
     let response = client
         .post(CERTIFICATE_PATH, pem(&chain).as_bytes())
         .await

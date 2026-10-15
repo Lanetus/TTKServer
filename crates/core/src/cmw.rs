@@ -20,14 +20,10 @@ use ciborium::value::Value;
 
 /// Conceptual-message indicator bits (`ind`) of a [`CmwRecord`].
 pub mod ind {
-    /// Reference Values.
-    pub const REFERENCE_VALUES: u8 = 1;
     /// Endorsements.
     pub const ENDORSEMENTS: u8 = 2;
     /// Evidence.
     pub const EVIDENCE: u8 = 4;
-    /// Attestation Results.
-    pub const ATTESTATION_RESULTS: u8 = 8;
 }
 
 /// Map key of a [`CmwCollection`]'s collection type.
@@ -148,7 +144,7 @@ impl Cmw {
     }
 
     /// Decodes a CMW from a CBOR value: an array is a record, a map a collection.
-    pub fn from_cbor_value(value: &Value) -> Result<Self, String> {
+    fn from_cbor_value(value: &Value) -> Result<Self, String> {
         match value {
             Value::Array(items) => record_from_items(items).map(Self::Record),
             Value::Map(map) => collection_from_map(map).map(Self::Collection),

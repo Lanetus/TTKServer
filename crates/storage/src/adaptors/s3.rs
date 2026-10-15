@@ -1,16 +1,16 @@
 //! [`BlobStore`] on an Amazon S3 bucket (feature `s3`): each blob is an object keyed by its name.
 //!
-//! Inside a Nitro Enclave there is no network: with [`VSOCK_PORT_ENV`] set, S3 is reached over
-//! vsock instead. Every host name resolves to loopback ([`LoopbackResolver`]), where a local
-//! listener on [`LOCAL_PORT`] carries each TCP connection over vsock to the parent
+//! Inside a Nitro Enclave there is no network: with `TTK_S3_VSOCK_PORT` set, S3 is reached over
+//! vsock instead. Every host name resolves to loopback (`LoopbackResolver`), where a local
+//! listener on port 443 carries each TCP connection over vsock to the parent
 //! (`ttk_ra_server::vsock::forward_tcp_to_vsock`, Linux only), whose
 //! `vsock-proxy-tcp` forwards it to the S3 endpoint. TLS still runs here, end to end with S3,
 //! and checks the endpoint's real host name.
 //!
 //! The enclave cannot reach the EC2 instance metadata service either: with
-//! [`IMDS_VSOCK_PORT_ENV`] set, credentials come from the parent instance's IAM role through a
+//! `TTK_IMDS_VSOCK_PORT` set, credentials come from the parent instance's IAM role through a
 //! second `vsock-proxy-tcp` (`--allow-imds --remote 169.254.169.254:80`), reached from loopback
-//! [`IMDS_LOCAL_PORT`]. Those credentials pass through the parent, which holds the role anyway.
+//! port 80. Those credentials pass through the parent, which holds the role anyway.
 
 use super::BlobStore;
 use crate::EvalError;
@@ -24,27 +24,27 @@ use log::info;
 use std::net::{IpAddr, Ipv4Addr};
 
 /// Environment variable naming the bucket (required by [`S3Store::from_env`]).
-pub const BUCKET_ENV: &str = "TTK_S3_BUCKET";
+const BUCKET_ENV: &str = "TTK_S3_BUCKET";
 
 /// Environment variable overriding the S3 endpoint URL (optional, e.g. an S3-compatible store);
 /// path-style addressing is used when set.
-pub const ENDPOINT_ENV: &str = "TTK_S3_ENDPOINT";
+const ENDPOINT_ENV: &str = "TTK_S3_ENDPOINT";
 
 /// Environment variable with the parent's vsock port of `vsock-proxy-tcp` (Linux, optional;
 /// conventionally `8001`). When set, S3 is reached over vsock rather than the network.
-pub const VSOCK_PORT_ENV: &str = "TTK_S3_VSOCK_PORT";
+const VSOCK_PORT_ENV: &str = "TTK_S3_VSOCK_PORT";
 
 /// Loopback TCP port carried over vsock: the HTTPS port, so endpoint URLs need no port. An
 /// endpoint ([`ENDPOINT_ENV`]) with another port would not reach the listener.
-pub const LOCAL_PORT: u16 = 443;
+const LOCAL_PORT: u16 = 443;
 
 /// Environment variable with the parent's vsock port of the `vsock-proxy-tcp` forwarding to the
 /// instance metadata service (Linux, optional; conventionally `8002`). When set, credentials
 /// come from the instance role over vsock instead of the standard AWS chain.
-pub const IMDS_VSOCK_PORT_ENV: &str = "TTK_IMDS_VSOCK_PORT";
+const IMDS_VSOCK_PORT_ENV: &str = "TTK_IMDS_VSOCK_PORT";
 
 /// Loopback TCP port carried over vsock to the instance metadata service (plain HTTP).
-pub const IMDS_LOCAL_PORT: u16 = 80;
+const IMDS_LOCAL_PORT: u16 = 80;
 
 /// A [`BlobStore`] storing each blob as an object of one S3 bucket.
 #[derive(Debug, Clone)]
@@ -55,21 +55,21 @@ pub struct S3Store {
 
 impl S3Store {
     /// Stores in `bucket` through `client`.
-    pub fn new(client: Client, bucket: impl Into<String>) -> Self {
+    fn new(client: Client, bucket: impl Into<String>) -> Self {
         Self {
             client,
             bucket: bucket.into(),
         }
     }
 
-    /// Configures from the environment: the bucket from [`BUCKET_ENV`], an optional endpoint
-    /// from [`ENDPOINT_ENV`], the transport from [`VSOCK_PORT_ENV`], and region / credentials
+    /// Configures from the environment: the bucket from `TTK_S3_BUCKET`, an optional endpoint
+    /// from `TTK_S3_ENDPOINT`, the transport from `TTK_S3_VSOCK_PORT`, and region / credentials
     /// from the standard AWS chain (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, …), or credentials from the
-    /// instance metadata service over vsock with [`IMDS_VSOCK_PORT_ENV`]. HTTPS uses rustls with
+    /// instance metadata service over vsock with `TTK_IMDS_VSOCK_PORT`. HTTPS uses rustls with
     /// `ring`.
     ///
-    /// Over vsock, starts the loopback listeners on [`LOCAL_PORT`] (and [`IMDS_LOCAL_PORT`]); must
-    /// be called within a Tokio runtime.
+    /// Over vsock, starts the loopback listeners on port 443 (and 80); must be called within a
+    /// Tokio runtime.
     pub async fn from_env() -> Result<Self, EvalError> {
         let bucket = std::env::var(BUCKET_ENV)
             .ok()
@@ -149,7 +149,7 @@ async fn start_vsock_forwarding(what: &str, _local_port: u16, _port: u32) -> Res
 /// A DNS resolver answering loopback for every name, so the S3 client connects to the local
 /// vsock forwarder while TLS still verifies the name it asked for.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct LoopbackResolver;
+struct LoopbackResolver;
 
 impl ResolveDns for LoopbackResolver {
     fn resolve_dns<'a>(&'a self, _name: &'a str) -> DnsFuture<'a> {
