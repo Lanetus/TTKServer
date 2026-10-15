@@ -110,6 +110,39 @@ async fn faf_rejects_a_body_it_cannot_decrypt() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn faf_evaluates_each_body_once_and_only_while_fresh() {
+    let terminal = start_terminal();
+    let client = connect(terminal).await;
+    let key = node_key(terminal).await;
+
+    let request = FafRequest {
+        relays: vec![],
+        body: body_for(&key),
+    };
+    assert_eq!(
+        client.post_json("/faf", &request).await.unwrap().status,
+        200
+    );
+    let replayed = client.post_json("/faf", &request).await.unwrap();
+    assert_eq!(replayed.status, 409);
+    assert_eq!(replayed.text().unwrap(), "message was already received");
+
+    let sent_at = seal::unix_now() - ttk_core::replay::FAF_FRESHNESS_WINDOW - 60;
+    let (stale, _) = seal::seal_body_at(&key, &message(), sent_at).unwrap();
+    let request = FafRequest {
+        relays: vec![],
+        body: stale,
+    };
+    let response = client.post_json("/faf", &request).await.unwrap();
+    assert_eq!(response.status, 409);
+    assert_eq!(
+        response.text().unwrap(),
+        "message is outside the freshness window"
+    );
+    client.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn faf_with_relays_left_is_rejected() {
     let terminal = start_terminal();
     let client = connect(terminal).await;

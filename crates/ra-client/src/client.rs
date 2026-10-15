@@ -115,12 +115,6 @@ impl EnclaveCertVerifier {
         self
     }
 
-    /// Like [`with_image_trust_store`](Self::with_image_trust_store), sharing `images`.
-    pub fn with_shared_image_trust_store(mut self, images: Arc<dyn ImageTrustStore>) -> Self {
-        self.images = Some(images);
-        self
-    }
-
     /// Accepts mock Nitro attestation documents (for local development only).
     ///
     /// Additionally trusts the mock root CA, whose private key is public, so anyone can forge

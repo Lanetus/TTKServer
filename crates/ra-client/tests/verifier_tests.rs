@@ -415,13 +415,26 @@ fn build_snp_report_signed(
     debug: bool,
     vlek: bool,
 ) -> Vec<u8> {
+    let policy: u64 = (1 << 17) | if debug { 1 << 19 } else { 0 };
+    build_snp_report_with(pki, report_data, measurement, policy, 0, vlek)
+}
+
+/// Builds an SEV-SNP attestation report with guest `policy`, requested from `vmpl`.
+fn build_snp_report_with(
+    pki: &AmdPki,
+    report_data: &[u8],
+    measurement: u8,
+    policy: u64,
+    vmpl: u32,
+    vlek: bool,
+) -> Vec<u8> {
     let mut report = vec![0u8; 0x4A0];
     if vlek {
         report[0x48] = 1 << 2; // FLAGS.SIGNING_KEY = VLEK
     }
     report[0..4].copy_from_slice(&3u32.to_le_bytes());
-    let policy: u64 = (1 << 17) | if debug { 1 << 19 } else { 0 };
     report[0x08..0x10].copy_from_slice(&policy.to_le_bytes());
+    report[0x30..0x34].copy_from_slice(&vmpl.to_le_bytes());
     report[0x34..0x38].copy_from_slice(&1u32.to_le_bytes());
     report[0x50..0x50 + report_data.len()].copy_from_slice(report_data);
     report[0x90..0xC0].fill(measurement);
@@ -1038,6 +1051,31 @@ fn cert_verifier_rejects_tdx_evidence_with_builtin_roots() {
         err.to_string().contains("PCK certificate chain is invalid"),
         "{err}"
     );
+}
+
+#[test]
+fn snp_guest_policy_and_vmpl_are_checked() {
+    let amd = amd_pki();
+    let trust = test_trust(&intel_pki(), &amd);
+    let binding = [0x42; 32];
+    let verify = |report: &[u8]| sev_snp::verify(report, &amd.vcek, UnixTime::now(), &trust);
+
+    let smt = (1 << 16) | (1 << 17);
+    verify(&build_snp_report_with(&amd, &binding, 7, smt, 0, false))
+        .expect("a policy with SMT allowed and VMPL 0 should verify");
+
+    let migratable = (1 << 17) | (1 << 18);
+    let err = verify(&build_snp_report_with(
+        &amd, &binding, 7, migratable, 0, false,
+    ))
+    .unwrap_err();
+    assert!(err.contains("MIGRATE_MA"), "{err}");
+
+    let err = verify(&build_snp_report_with(&amd, &binding, 7, 0, 0, false)).unwrap_err();
+    assert!(err.contains("reserved bit 17"), "{err}");
+
+    let err = verify(&build_snp_report_with(&amd, &binding, 7, 1 << 17, 1, false)).unwrap_err();
+    assert!(err.contains("VMPL 1"), "{err}");
 }
 
 #[test]

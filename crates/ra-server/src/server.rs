@@ -25,14 +25,16 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Router;
 use bytes::{Buf, Bytes, BytesMut};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use quinn::{Endpoint, ServerConfig, TransportConfig, VarInt};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
 use sha2::{Digest, Sha256};
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use time::{Duration, OffsetDateTime};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower_service::Service;
@@ -143,6 +145,26 @@ pub const REQUEST_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_
 
 /// Most QUIC connections served at once; further connection attempts are refused.
 pub const MAX_CONNECTIONS: usize = 1024;
+
+/// Most QUIC connections served at once from one IP address. Over vsock every connection
+/// has a synthetic address of its own, so the parent's `vsock-proxy` applies its own per-IP
+/// limit instead.
+pub const MAX_CONNECTIONS_PER_SOURCE: usize = 64;
+
+/// Time allowed for the QUIC handshake and HTTP/3 setup of a new connection; slower ones are
+/// dropped so that they don't hold one of the [`MAX_CONNECTIONS`].
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A connection with no request in progress for this long is closed, whether or not the peer
+/// keeps it alive at the QUIC level (PINGs). Also applies before the first request.
+pub const CONNECTION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Longest a connection is served: after this it gets an HTTP/3 GOAWAY, its requests in
+/// progress get up to [`CONNECTION_DRAIN_TIMEOUT`] to finish, and it is closed.
+pub const CONNECTION_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Time the requests in progress on a connection get to finish once it is closed for its age.
+pub const CONNECTION_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Most concurrent requests (bidirectional streams) per connection.
 pub const MAX_STREAMS_PER_CONNECTION: u32 = 16;
@@ -384,8 +406,10 @@ impl Server {
     }
 
     /// Accepts QUIC connections and serves the base routes merged with `routes` over HTTP/3
-    /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections, new ones are
-    /// refused.
+    /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections (or
+    /// [`MAX_CONNECTIONS_PER_SOURCE`] from one IP address), new ones are refused; see
+    /// [`HANDSHAKE_TIMEOUT`], [`CONNECTION_IDLE_TIMEOUT`] and [`CONNECTION_MAX_AGE`] for how long
+    /// a connection holds its place.
     pub async fn serve_with(self, routes: Router) {
         let app = build_router(
             &self.evidence,
@@ -400,8 +424,14 @@ impl Server {
             );
         }
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+        let sources = SourceConnections::new(MAX_CONNECTIONS_PER_SOURCE);
         let budget = BodyBudget::new(MAX_IN_FLIGHT_BODY_BYTES);
         while let Some(incoming) = self.endpoint.accept().await {
+            let Some(source) = sources.try_acquire(incoming.remote_address().ip()) else {
+                warn!("Refusing connection: {MAX_CONNECTIONS_PER_SOURCE} already open from its address");
+                incoming.refuse();
+                continue;
+            };
             let Ok(permit) = connections.clone().try_acquire_owned() else {
                 warn!("Refusing connection: {MAX_CONNECTIONS} already open");
                 incoming.refuse();
@@ -416,7 +446,7 @@ impl Server {
             };
             tokio::spawn(async move {
                 handle_connection(incoming, app, phase, budget).await;
-                drop(permit);
+                drop((permit, source));
             });
         }
     }
@@ -516,32 +546,168 @@ fn build_tls_config(certificates: Arc<CertificateStore>) -> Result<rustls::Serve
     Ok(config)
 }
 
-/// Drives a single QUIC connection, dispatching each HTTP/3 request to `app` with the
-/// connection's certificate `phase` attached; request bodies are reserved against `budget`.
+/// Open connections per source IP address, each limited to a maximum.
+#[derive(Debug, Clone)]
+pub struct SourceConnections {
+    counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    max: usize,
+}
+
+/// Acquiring and releasing a source's connection slots.
+impl SourceConnections {
+    /// No connections yet, at most `max` per source.
+    pub fn new(max: usize) -> Self {
+        Self {
+            counts: Arc::default(),
+            max,
+        }
+    }
+
+    /// Takes a slot for a connection from `ip`, held until the guard is dropped, or `None` if
+    /// `ip` already has the maximum.
+    pub fn try_acquire(&self, ip: IpAddr) -> Option<SourceGuard> {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        let count = counts.entry(ip).or_default();
+        if *count >= self.max {
+            return None;
+        }
+        *count += 1;
+        Some(SourceGuard {
+            sources: self.clone(),
+            ip,
+        })
+    }
+
+    /// Open connections from `ip`.
+    pub fn count(&self, ip: IpAddr) -> usize {
+        let counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        counts.get(&ip).copied().unwrap_or(0)
+    }
+}
+
+/// One connection's slot in [`SourceConnections`], released when dropped.
+#[derive(Debug)]
+pub struct SourceGuard {
+    sources: SourceConnections,
+    ip: IpAddr,
+}
+
+/// Releases the slot.
+impl Drop for SourceGuard {
+    /// Decrements the source's count, forgetting sources with none left.
+    fn drop(&mut self) {
+        let mut counts = self
+            .sources
+            .counts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = counts.get_mut(&self.ip) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
+}
+
+/// Completes the handshake of `incoming` (within [`HANDSHAKE_TIMEOUT`]) and serves its HTTP/3
+/// requests, each tagged with the certificate `phase` read before the handshake. Closes the
+/// connection once it has had no request in progress for [`CONNECTION_IDLE_TIMEOUT`], or
+/// (after draining its requests) once it is [`CONNECTION_MAX_AGE`] old.
 async fn handle_connection(
     incoming: quinn::Incoming,
     app: Router,
     phase: CertificatePhase,
     budget: BodyBudget,
 ) {
-    let conn = match incoming.await {
-        Ok(conn) => conn,
-        Err(err) => return warn!("Handshake failed: {err}"),
+    let setup = async {
+        let conn = incoming
+            .await
+            .map_err(|e| format!("handshake failed: {e}"))?;
+        let h3_conn = h3::server::builder()
+            .max_field_section_size(MAX_REQUEST_HEADERS)
+            .build::<_, axum::body::Bytes>(h3_quinn::Connection::new(conn.clone()))
+            .await
+            .map_err(|e| format!("H3 setup failed: {e}"))?;
+        Ok::<_, String>((conn, h3_conn))
+    };
+    let (conn, mut h3_conn) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, setup).await {
+        Ok(Ok(connection)) => connection,
+        Ok(Err(e)) => return warn!("{e}"),
+        Err(_) => return warn!("Handshake timed out"),
     };
 
-    let mut h3_conn = match h3::server::builder()
-        .max_field_section_size(MAX_REQUEST_HEADERS)
-        .build::<_, axum::body::Bytes>(h3_quinn::Connection::new(conn))
-        .await
-    {
-        Ok(h3) => h3,
-        Err(e) => return warn!("H3 setup failed: {e}"),
+    // Requests are counted rather than joined here, so that `accept` is only ever cancelled
+    // when the connection is being closed (cancelling it mid-headers would drop a request).
+    let started = AtomicU64::new(0);
+    let in_progress = Arc::new(AtomicUsize::new(0));
+    let idle = async {
+        loop {
+            let seen = started.load(Ordering::Relaxed);
+            tokio::time::sleep(CONNECTION_IDLE_TIMEOUT).await;
+            if in_progress.load(Ordering::Relaxed) == 0 && started.load(Ordering::Relaxed) == seen {
+                return;
+            }
+        }
     };
+    tokio::pin!(idle);
+    let max_age = tokio::time::sleep(CONNECTION_MAX_AGE);
+    tokio::pin!(max_age);
+    loop {
+        tokio::select! {
+            accepted = h3_conn.accept() => match accepted {
+                Ok(Some((mut req, stream))) => {
+                    req.extensions_mut().insert(phase);
+                    started.fetch_add(1, Ordering::Relaxed);
+                    let request = InProgress::start(&in_progress);
+                    let respond = respond(app.clone(), req, stream, budget.reservation());
+                    tokio::spawn(async move {
+                        respond.await;
+                        drop(request);
+                    });
+                }
+                // The peer closed the connection; requests in progress run to completion.
+                _ => return,
+            },
+            () = &mut idle => {
+                debug!("Closing connection: no request for {CONNECTION_IDLE_TIMEOUT:?}");
+                conn.close(VarInt::from_u32(0), b"idle");
+                return;
+            }
+            () = &mut max_age => {
+                debug!("Closing connection: open for {CONNECTION_MAX_AGE:?}");
+                // GOAWAY: the peer opens no new requests here, those in progress finish.
+                let _ = h3_conn.shutdown(0).await;
+                let drain = async {
+                    while in_progress.load(Ordering::Relaxed) > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                };
+                let _ = tokio::time::timeout(CONNECTION_DRAIN_TIMEOUT, drain).await;
+                conn.close(VarInt::from_u32(0), b"max age");
+                return;
+            }
+        }
+    }
+}
 
-    while let Ok(Some((mut req, stream))) = h3_conn.accept().await {
-        req.extensions_mut().insert(phase);
-        let app = app.clone();
-        tokio::spawn(respond(app, req, stream, budget.reservation()));
+/// One request counted as in progress on its connection until dropped.
+struct InProgress(Arc<AtomicUsize>);
+
+/// Counting.
+impl InProgress {
+    /// Counts a request as started on `count`.
+    fn start(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+        Self(count.clone())
+    }
+}
+
+/// Uncounts the request.
+impl Drop for InProgress {
+    /// Decrements the connection's count.
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

@@ -33,8 +33,11 @@ use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::Semaphore;
-use ttk_ra_client::images::set_root_transport;
+use ttk_ra_client::images::{
+    prefetch_root_images, set_root_transport, ROOT_IMAGES_REFRESH_INTERVAL,
+};
 use ttk_ra_client::seal::{self, NodeSecretKey};
 use ttk_ra_client::{classify_hop_address, connect_to_node_filtered, HopAddressClass};
 use ttk_ra_client::{parse_relay_address, parse_relay_server};
@@ -85,6 +88,11 @@ pub type RelayVerifierFactory = Arc<dyn Fn() -> EnclaveCertVerifier + Send + Syn
 /// served, over a one-off connection closed after the request.
 pub const MAX_POOLED_RELAYS: usize = 64;
 
+/// Longest a pooled next-hop connection is reused. A new connection re-attests the hop against
+/// the current accepted images, so a hop whose image was removed from the root servers'
+/// allowlist stops being used within this time.
+pub const POOLED_CONNECTION_MAX_AGE: std::time::Duration = ROOT_IMAGES_REFRESH_INTERVAL;
+
 /// Runs the relay node: attests, builds the RA-TLS identity, then serves HTTP/3 until the
 /// endpoint closes.
 ///
@@ -110,6 +118,9 @@ pub async fn run() -> Result<(), BoxError> {
     if std::env::var(ALLOW_MOCK_RELAY_ENV).is_ok_and(|v| v == "1") {
         warn!("Accepting MOCK attestation from next hops ({ALLOW_MOCK_RELAY_ENV}=1)");
         relay = relay.allow_mock();
+    } else {
+        // Fetched in the background now, so the first next-hop handshake doesn't wait for it.
+        prefetch_root_images();
     }
     if std::env::var(ALLOW_PRIVATE_NEXT_HOPS_ENV).is_ok_and(|v| v == "1") {
         warn!("Accepting loopback and private next hops ({ALLOW_PRIVATE_NEXT_HOPS_ENV}=1)");
@@ -208,23 +219,39 @@ impl Relay {
 
 /// Verified next-hop connections, keyed by `(host, port)` as given in the relay address.
 ///
-/// Entries are not kept alive: a connection closed by the QUIC idle timeout (or the peer) is
-/// dropped the next time the pool is consulted.
+/// Entries are not kept alive: a connection closed by the QUIC idle timeout (or the peer), or
+/// older than [`POOLED_CONNECTION_MAX_AGE`], is dropped the next time the pool is consulted.
 #[derive(Default)]
 struct RelayPool {
-    clients: Mutex<HashMap<(String, u16), Arc<TtkClient>>>,
+    clients: Mutex<HashMap<(String, u16), PooledClient>>,
+}
+
+/// A pooled next-hop connection and when it was attested.
+struct PooledClient {
+    client: Arc<TtkClient>,
+    attested_at: Instant,
+}
+
+/// Whether a pooled connection may still be reused.
+impl PooledClient {
+    /// Open and younger than [`POOLED_CONNECTION_MAX_AGE`].
+    fn is_usable(&self) -> bool {
+        !self.client.is_closed() && self.attested_at.elapsed() < POOLED_CONNECTION_MAX_AGE
+    }
 }
 
 /// Lookup, insertion and eviction of pooled next-hop connections.
 impl RelayPool {
-    /// Returns the open connection to `host:port`, evicting it if it has closed.
+    /// Returns the open connection to `host:port`, evicting it if it has closed or is too old.
     fn get(&self, host: &str, port: u16) -> Option<Arc<TtkClient>> {
         let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
         let key = (host.to_string(), port);
         match clients.get(&key) {
-            Some(client) if !client.is_closed() => Some(client.clone()),
+            Some(pooled) if pooled.is_usable() => Some(pooled.client.clone()),
             Some(_) => {
-                clients.remove(&key);
+                if let Some(pooled) = clients.remove(&key) {
+                    close_in_background(pooled.client);
+                }
                 None
             }
             None => None,
@@ -235,12 +262,19 @@ impl RelayPool {
     /// `false` (and pools nothing) if the pool is full of open connections to other hops.
     fn insert(&self, host: &str, port: u16, client: Arc<TtkClient>) -> bool {
         let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
-        clients.retain(|_, c| !c.is_closed());
+        clients.retain(|_, pooled| pooled.is_usable());
         let key = (host.to_string(), port);
         if clients.len() >= MAX_POOLED_RELAYS && !clients.contains_key(&key) {
             return false;
         }
-        clients.insert(key, client);
+        let attested_at = Instant::now();
+        clients.insert(
+            key,
+            PooledClient {
+                client,
+                attested_at,
+            },
+        );
         true
     }
 
@@ -248,7 +282,10 @@ impl RelayPool {
     fn remove(&self, host: &str, port: u16, client: &Arc<TtkClient>) {
         let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
         let key = (host.to_string(), port);
-        if clients.get(&key).is_some_and(|c| Arc::ptr_eq(c, client)) {
+        if clients
+            .get(&key)
+            .is_some_and(|pooled| Arc::ptr_eq(&pooled.client, client))
+        {
             clients.remove(&key);
         }
     }

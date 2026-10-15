@@ -209,3 +209,74 @@ mod tcp {
         assert_eq!(parse_tcp_proxy_args(&args(&["-h"]), no_env).unwrap(), None);
     }
 }
+
+mod client_table {
+    use std::net::SocketAddr;
+    use std::sync::atomic::Ordering;
+    use ttk_core::vsock_proxy::{confirms_client, ClientRefused, ClientTable};
+
+    fn addr(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn only_short_header_packets_confirm_a_client() {
+        assert!(confirms_client(&[0x40, 1, 2]));
+        assert!(!confirms_client(&[0xC0, 0, 0, 0, 1])); // long header (Initial)
+        assert!(!confirms_client(&[0xF0, 0, 0, 0, 1])); // long header (Retry)
+        assert!(!confirms_client(&[]));
+    }
+
+    #[test]
+    fn clients_per_ip_are_limited() {
+        let mut table = ClientTable::new(10, 2);
+        table.insert(addr("192.0.2.1:1000"), ()).unwrap();
+        table.insert(addr("192.0.2.1:1001"), ()).unwrap();
+        assert_eq!(
+            table.insert(addr("192.0.2.1:1002"), ()).unwrap_err(),
+            ClientRefused::PerIpLimit
+        );
+        // Re-admitting a known client replaces it rather than counting twice.
+        let (id, _) = table.insert(addr("192.0.2.1:1001"), ()).unwrap();
+        assert_eq!(table.len(), 2);
+        assert!(table.remove(&addr("192.0.2.1:1001"), id));
+        table.insert(addr("192.0.2.1:1002"), ()).unwrap();
+        table.insert(addr("192.0.2.2:1000"), ()).unwrap();
+    }
+
+    #[test]
+    fn a_full_table_evicts_the_oldest_unconfirmed_client() {
+        let mut table = ClientTable::new(3, 10);
+        let (_, first) = table.insert(addr("192.0.2.1:1"), ()).unwrap();
+        table.insert(addr("192.0.2.2:1"), ()).unwrap();
+        table.insert(addr("192.0.2.3:1"), ()).unwrap();
+        first.store(true, Ordering::Relaxed);
+
+        // The first client is confirmed, so the second (oldest unconfirmed) makes room.
+        table.insert(addr("192.0.2.4:1"), ()).unwrap();
+        assert!(table.get(&addr("192.0.2.1:1")).is_some());
+        assert!(table.get(&addr("192.0.2.2:1")).is_none());
+        assert_eq!(table.len(), 3);
+
+        for (_, entry) in [addr("192.0.2.3:1"), addr("192.0.2.4:1")]
+            .iter()
+            .map(|a| (a, table.get(a).unwrap()))
+        {
+            entry.confirmed.store(true, Ordering::Relaxed);
+        }
+        assert_eq!(
+            table.insert(addr("192.0.2.5:1"), ()).unwrap_err(),
+            ClientRefused::Full
+        );
+    }
+
+    #[test]
+    fn a_stale_relay_task_does_not_remove_its_replacement() {
+        let mut table = ClientTable::new(3, 3);
+        let (old, _) = table.insert(addr("192.0.2.1:1"), ()).unwrap();
+        let (new, _) = table.insert(addr("192.0.2.1:1"), ()).unwrap();
+        assert!(!table.remove(&addr("192.0.2.1:1"), old));
+        assert!(table.remove(&addr("192.0.2.1:1"), new));
+        assert!(table.is_empty());
+    }
+}
