@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.6] - 2026-10-15
+
+### Changed
+- **BREAKING:** the sealed `/faf` body format changed: the plaintext now carries a send time and random message id and is bound to the key envelope. Clients, relays and terminals must be upgraded together.
+- `POST /faf` on the terminal refuses stale or repeated bodies with `409` (and `503` when the replay guard is full); through a relay this surfaces as `502`.
+- Relay next hops and `vsock-proxy` outbound destinations are limited to port 443 or >= 1024; `192.88.99.0/24` and `fec0::/10` are forbidden.
+- Relay `502 relay failed` answers are delayed by at least 1 s plus jitter; decryption failures return one fixed `400` text (`invalid body` / `invalid relay`) and next-hop addresses are logged only at debug level.
+- The accepted-image list is fetched on a background thread, refreshed every 10 minutes and dropped after 1 hour without a successful refresh; the `relay` prefetches it at startup and re-attests pooled next hops after 10 minutes.
+- `ttk-ra-client`: removed `EnclaveCertVerifier::with_shared_image_trust_store`.
+- Node binaries (`relay`, `terminal`, `root`, ...) refuse the mock attestation provider unless `TTK_ATTESTATION=mock`; mock document code is compiled only with the `mock` feature.
+- Server connections get a per-IP cap, a handshake timeout, an idle timeout and a maximum age; TLS session resumption and QUIC datagrams are disabled; certificate expiry is warned about and then errors.
+- `vsock-proxy` caps clients per IP, times out flows without a completed handshake sooner and evicts the oldest unconfirmed client when full; DNS resolve requests for names whose last label is not alphabetic are refused.
+- `vsock-proxy-tcp --allow-imds` forwards only the IMDSv2 token request and role credential requests.
+- Enclave systemd units are sandboxed; `--debug-mode` in `TTK_ENCLAVE_EXTRA_ARGS` now requires `TTK_ALLOW_DEBUG_MODE=1`.
+
+### Security
+- SEV-SNP appraisal rejects guest policies allowing `MIGRATE_MA`, requires reserved policy bit 17 and VMPL 0.
+- TDX/SGX (`dcap`) appraisal requires the Intel SGX extensions on the PCK leaf, and non-debug TDs must have `SEPT_VE_DISABLE`.
+- `/faf` replay protection and bounded connection handling as described above.
+
 ## [6.5.5] - 2026-10-14
 
 ### Fixed
@@ -533,7 +553,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.5.5...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.5.6...HEAD
+[6.5.6]: https://github.com/Lanetus/TTKServer/compare/v6.5.5...v6.5.6
 [6.5.5]: https://github.com/Lanetus/TTKServer/compare/v6.5.4...v6.5.5
 [6.5.4]: https://github.com/Lanetus/TTKServer/compare/v6.5.3...v6.5.4
 [6.5.3]: https://github.com/Lanetus/TTKServer/compare/v6.5.2...v6.5.3
