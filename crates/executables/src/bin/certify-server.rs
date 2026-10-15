@@ -31,7 +31,7 @@ If neither CA file exists, a new root CA is created and written to them.
 TTK_ALLOW_MOCK_ATTESTATION=1 accepts mock attestation (local development).
 
 Example:
-  TTK_USE_UDP=1 cargo run --bin root
+  TTK_ATTESTATION=mock TTK_USE_UDP=1 cargo run --bin root
   TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --bin certify-server -- \
     --ca-cert TTK_Root_CA.pem --ca-key TTK_Root_CA.key
 

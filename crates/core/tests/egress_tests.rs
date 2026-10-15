@@ -69,7 +69,6 @@ fn public_unicast_addresses_are_public() {
             "64:ff9a::1",
             "fbff::1",
             "fe7f::1",
-            "fec0::1",
             "::ffff:8.8.8.8",
         ],
     );
@@ -129,6 +128,7 @@ fn reserved_documentation_and_ec2_service_addresses_are_forbidden() {
         &[
             "192.0.0.1",
             "192.0.2.1",
+            "192.88.99.1",
             "198.51.100.1",
             "203.0.113.7",
             "198.18.0.1",
@@ -136,6 +136,8 @@ fn reserved_documentation_and_ec2_service_addresses_are_forbidden() {
             "240.0.0.1",
             "254.255.255.255",
             "2001:db8::1",
+            "fec0::1",
+            "feff::1",
             "100::1",
             "fd00:ec2::254",
             "fd00:ec2::253",
@@ -158,4 +160,15 @@ fn ipv6_addresses_embedding_an_ipv4_address_are_forbidden() {
             "::8.8.8.8",
         ],
     );
+}
+
+#[test]
+fn only_port_443_and_unprivileged_ports_are_permitted() {
+    use ttk_core::egress::is_permitted_hop_port;
+    for port in [443, 1024, 4433, 65535] {
+        assert!(is_permitted_hop_port(port), "{port}");
+    }
+    for port in [0, 22, 25, 53, 80, 1023] {
+        assert!(!is_permitted_hop_port(port), "{port}");
+    }
 }

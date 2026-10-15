@@ -17,6 +17,7 @@ ttk-ra-server.workspace = true
 ttk-ra-client.workspace = true
 axum.workspace = true
 log.workspace = true
+ring.workspace = true
 tokio.workspace = true
 
 [features]

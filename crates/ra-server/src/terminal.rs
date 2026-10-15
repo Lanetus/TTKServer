@@ -108,7 +108,11 @@ async fn faf<E: Evaluator>(
     // Never log the key or the message itself, only its size.
     let opened = match seal::open_body_envelope(&state.node_key, &request.body) {
         Ok(opened) => opened,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid body: {e}")),
+        Err(e) => {
+            // One answer for every decryption failure: no oracle on which step failed.
+            debug!("/faf: can't open the body: {e}");
+            return (StatusCode::BAD_REQUEST, "invalid body".to_string());
+        }
     };
     let accepted = state
         .replay

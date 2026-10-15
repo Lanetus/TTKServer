@@ -43,8 +43,8 @@ Shared dependency versions live in `[workspace.dependencies]` in the root `Cargo
 ## Running locally
 
 ```sh
-TTK_USE_UDP=1 RUST_LOG=info cargo run --bin relay                              # UDP :4433
-TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 RUST_LOG=info cargo run --bin s3-server --features s3
+TTK_ATTESTATION=mock TTK_USE_UDP=1 RUST_LOG=info cargo run --bin relay                              # UDP :4433
+TTK_ATTESTATION=mock TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 RUST_LOG=info cargo run --bin s3-server --features s3
 cargo run --bin client -- <args>                                             # see parse_client_args() in crates/executables/src/bin/client.rs
 ```
 

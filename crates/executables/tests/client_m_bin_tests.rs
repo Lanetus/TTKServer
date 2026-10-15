@@ -148,6 +148,7 @@ async fn echo_binary_attests_and_keeps_faf_locked_until_certified() {
     let echo_addr = free_udp_addr();
     let _echo = tokio::process::Command::new(env!("CARGO_BIN_EXE_echo"))
         .env("TTK_USE_UDP", "1")
+        .env("TTK_ATTESTATION", "mock")
         .env("TTK_LISTEN_ADDR", echo_addr.to_string())
         .env_remove("RUST_LOG")
         .kill_on_drop(true)

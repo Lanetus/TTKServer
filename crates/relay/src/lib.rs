@@ -38,6 +38,7 @@ use tokio::sync::Semaphore;
 use ttk_ra_client::images::{
     prefetch_root_images, set_root_transport, ROOT_IMAGES_REFRESH_INTERVAL,
 };
+use ttk_ra_client::is_permitted_hop_port;
 use ttk_ra_client::seal::{self, NodeSecretKey};
 use ttk_ra_client::{classify_hop_address, connect_to_node_filtered, HopAddressClass};
 use ttk_ra_client::{parse_relay_address, parse_relay_server};
@@ -72,6 +73,17 @@ pub const MAX_CONCURRENT_FORWARDS: usize = 256;
 /// Body of every `502` answer: forwarding failures are not told apart, so that a client can't
 /// learn from them whether an address resolves, listens or attests.
 const RELAY_FAILED: &str = "relay failed";
+
+/// Body of every `400` answer for a relay entry that can't be opened or parsed: the reason is
+/// only logged (at debug level), so the answer is no decryption oracle.
+const INVALID_RELAY: &str = "invalid relay";
+
+/// Earliest a `502` is answered after the request arrived (plus up to [`FAILURE_JITTER`]), so
+/// that a refused address can't be told from an unreachable one by timing.
+pub const FAILURE_MIN_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Upper bound of the random delay added to [`FAILURE_MIN_DELAY`].
+pub const FAILURE_JITTER: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Environment variable that overrides the default outbound vsock port `5001`.
 pub const OUTBOUND_VSOCK_PORT_ENV: &str = "TTK_OUTBOUND_VSOCK_PORT";
@@ -309,19 +321,28 @@ struct FafState {
 /// Egress policy for next hops.
 impl FafState {
     /// Returns whether a next hop may be contacted at `addr`, logging why not.
+    ///
+    /// The address itself is only logged at debug level: next hops are private to the route.
     fn may_contact(&self, addr: &SocketAddr) -> bool {
+        if !is_permitted_hop_port(addr.port()) {
+            warn!("/faf: refusing a next hop on a well-known port other than 443");
+            debug!("/faf: refused next hop {addr}");
+            return false;
+        }
         match classify_hop_address(addr.ip()) {
             HopAddressClass::Public => true,
             HopAddressClass::Private if self.allow_private_next_hops => true,
             HopAddressClass::Private => {
                 warn!(
-                    "/faf: refusing next hop {addr}: loopback/private address \
+                    "/faf: refusing a loopback/private next hop \
                      (set {ALLOW_PRIVATE_NEXT_HOPS_ENV}=1 to allow)"
                 );
+                debug!("/faf: refused next hop {addr}");
                 false
             }
             HopAddressClass::Forbidden => {
-                warn!("/faf: refusing next hop {addr}: link-local, multicast or unspecified");
+                warn!("/faf: refusing a link-local, multicast or unspecified next hop");
+                debug!("/faf: refused next hop {addr}");
                 false
             }
         }
@@ -333,11 +354,12 @@ impl FafState {
 /// sealed response (see [`seal::seal_response`]) travels back along the route unchanged.
 ///
 /// Answers `400` for a request without relays (only a terminal node is a last hop), with more
-/// than [`MAX_RELAYS`], or with a relay entry that can't be opened or parsed; `503` while
-/// [`MAX_CONCURRENT_FORWARDS`] requests are already being forwarded; and `502 relay failed` if
-/// the next hop has a refused address, can't be reached, fails attestation, answers anything
-/// but `200` (or a non-UTF-8 body) or doesn't answer within [`RELAY_TIMEOUT`]. The reason is
-/// only logged.
+/// than [`MAX_RELAYS`], or `400 invalid relay` for a relay entry that can't be opened or parsed;
+/// `503` while [`MAX_CONCURRENT_FORWARDS`] requests are already being forwarded; and
+/// `502 relay failed` if the next hop has a refused address or port, can't be reached, fails
+/// attestation, answers anything but `200` (or a non-UTF-8 body) or doesn't answer within
+/// [`RELAY_TIMEOUT`], no sooner than [`FAILURE_MIN_DELAY`] (plus jitter) after the request
+/// arrived. The reason is only logged, and the next hop's address only at debug level.
 async fn faf(
     State(state): State<FafState>,
     Json(request): Json<FafRequest>,
@@ -364,38 +386,44 @@ async fn faf(
 
     let (host, port) = match next_hop(&state.node_key, &relays.remove(0)) {
         Ok(target) => target,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid relay: {e}")),
+        Err(e) => {
+            debug!("/faf: invalid relay entry: {e}");
+            return (StatusCode::BAD_REQUEST, INVALID_RELAY.to_string());
+        }
     };
     let forward = FafRequest { relays, body };
 
+    let started = tokio::time::Instant::now();
     let relayed =
         tokio::time::timeout(RELAY_TIMEOUT, forward_to_hop(&state, &host, port, &forward)).await;
-    match relayed {
+    let failure = match relayed {
         Ok(Ok(response)) if response.status == StatusCode::OK => {
             match String::from_utf8(response.body) {
                 Ok(body) => {
-                    info!("/faf: relayed to {host}:{port}");
-                    (StatusCode::OK, body)
+                    info!("/faf: relayed a request");
+                    debug!("/faf: relayed to {host}:{port}");
+                    return (StatusCode::OK, body);
                 }
-                Err(_) => {
-                    warn!("/faf: relay {host}:{port} answered a non-UTF-8 body");
-                    (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
-                }
+                Err(_) => "the next hop answered a non-UTF-8 body".to_string(),
             }
         }
-        Ok(Ok(response)) => {
-            warn!("/faf: relay {host}:{port} answered {}", response.status);
-            (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
-        }
-        Ok(Err(e)) => {
-            warn!("/faf: relaying to {host}:{port} failed: {e}");
-            (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
-        }
-        Err(_) => {
-            warn!("/faf: relay {host}:{port} timed out");
-            (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
-        }
-    }
+        Ok(Ok(response)) => format!("the next hop answered {}", response.status),
+        Ok(Err(e)) => format!("relaying failed: {e}"),
+        Err(_) => "the next hop timed out".to_string(),
+    };
+    warn!("/faf: {failure}");
+    debug!("/faf: failed next hop {host}:{port}");
+    tokio::time::sleep_until(started + FAILURE_MIN_DELAY + failure_jitter()).await;
+    (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
+}
+
+/// A random delay up to [`FAILURE_JITTER`].
+fn failure_jitter() -> std::time::Duration {
+    let mut bytes = [0u8; 4];
+    // Without randomness the floor alone still hides most of the timing difference.
+    let _ = ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes);
+    let millis = u64::from(u32::from_le_bytes(bytes)) % (FAILURE_JITTER.as_millis() as u64 + 1);
+    std::time::Duration::from_millis(millis)
 }
 
 /// Reads the next hop's host and port from `relay`, opening it with `node_key` if encrypted.

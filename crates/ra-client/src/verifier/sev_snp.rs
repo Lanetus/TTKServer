@@ -18,6 +18,11 @@
 //! memory) is rejected, as is a report requested from a VMPL other than 0 (the guest's most
 //! privileged level; otherwise a more privileged component could have shaped it). The debug bit
 //! is reported as [`VerifiedEvidence::debug`] and left to the verifier's policy.
+//!
+//! The `measurement` (launch digest) covers only what was measured at launch: the firmware, and
+//! the kernel, initrd and command line only if the guest boots them directly with their hashes
+//! in the measured firmware (SEV "kernel hashes"). An image allowlisted by `measurement` must be
+//! launched that way, or the rest of its boot chain is unmeasured.
 
 use super::{field, le_u64, verify_ecdsa, TeeKind, TrustStore, VerifiedEvidence};
 use rustls_pki_types::UnixTime;

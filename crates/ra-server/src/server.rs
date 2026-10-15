@@ -143,6 +143,15 @@ pub const MAX_REQUEST_HEADERS: u64 = 16 * 1024;
 /// Time allowed for a request's body to arrive; slower requests get `408 Request Timeout`.
 pub const REQUEST_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Validity of the RA-TLS certificate, in days. A CA-issued replacement copies it, and the
+/// certificate can't be renewed in place: the node must be restarted (new key and Evidence) and
+/// authorized again before it expires, or clients stop connecting. The server logs a warning
+/// [`CERT_EXPIRY_WARNING`] before, and an error once it has expired.
+pub const CERT_VALIDITY_DAYS: i64 = 30;
+
+/// How long before the RA-TLS certificate expires the server starts warning about it.
+pub const CERT_EXPIRY_WARNING: std::time::Duration = std::time::Duration::from_secs(3 * 24 * 3600);
+
 /// Most QUIC connections served at once; further connection attempts are refused.
 pub const MAX_CONNECTIONS: usize = 1024;
 
@@ -299,6 +308,7 @@ pub struct Server {
     provider: Arc<dyn AttestationProvider>,
     private_key: Zeroizing<Vec<u8>>,
     certificates: Arc<CertificateStore>,
+    expires_at: std::time::SystemTime,
 }
 
 /// Setup and serving.
@@ -316,11 +326,25 @@ impl Server {
     /// Attests, builds the RA-TLS identity and listens on `listener`, logging where.
     ///
     /// Must be called within a Tokio runtime.
+    ///
+    /// Refuses to serve mock Evidence unless it was asked for explicitly
+    /// (`TTK_ATTESTATION=mock`, see [`attestation::PROVIDER_ENV`]): a node binary that finds no
+    /// TEE hardware fails rather than silently falling back to mock attestation.
     pub fn listen(listener: Listener) -> Result<Self, BoxError> {
         let server = match listener {
             Listener::Udp(addr) => Self::bind(addr)?,
             Listener::Vsock(port) => bind_vsock(port)?,
         };
+        let mock_requested =
+            std::env::var(attestation::PROVIDER_ENV).is_ok_and(|name| name == "mock");
+        if server.provider_name() == "mock" && !mock_requested {
+            return Err(format!(
+                "no TEE hardware detected: refusing to serve mock attestation \
+                 (set {}=mock for local development)",
+                attestation::PROVIDER_ENV
+            )
+            .into());
+        }
         match listener {
             Listener::Udp(_) => info!(
                 "Server listening on UDP {} (QUIC/HTTP/3)",
@@ -357,7 +381,18 @@ impl Server {
             provider: identity.provider,
             private_key: identity.private_key,
             certificates: identity.certificates,
+            expires_at: identity.expires_at,
         }
+    }
+
+    /// When the RA-TLS certificate expires (see [`CERT_VALIDITY_DAYS`]).
+    pub fn certificate_expiry(&self) -> std::time::SystemTime {
+        self.expires_at
+    }
+
+    /// Name of the attestation provider in use (e.g. `"aws-nitro"`, `"mock"`).
+    pub fn provider_name(&self) -> &'static str {
+        self.provider.name()
     }
 
     /// Returns the address the endpoint is bound to.
@@ -423,6 +458,7 @@ impl Server {
                  replaced, so only POST /evidence and POST /certificate will be served"
             );
         }
+        tokio::spawn(watch_certificate_expiry(self.expires_at));
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let sources = SourceConnections::new(MAX_CONNECTIONS_PER_SOURCE);
         let budget = BodyBudget::new(MAX_IN_FLIGHT_BODY_BYTES);
@@ -462,6 +498,8 @@ struct Identity {
     private_key: Zeroizing<Vec<u8>>,
     /// The presented certificate chain, replaceable by `POST /certificate`.
     certificates: Arc<CertificateStore>,
+    /// When the certificate expires.
+    expires_at: std::time::SystemTime,
 }
 
 /// Attests and builds the RA-TLS identity: an ephemeral key pair and Evidence bound to it,
@@ -483,7 +521,11 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
         .to_cbor_bytes();
     info!("Wrapped Evidence as a CMW ({} bytes).", cmw_bytes.len());
 
+    let expires_at = std::time::SystemTime::now()
+        + std::time::Duration::from_secs(CERT_VALIDITY_DAYS as u64 * 24 * 3600);
     let certificates = Arc::new(build_certificate_store(&key_pair, &cmw_bytes)?);
+    // The key now lives only in the zeroized buffer above and the TLS config.
+    drop(key_pair);
     certificates.load_builtin_trusted_roots()?;
     let tls_config = build_tls_config(certificates.clone())?;
     let evidence = Arc::new(Evidence { cmw: cmw_bytes });
@@ -499,6 +541,7 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
             provider,
             private_key,
             certificates,
+            expires_at,
         },
     ))
 }
@@ -513,12 +556,16 @@ fn key_binding(public_key_der: &[u8]) -> AttestationParams {
 }
 
 /// QUIC limits for each connection: [`MAX_STREAMS_PER_CONNECTION`] concurrent requests sharing
-/// a [`CONNECTION_RECEIVE_WINDOW`], so one peer can't make the server buffer unbounded data.
+/// a [`CONNECTION_RECEIVE_WINDOW`], and no QUIC datagrams, so one peer can't make the server
+/// buffer unbounded data.
 fn transport_config() -> TransportConfig {
     let mut transport = TransportConfig::default();
     transport
         .max_concurrent_bidi_streams(VarInt::from_u32(MAX_STREAMS_PER_CONNECTION))
-        .receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW));
+        .receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW))
+        // HTTP/3 doesn't use QUIC datagrams: don't buffer any (quinn's default would reserve
+        // about 1.25 MB per connection outside the BodyBudget).
+        .datagram_receive_buffer_size(None);
     transport
 }
 
@@ -528,7 +575,8 @@ fn build_certificate_store(
     key_pair: &KeyPair,
     cmw_bytes: &[u8],
 ) -> Result<CertificateStore, BoxError> {
-    let cert_pem = create_cert_with_attestation(key_pair, CERT_DNS_NAME, cmw_bytes, 30)?;
+    let cert_pem =
+        create_cert_with_attestation(key_pair, CERT_DNS_NAME, cmw_bytes, CERT_VALIDITY_DAYS)?;
     let cert = CertificateDer::from_pem_slice(cert_pem.as_bytes())?;
     // Borrowed from a buffer that is zeroized on drop, so no copy of the key outlives this call.
     let key_der = Zeroizing::new(key_pair.serialize_der());
@@ -543,7 +591,31 @@ fn build_tls_config(certificates: Arc<CertificateStore>) -> Result<rustls::Serve
         .with_cert_resolver(certificates);
     // Enable ALPN for HTTP/3 ("h3")
     config.alpn_protocols = vec![b"h3".to_vec()];
+    // No session resumption: every connection gets a full handshake, so it is served the
+    // certificate presented at that moment and its `CertificatePhase` matches what the client
+    // verified.
+    config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    config.send_tls13_tickets = 0;
     Ok(config)
+}
+
+/// Logs a warning [`CERT_EXPIRY_WARNING`] before `expires_at`, and an error once it has passed:
+/// from then on clients reject the node until it is restarted and authorized again.
+async fn watch_certificate_expiry(expires_at: std::time::SystemTime) {
+    let until = |at: std::time::SystemTime| {
+        at.duration_since(std::time::SystemTime::now())
+            .unwrap_or_default()
+    };
+    let warn_at = expires_at
+        .checked_sub(CERT_EXPIRY_WARNING)
+        .unwrap_or(expires_at);
+    tokio::time::sleep(until(warn_at)).await;
+    warn!(
+        "The RA-TLS certificate expires in {} hours: restart and re-authorize this node",
+        until(expires_at).as_secs() / 3600
+    );
+    tokio::time::sleep(until(expires_at)).await;
+    error!("The RA-TLS certificate has expired: clients will refuse this node until it is restarted and re-authorized");
 }
 
 /// Open connections per source IP address, each limited to a maximum.

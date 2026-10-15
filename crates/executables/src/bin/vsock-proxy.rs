@@ -16,7 +16,8 @@
 //!   datagrams are sent to that UDP address from a socket of its own, with replies framed back.
 //!   Destinations that are link-local (including the instance metadata and DNS endpoints),
 //!   multicast, broadcast or unspecified are refused, and loopback or private ones are refused
-//!   unless `--allow-private` is given (see `ttk_core::egress::classify_hop_address`).
+//!   unless `--allow-private` is given (see `ttk_core::egress::classify_hop_address`), and so are
+//!   well-known ports other than 443 (`ttk_core::egress::is_permitted_hop_port`).
 //!   A connection may instead start with a resolve request: the enclave has no DNS, so the host
 //!   name is looked up here and the addresses the egress policy permits are answered, after
 //!   which the connection closes (`ttk_core::vsock::answer_resolve`).
@@ -79,7 +80,7 @@ mod imp {
     use tokio::sync::mpsc::{self, error::TrySendError};
     use tokio::time::Instant;
     use tokio_vsock::{SockAddr, VsockListener, VsockStream};
-    use ttk_core::egress::{classify_hop_address, HopAddressClass};
+    use ttk_core::egress::{classify_hop_address, is_permitted_hop_port, HopAddressClass};
     use ttk_core::vsock::OutboundRequest;
     use ttk_core::vsock::{answer_resolve, read_frame, read_outbound_request, write_frame};
     use ttk_core::vsock_proxy::{confirms_client, ClientTable};
@@ -281,8 +282,11 @@ mod imp {
         }
     }
 
-    /// Whether the egress policy lets the enclave reach `destination`.
+    /// Whether the egress policy lets the enclave reach `destination` (address and port).
     fn permitted(destination: &SocketAddr, allow_private: bool) -> bool {
+        if !is_permitted_hop_port(destination.port()) {
+            return false;
+        }
         match classify_hop_address(destination.ip()) {
             HopAddressClass::Public => true,
             HopAddressClass::Private => allow_private,

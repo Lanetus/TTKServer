@@ -6,7 +6,7 @@
 //! reserved and documentation addresses, and IPv6 addresses that tunnel or translate to an
 //! arbitrary IPv4 address (NAT64, 6to4, Teredo, IPv4-compatible), are always refused, and
 //! loopback or private ones are allowed only where the nodes run on a private network or in
-//! local development.
+//! local development. Destination ports are limited too ([`is_permitted_hop_port`]).
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -22,7 +22,8 @@ pub enum HopAddressClass {
     /// An address never valid as a next hop: unspecified, "this network" (`0/8`), link-local
     /// (`169.254/16`, including cloud metadata and DNS endpoints, and `fe80::/10`), the EC2
     /// IPv6 service endpoints (`fd00:ec2::/64`, including [`IMDS_V6`]), multicast, broadcast,
-    /// IETF protocol assignments (`192.0.0/24`), documentation (`192.0.2/24`, `198.51.100/24`,
+    /// IETF protocol assignments (`192.0.0/24`), the deprecated 6to4 relay anycast
+    /// (`192.88.99/24`) and IPv6 site-local (`fec0::/10`) ranges, documentation (`192.0.2/24`, `198.51.100/24`,
     /// `203.0.113/24`, `2001:db8::/32`), benchmarking (`198.18/15`), reserved (`240/4`),
     /// discard-only (`100::/64`), and IPv6 addresses that reach an arbitrary IPv4 address:
     /// NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`), 6to4 (`2002::/16`), Teredo (`2001::/32`) and
@@ -40,6 +41,13 @@ pub fn classify_hop_address(ip: IpAddr) -> HopAddressClass {
             None => classify_v6(v6),
         },
     }
+}
+
+/// Whether a peer-chosen destination may use `port`: any port from 1024 up, and 443. Other
+/// well-known ports (SSH, DNS, SMTP, …) and port 0 are refused, so that relays can't be used to
+/// reach or probe those services.
+pub fn is_permitted_hop_port(port: u16) -> bool {
+    port == 443 || port >= 1024
 }
 
 /// The EC2 instance metadata service (IMDS) address over IPv4.
@@ -63,7 +71,7 @@ fn classify_v4(ip: Ipv4Addr) -> HopAddressClass {
     let [a, b, c, _] = ip.octets();
     let reserved = matches!(
         (a, b, c),
-        (192, 0, 0) | (192, 0, 2) | (198, 51, 100) | (203, 0, 113)
+        (192, 0, 0) | (192, 0, 2) | (192, 88, 99) | (198, 51, 100) | (203, 0, 113)
     ) || (a == 198 && (b & 0xfe) == 18)
         || a >= 240;
     if ip.is_unspecified()
@@ -95,6 +103,7 @@ fn classify_v6(ip: Ipv6Addr) -> HopAddressClass {
     if ip.is_unspecified()
         || ip.is_multicast()
         || (first & 0xffc0) == 0xfe80
+        || (first & 0xffc0) == 0xfec0
         || ipv4_compatible
         || nat64
         || tunnel
