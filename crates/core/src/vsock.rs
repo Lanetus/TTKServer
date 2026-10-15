@@ -265,7 +265,7 @@ pub const MAX_RESOLVED_ADDRESSES: usize = 16;
 
 /// Time allowed for the parent to answer a resolve request ([`resolve_via_parent`]), and for
 /// the parent's own lookup ([`answer_resolve`]).
-pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What an outbound vsock connection asks the parent's `vsock-proxy` for, read by
 /// [`read_outbound_request`].
@@ -284,7 +284,11 @@ pub enum OutboundRequest {
 }
 
 /// Checks that `host` is a DNS host name a resolve request may carry: 1 to
-/// [`MAX_HOST_NAME_LEN`] ASCII letters, digits, `-` and `.`, with no empty label.
+/// [`MAX_HOST_NAME_LEN`] ASCII letters, digits, `-` and `.`, with no empty label, and a last
+/// label starting with a letter (so it is never a numeric IPv4 address in disguise).
+///
+/// The parent resolves the names: it learns which next hops a relay contacts and may answer
+/// anything. Its answers are egress-filtered again, and RA-TLS still authenticates the hop.
 pub fn check_host_name(host: &str) -> io::Result<()> {
     let valid = !host.is_empty()
         && host.len() <= MAX_HOST_NAME_LEN
@@ -294,7 +298,14 @@ pub fn check_host_name(host: &str) -> io::Result<()> {
                 && label
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        });
+        })
+        // The last label must start with a letter: otherwise `getaddrinfo` may read the name as
+        // a numeric IPv4 address (`2130706433`, `0x7f000001`, `127.1`).
+        && host
+            .trim_end_matches('.')
+            .rsplit('.')
+            .next()
+            .is_some_and(|label| label.starts_with(|c: char| c.is_ascii_alphabetic()));
     if valid {
         Ok(())
     } else {
@@ -371,7 +382,7 @@ pub async fn read_resolved<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<V
     Ok(addresses)
 }
 
-/// Parent side of a resolve request: looks `host` up (within [`RESOLVE_TIMEOUT`]) and answers
+/// Parent side of a resolve request: looks `host` up (within `RESOLVE_TIMEOUT`) and answers
 /// the addresses `permit` accepts (the egress policy), deduplicated, on `writer`. A failed
 /// lookup is answered with no addresses. Returns how many addresses were answered.
 pub async fn answer_resolve<W: AsyncWrite + Unpin>(
@@ -399,7 +410,7 @@ pub async fn answer_resolve<W: AsyncWrite + Unpin>(
 }
 
 /// Enclave side of a resolve request over `stream` (any connection to the parent's
-/// `vsock-proxy`): sends the request and reads the answer, within [`RESOLVE_TIMEOUT`].
+/// `vsock-proxy`): sends the request and reads the answer, within `RESOLVE_TIMEOUT`.
 pub async fn resolve_over<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     host: &str,

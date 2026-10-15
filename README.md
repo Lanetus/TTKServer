@@ -73,7 +73,7 @@ The enclave images build only their node binary (`relay`, `s3-server` or `root`)
 
 ```sh
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4433 cargo run --release --bin relay
-TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --release --bin s3-server --features s3
+TTK_ATTESTATION=mock TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --release --bin s3-server --features s3
 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4455 cargo run --release --bin root
 ```
 
@@ -167,12 +167,12 @@ Each node also limits what a peer can make it hold: 1024 connections, 16 concurr
 The `client` binary (crate `ttk-executables`) is for testing only. It routes a message through two relay nodes to a terminal node: it connects to the entry relay (`--addr`) over HTTP/3 verifying its certificate's embedded Evidence, attests the second relay (`--relay`) and the terminal (`--terminal`), seals each hop's address to the relay that reads it and the message to the terminal, sends the request to the entry relay with `POST /faf` and prints the response:
 
 ```sh
-# Two relays and a terminal (they fall back to mock attestation off-TEE), with
+# Two relays and a terminal (mock attestation off-TEE, asked for with TTK_ATTESTATION=mock), with
 # TTK_ALLOW_MOCK_ATTESTATION=1 and TTK_ALLOW_PRIVATE_NEXT_HOPS=1 on the relays so they accept
 # mock next hops on 127.0.0.1:
-TTK_ALLOW_MOCK_ATTESTATION=1 TTK_ALLOW_PRIVATE_NEXT_HOPS=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4433 cargo run --bin relay
-TTK_ALLOW_MOCK_ATTESTATION=1 TTK_ALLOW_PRIVATE_NEXT_HOPS=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4434 cargo run --bin relay
-TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --bin s3-server --features s3
+TTK_ATTESTATION=mock TTK_ALLOW_MOCK_ATTESTATION=1 TTK_ALLOW_PRIVATE_NEXT_HOPS=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4433 cargo run --bin relay
+TTK_ATTESTATION=mock TTK_ALLOW_MOCK_ATTESTATION=1 TTK_ALLOW_PRIVATE_NEXT_HOPS=1 TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4434 cargo run --bin relay
+TTK_ATTESTATION=mock TTK_S3_BUCKET=<bucket> AWS_REGION=<region> TTK_USE_UDP=1 TTK_LISTEN_ADDR=127.0.0.1:4444 cargo run --bin s3-server --features s3
 # Then the client, accepting mock Evidence, uploading a file to the terminal:
 TTK_ALLOW_MOCK_ATTESTATION=1 cargo run --bin client -- --addr 127.0.0.1:4433 --relay 127.0.0.1:4434 --terminal 127.0.0.1:4444 --upload ./report.pdf
 ```
@@ -186,8 +186,8 @@ To embed the client in your own Relying Party, use `ttk_ra_client`:
 ```rust
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 
-let verifier = EnclaveCertVerifier::new()
-    .with_expected_pcr(0, expected_pcr0); // reference values for your enclave image
+// Accepts only enclave images published by the root servers
+let verifier = EnclaveCertVerifier::new();
 let mut client = TtkClient::connect_with_verifier(addr, "localhost", verifier).await?;
 let resp = client.get("/evidence.cmw").await?;
 ```

@@ -12,6 +12,9 @@
 // 2. In `main.rs`, you would use `use ttk_ra_server::*`.
 // 3. In this test file, you would use `use ttk_ra_server::*`.
 
+#[path = "support/nitro_doc.rs"]
+mod nitro_doc;
+
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request as HyperRequest, Response as HyperResponse, StatusCode};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -120,10 +123,9 @@ async fn test_handle_request_not_found() {
 
 #[test]
 fn test_ttk_ra_server_nitro_and_cmw_integration() {
+    use nitro_doc::parse_attestation_document;
     use sha2::{Digest as ShaDigest, Sha256};
-    use ttk_ra_server::attestation::nitro_doc::{
-        create_mock_attestation_document, parse_attestation_document, wrap_as_cmw,
-    };
+    use ttk_ra_server::attestation::nitro_doc::{create_mock_attestation_document, wrap_as_cmw};
     use ttk_ra_server::AttestationParams;
 
     // 1. Generate RA-TLS identity

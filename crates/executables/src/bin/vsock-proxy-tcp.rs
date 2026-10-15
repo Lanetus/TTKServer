@@ -10,7 +10,9 @@
 //! `--allow-private`) is never connected to (see `ttk_core::egress::classify_hop_address`).
 //! The one exception is the EC2 instance metadata service with `--allow-imds`, so a second
 //! instance (`--remote 169.254.169.254:80`, vsock port `8002`) can give the enclave the instance
-//! role's credentials.
+//! role's credentials. In that mode the bytes are not opaque: each HTTP request is checked
+//! (`ttk_core::vsock_proxy_tcp::check_imds_request`) and only IMDSv2 token and role credential
+//! requests are forwarded; anything else closes the connection.
 //!
 //! The proxy only moves opaque bytes: TLS terminates inside the enclave, end to end with the
 //! remote. It runs in the foreground; run it as a daemon under a service manager such as
@@ -63,9 +65,11 @@ mod imp {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
     use tokio_vsock::{SockAddr, VsockListener, VsockStream};
     use ttk_core::egress::{classify_hop_address, is_instance_metadata_address, HopAddressClass};
+    use ttk_core::vsock_proxy_tcp::check_imds_request;
 
     /// `VMADDR_CID_ANY`: accept vsock connections addressed to any CID of this instance.
     const VMADDR_CID_ANY: u32 = u32::MAX;
@@ -131,12 +135,51 @@ mod imp {
             Ok(Err(e)) => return warn!("To {}: {e}", config.remote),
             Err(_) => return warn!("To {}: connect timed out", config.remote),
         };
+        if config.allow_imds {
+            return forward_imds(vsock, tcp, &config.remote).await;
+        }
         match tokio::io::copy_bidirectional(&mut vsock, &mut tcp).await {
             Ok((sent, received)) => debug!(
                 "To {} closed ({sent} bytes out, {received} bytes in)",
                 config.remote
             ),
             Err(e) => debug!("To {} closed: {e}", config.remote),
+        }
+    }
+
+    /// Forwards the enclave's requests to the instance metadata service one at a time, after
+    /// [`check_imds_request`]; responses pass back unchanged. A refused or malformed request
+    /// closes the connection.
+    async fn forward_imds(vsock: VsockStream, mut tcp: TcpStream, remote: &str) {
+        let (mut from_enclave, mut to_enclave) = vsock.split();
+        let (mut from_imds, mut to_imds) = tcp.split();
+        let responses = tokio::io::copy(&mut from_imds, &mut to_enclave);
+        let requests = async {
+            let mut buffered = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                match check_imds_request(&buffered) {
+                    Ok(Some(head_len)) => {
+                        to_imds.write_all(&buffered[..head_len]).await?;
+                        buffered.drain(..head_len);
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!("To {remote}: refusing a request: {e}");
+                        return Ok(());
+                    }
+                }
+                let read = from_enclave.read(&mut chunk).await?;
+                if read == 0 {
+                    return Ok::<_, std::io::Error>(());
+                }
+                buffered.extend_from_slice(&chunk[..read]);
+            }
+        };
+        tokio::select! {
+            result = requests => if let Err(e) = result { debug!("To {remote} closed: {e}") },
+            result = responses => if let Err(e) = result { debug!("To {remote} closed: {e}") },
         }
     }
 

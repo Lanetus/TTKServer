@@ -7,13 +7,15 @@ use test_ca::SignForTests;
 
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
+use ttk_core::file_message::{FileRequest, FileResponse};
 use ttk_ra_client::seal::{self, NodePublicKey};
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
 use ttk_ra_client::{FafBody, FafRelay, FafRequest};
+use ttk_ra_server::server::Server;
 use ttk_ra_server::terminal::Terminal;
 use ttk_relay::{Relay, MAX_RELAYS};
 use ttk_storage::adaptors::local_memory::MemoryStore;
-use ttk_storage::{FileRequest, FileResponse, FileService};
+use ttk_storage::FileService;
 
 /// Starts a relay node that accepts mock-attested next hops on local addresses, and returns its
 /// address.
@@ -24,9 +26,10 @@ fn start_relay() -> SocketAddr {
 /// Starts a relay node configured by `configure`, unlocked with a test CA certificate, on a free
 /// local port and returns its address.
 fn start(configure: impl FnOnce(Relay) -> Relay) -> SocketAddr {
-    let relay = configure(Relay::bind("127.0.0.1:0".parse().unwrap()).unwrap());
-    relay.server().sign_for_tests().unwrap();
-    let addr = relay.local_addr().unwrap();
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    server.sign_for_tests().unwrap();
+    let addr = server.local_addr().unwrap();
+    let relay = configure(Relay::new(server));
     tokio::spawn(async move { relay.serve().await.unwrap() });
     addr
 }
@@ -34,13 +37,10 @@ fn start(configure: impl FnOnce(Relay) -> Relay) -> SocketAddr {
 /// Starts a file service terminal node (in-memory store, unlocked with a test CA certificate) on
 /// a free local port and returns its address.
 fn start_terminal() -> SocketAddr {
-    let terminal = Terminal::bind(
-        "127.0.0.1:0".parse().unwrap(),
-        FileService::new(MemoryStore::new()),
-    )
-    .unwrap();
-    terminal.server().sign_for_tests().unwrap();
-    let addr = terminal.local_addr().unwrap();
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    server.sign_for_tests().unwrap();
+    let addr = server.local_addr().unwrap();
+    let terminal = Terminal::new(server, FileService::new(MemoryStore::new()));
     tokio::spawn(async move { terminal.serve().await.unwrap() });
     addr
 }
@@ -90,7 +90,7 @@ fn expected_reply() -> Vec<u8> {
 }
 
 fn body_for(last: &NodePublicKey) -> FafBody {
-    seal::seal_body(last, &message()).unwrap()
+    seal::seal_body_with_key(last, &message()).unwrap().0
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -198,19 +198,25 @@ async fn faf_reuses_the_next_hop_connection_across_sequential_and_concurrent_req
     let terminal = start_terminal();
     let client = connect(start_relay()).await;
     let terminal_key = node_key(terminal).await;
-    let req = FafRequest {
+    // A fresh body each time: the terminal evaluates each body only once.
+    let req = || FafRequest {
         relays: vec![plain(terminal)],
         body: body_for(&terminal_key),
     };
 
     // The first request pools the next-hop connection; the later ones reuse it.
     for _ in 0..3 {
-        let response = client.post_json("/faf", &req).await.unwrap();
+        let response = client.post_json("/faf", &req()).await.unwrap();
         assert_eq!(response.status, 200, "{:?}", response.text());
     }
     // Concurrent requests share the pooled connection as separate HTTP/3 streams.
-    let send = || client.post_json("/faf", &req);
-    let (a, b, c, d) = tokio::join!(send(), send(), send(), send());
+    let (r1, r2, r3, r4) = (req(), req(), req(), req());
+    let (a, b, c, d) = tokio::join!(
+        client.post_json("/faf", &r1),
+        client.post_json("/faf", &r2),
+        client.post_json("/faf", &r3),
+        client.post_json("/faf", &r4)
+    );
     for response in [a, b, c, d] {
         assert_eq!(response.unwrap().status, 200);
     }
@@ -387,8 +393,9 @@ async fn oversized_request_bodies_get_413() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn faf_is_locked_until_the_certificate_is_replaced() {
-    let node = Relay::bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let addr = node.local_addr().unwrap();
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = server.local_addr().unwrap();
+    let node = Relay::new(server);
     tokio::spawn(async move { node.serve().await.unwrap() });
     let client = connect(addr).await;
     assert_eq!(client.post("/faf", b"{}").await.unwrap().status, 404);

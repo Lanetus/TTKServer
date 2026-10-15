@@ -13,7 +13,8 @@
 //! [`router`](crate::router).
 //!
 //! A terminal never forwards: it accepts only requests with no relays left, and is the only node
-//! that can decrypt their body, which is sealed to its RA-TLS key.
+//! that can decrypt their body, which is sealed to its RA-TLS key. Each body is evaluated at most
+//! once: stale or repeated bodies are refused (see [`ttk_core::replay`]).
 //!
 //! What the terminal does with a message is its [`Evaluator`], such as `ttk-storage`'s
 //! `FileService` (bin `s3-server`) storing and retrieving files.
@@ -25,9 +26,9 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
 use log::{debug, warn};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use ttk_core::faf::{FafRequest, FAF_PATH};
+use ttk_core::replay::{ReplayError, ReplayGuard};
 use ttk_core::seal::{self, NodeSecretKey};
 
 /// A terminal node: an attested [`Server`] that also receives `POST /faf`, answered by its
@@ -37,10 +38,11 @@ pub struct Terminal<E> {
     evaluator: E,
 }
 
-/// The `/faf` handler state: the node's RA-TLS key and the evaluator.
+/// The `/faf` handler state: the node's RA-TLS key, the evaluator and the ids of recent bodies.
 struct FafState<E> {
     node_key: NodeSecretKey,
     evaluator: E,
+    replay: ReplayGuard,
 }
 
 /// Setup and serving.
@@ -48,25 +50,6 @@ impl<E: Evaluator> Terminal<E> {
     /// Wraps `server`, answering `/faf` messages with `evaluator`.
     pub fn new(server: Server, evaluator: E) -> Self {
         Self { server, evaluator }
-    }
-
-    /// Attests, builds the RA-TLS identity and binds a terminal node answering with `evaluator`
-    /// to UDP `addr`.
-    ///
-    /// Must be called within a Tokio runtime. Binding port 0 picks a free port; see
-    /// [`local_addr`](Self::local_addr).
-    pub fn bind(addr: SocketAddr, evaluator: E) -> Result<Self, BoxError> {
-        Ok(Self::new(Server::bind(addr)?, evaluator))
-    }
-
-    /// Returns the address the endpoint is bound to.
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.server.local_addr()
-    }
-
-    /// Returns the wrapped attested server (e.g. its presented certificate chain).
-    pub fn server(&self) -> &Server {
-        &self.server
     }
 
     /// Serves the base routes and `POST /faf` over HTTP/3 until the endpoint closes.
@@ -77,6 +60,7 @@ impl<E: Evaluator> Terminal<E> {
             .with_state(Arc::new(FafState {
                 node_key,
                 evaluator: self.evaluator,
+                replay: ReplayGuard::new(),
             }));
         self.server.serve_with(routes).await;
         Ok(())
@@ -88,7 +72,8 @@ impl<E: Evaluator> Terminal<E> {
 /// can read it.
 ///
 /// Answers `400` for a request with relays left (a terminal never forwards) or a body that
-/// can't be decrypted, and `500` if the evaluator fails.
+/// can't be decrypted, `409` for a body sealed outside the freshness window or already
+/// received, `503` if too many recent bodies are remembered, and `500` if the evaluator fails.
 async fn faf<E: Evaluator>(
     State(state): State<Arc<FafState<E>>>,
     Json(request): Json<FafRequest>,
@@ -101,10 +86,29 @@ async fn faf<E: Evaluator>(
     }
 
     // Never log the key or the message itself, only its size.
-    let (key, message) = match seal::open_body_with_key(&state.node_key, &request.body) {
+    let opened = match seal::open_body_envelope(&state.node_key, &request.body) {
         Ok(opened) => opened,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid body: {e}")),
+        Err(e) => {
+            // One answer for every decryption failure: no oracle on which step failed.
+            debug!("/faf: can't open the body: {e}");
+            return (StatusCode::BAD_REQUEST, "invalid body".to_string());
+        }
     };
+    let accepted = state
+        .replay
+        .accept(opened.message_id, opened.sent_at, seal::unix_now());
+    match accepted {
+        Ok(()) => {}
+        Err(e @ ReplayError::Busy) => {
+            warn!("/faf: refusing a body: {e}");
+            return (StatusCode::SERVICE_UNAVAILABLE, e.to_string());
+        }
+        Err(e) => {
+            warn!("/faf: refusing a body: {e}");
+            return (StatusCode::CONFLICT, e.to_string());
+        }
+    }
+    let seal::OpenedBody { key, message, .. } = opened;
     debug!("/faf: delivered a {}-byte message", message.len());
 
     let response = match state.evaluator.eval(message).await {

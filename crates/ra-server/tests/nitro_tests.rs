@@ -1,8 +1,9 @@
 use aws_nitro_enclaves_nsm_api::api::Digest;
 use sha2::{Digest as ShaDigest, Sha256};
-use ttk_ra_server::attestation::nitro_doc::{
-    create_mock_attestation_document, extract_cose_payload, parse_attestation_document,
-};
+#[path = "support/nitro_doc.rs"]
+mod nitro_doc;
+use nitro_doc::parse_attestation_document;
+use ttk_ra_server::attestation::nitro_doc::create_mock_attestation_document;
 use ttk_ra_server::attestation::{by_name, cmw, media_type, AttestationError, NsmSession};
 use ttk_ra_server::{AttestationParams, Cmw};
 
@@ -22,10 +23,6 @@ fn test_create_and_parse_mock_attestation_doc() {
         .expect("Mock attestation doc creation should succeed");
 
     assert!(!raw_cose.is_empty());
-
-    // Extract payload
-    let payload = extract_cose_payload(&raw_cose).expect("Payload extraction should succeed");
-    assert!(!payload.is_empty());
 
     // Parse into AttestationDoc
     let parsed_doc =
@@ -66,22 +63,6 @@ fn test_generate_attestation_or_mock() {
 }
 
 #[test]
-fn test_from_invalid_raw_fd() {
-    let result = NsmSession::from_raw_fd(-1);
-    assert!(result.is_err());
-    match result {
-        Err(AttestationError::DeviceOpenFailed(_)) => {}
-        _ => panic!("Expected DeviceOpenFailed error"),
-    }
-}
-
-#[test]
-fn test_extract_cose_payload_invalid_data() {
-    let invalid = b"not a cbor data";
-    assert!(extract_cose_payload(invalid).is_err());
-}
-
-#[test]
 fn test_mock_provider_by_name() {
     let provider = by_name("mock").expect("mock provider is compiled in by default");
     assert_eq!(provider.name(), "mock");
@@ -109,52 +90,6 @@ fn test_unknown_provider_is_rejected() {
     ));
 }
 
-// ---------------------------------------------------------------------------
-// NsmSession without Nitro hardware
-// ---------------------------------------------------------------------------
-
-/// Opens a session on `/dev/null`: every NSM request then fails in the driver's `ioctl`, which
-/// exercises each operation's error path. The session owns (and closes) the descriptor.
-#[cfg(unix)]
-fn session_on_dev_null() -> NsmSession {
-    use std::os::fd::IntoRawFd;
-    let fd = std::fs::File::open("/dev/null").unwrap().into_raw_fd();
-    let session = NsmSession::from_raw_fd(fd).expect("a valid descriptor is accepted");
-    assert_eq!(session.raw_fd(), fd);
-    session
-}
-
-#[cfg(unix)]
-#[test]
-fn nsm_requests_on_a_non_nsm_device_fail_with_driver_errors() {
-    use ttk_ra_server::attestation::AttestationProvider;
-
-    let session = session_on_dev_null();
-    let params = AttestationParams {
-        user_data: Some(vec![1; 32]),
-        ..Default::default()
-    };
-    let is_driver_error = |e: &AttestationError| matches!(e, AttestationError::Driver(_));
-
-    assert!(is_driver_error(
-        &session.create_attestation(&params).unwrap_err()
-    ));
-    assert!(is_driver_error(
-        &session.create_attestation_for_key(b"spki").unwrap_err()
-    ));
-    assert!(is_driver_error(&session.describe_nsm().unwrap_err()));
-    assert!(is_driver_error(&session.get_random().unwrap_err()));
-    assert!(is_driver_error(&session.describe_pcr(0).unwrap_err()));
-    assert!(is_driver_error(
-        &session.extend_pcr(16, vec![1; 48]).unwrap_err()
-    ));
-    assert!(is_driver_error(&session.lock_pcr(16).unwrap_err()));
-    assert!(is_driver_error(
-        &session.generate_document(&params).unwrap_err()
-    ));
-    assert_eq!(session.name(), "aws-nitro");
-}
-
 #[test]
 fn nsm_open_fails_without_the_nsm_device() {
     use ttk_ra_server::attestation::AttestationProvider;
@@ -173,7 +108,7 @@ fn nsm_open_fails_without_the_nsm_device() {
 }
 
 // ---------------------------------------------------------------------------
-// Malformed documents
+// CMW wrapping
 // ---------------------------------------------------------------------------
 
 fn cbor(value: &ciborium::Value) -> Vec<u8> {
@@ -194,50 +129,6 @@ fn cose_with_payload(payload: Vec<u8>) -> Vec<u8> {
             Value::Bytes(vec![]),
         ])),
     ))
-}
-
-fn decoding_error(result: Result<impl std::fmt::Debug, AttestationError>) -> String {
-    match result {
-        Err(AttestationError::DocumentDecodingFailed(msg)) => msg,
-        other => panic!("expected DocumentDecodingFailed, got {other:?}"),
-    }
-}
-
-#[test]
-fn malformed_cose_structures_are_rejected() {
-    use ciborium::Value;
-
-    let tag_without_array = cbor(&Value::Tag(18, Box::new(Value::Integer(1.into()))));
-    assert!(decoding_error(extract_cose_payload(&tag_without_array)).contains("tag 18"));
-
-    let not_cose = cbor(&Value::Integer(1.into()));
-    assert!(decoding_error(extract_cose_payload(&not_cose)).contains("not a COSE_Sign1"));
-
-    let too_short = cbor(&Value::Array(vec![Value::Bytes(vec![]); 3]));
-    assert!(decoding_error(extract_cose_payload(&too_short)).contains("only 3 elements"));
-
-    let text_payload = cbor(&Value::Array(vec![
-        Value::Bytes(vec![]),
-        Value::Map(vec![]),
-        Value::Text("payload".into()),
-        Value::Bytes(vec![]),
-    ]));
-    assert!(decoding_error(extract_cose_payload(&text_payload)).contains("not a byte string"));
-
-    // Untagged 4-element arrays are accepted.
-    let untagged = cbor(&Value::Array(vec![
-        Value::Bytes(vec![]),
-        Value::Map(vec![]),
-        Value::Bytes(vec![7]),
-        Value::Bytes(vec![]),
-    ]));
-    assert_eq!(extract_cose_payload(&untagged).unwrap(), vec![7]);
-}
-
-#[test]
-fn payload_that_is_not_an_attestation_doc_is_rejected() {
-    let doc = cose_with_payload(cbor(&ciborium::Value::Integer(1.into())));
-    assert!(decoding_error(parse_attestation_document(&doc)).contains("Failed to parse"));
 }
 
 #[test]

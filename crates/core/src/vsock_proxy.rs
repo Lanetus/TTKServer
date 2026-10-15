@@ -1,6 +1,12 @@
 //! Configuration of the parent-instance `vsock-proxy` binary: its usage text, defaults and
-//! argument parsing (flags over `TTK_*` environment variables). Platform independent; the relay
-//! itself is Linux only.
+//! argument parsing (flags over `TTK_*` environment variables), and its table of inbound clients
+//! ([`ClientTable`]). Platform independent; the relay itself is Linux only.
+
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Usage text of the `vsock-proxy` binary.
 pub const RELAY_USAGE: &str = "\
@@ -98,5 +104,154 @@ fn parse_port(port: Option<String>, default: u32) -> Result<u32, String> {
             .parse()
             .map_err(|e| format!("invalid vsock port {port:?}: {e}")),
         None => Ok(default),
+    }
+}
+
+/// Most inbound clients relayed at once from one IP address; datagrams opening further flows
+/// from it are dropped.
+pub const MAX_CLIENTS_PER_IP: usize = 64;
+
+/// Longest an inbound client is relayed before it is [confirmed](confirms_client): a flow from
+/// a spoofed source address never completes its QUIC handshake, so it is dropped after this
+/// rather than the regular idle timeout.
+pub const UNCONFIRMED_CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whether `datagram`, sent by the enclave to a client, confirms that client's address: a QUIC
+/// short-header (1-RTT) packet, which the enclave only sends once the handshake has completed,
+/// i.e. once the client has proven it receives what is sent to its address (RFC 9000, section
+/// 17.3: the header form bit is 0).
+pub fn confirms_client(datagram: &[u8]) -> bool {
+    datagram.first().is_some_and(|first| first & 0x80 == 0)
+}
+
+/// Why [`ClientTable::insert`] refused a new client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientRefused {
+    /// [`MAX_CLIENTS_PER_IP`] clients from the same IP address are already relayed.
+    PerIpLimit,
+    /// The table is full of confirmed clients.
+    Full,
+}
+
+/// One relayed client: its relay task's id, its datagram queue `value`, and whether the enclave
+/// has [confirmed](confirms_client) it.
+#[derive(Debug)]
+pub struct ClientEntry<V> {
+    /// Id of the relay task serving the client.
+    pub id: u64,
+    /// The client's queue toward the enclave.
+    pub value: V,
+    /// Set once the enclave confirms the client's address.
+    pub confirmed: Arc<AtomicBool>,
+}
+
+/// The inbound clients relayed at once, keyed by UDP source address.
+///
+/// Bounded in total (`capacity`) and per IP address (`per_ip`). When full, a new client evicts
+/// the oldest client the enclave has not confirmed yet, so source addresses spoofed to fill the
+/// table can't lock out clients that complete their handshake.
+#[derive(Debug)]
+pub struct ClientTable<V> {
+    entries: HashMap<SocketAddr, ClientEntry<V>>,
+    per_ip_counts: HashMap<IpAddr, usize>,
+    /// Clients in insertion order, for eviction; entries since removed or confirmed are skipped.
+    order: VecDeque<(SocketAddr, u64)>,
+    capacity: usize,
+    per_ip: usize,
+    next_id: u64,
+}
+
+/// Lookup, admission and removal of clients.
+impl<V> ClientTable<V> {
+    /// An empty table of at most `capacity` clients, `per_ip` of them per IP address.
+    pub fn new(capacity: usize, per_ip: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            per_ip_counts: HashMap::new(),
+            order: VecDeque::new(),
+            capacity,
+            per_ip,
+            next_id: 0,
+        }
+    }
+
+    /// The entry of `client`, if relayed.
+    pub fn get(&self, client: &SocketAddr) -> Option<&ClientEntry<V>> {
+        self.entries.get(client)
+    }
+
+    /// Admits `client` with queue `value`, replacing any entry it had. Returns the new entry's
+    /// id and confirmation flag. Evicts the oldest unconfirmed client if the table is full.
+    pub fn insert(
+        &mut self,
+        client: SocketAddr,
+        value: V,
+    ) -> Result<(u64, Arc<AtomicBool>), ClientRefused> {
+        if let Some(id) = self.entries.get(&client).map(|entry| entry.id) {
+            self.remove(&client, id);
+        }
+        if self.per_ip_counts.get(&client.ip()).copied().unwrap_or(0) >= self.per_ip {
+            return Err(ClientRefused::PerIpLimit);
+        }
+        if self.entries.len() >= self.capacity && !self.evict_unconfirmed() {
+            return Err(ClientRefused::Full);
+        }
+        self.next_id += 1;
+        let id = self.next_id;
+        let confirmed = Arc::new(AtomicBool::new(false));
+        self.entries.insert(
+            client,
+            ClientEntry {
+                id,
+                value,
+                confirmed: confirmed.clone(),
+            },
+        );
+        *self.per_ip_counts.entry(client.ip()).or_default() += 1;
+        self.order.push_back((client, id));
+        if self.order.len() > 2 * self.capacity.max(1) {
+            self.compact_order();
+        }
+        Ok((id, confirmed))
+    }
+
+    /// Removes `client` if its entry is still the one with `id` (a newer relay task may have
+    /// replaced it). Returns whether it was removed.
+    pub fn remove(&mut self, client: &SocketAddr, id: u64) -> bool {
+        if self.entries.get(client).is_none_or(|entry| entry.id != id) {
+            return false;
+        }
+        self.entries.remove(client);
+        if let Some(count) = self.per_ip_counts.get_mut(&client.ip()) {
+            *count -= 1;
+            if *count == 0 {
+                self.per_ip_counts.remove(&client.ip());
+            }
+        }
+        true
+    }
+
+    /// Evicts the oldest unconfirmed client. Returns `false` if every client is confirmed.
+    fn evict_unconfirmed(&mut self) -> bool {
+        while let Some((client, id)) = self.order.pop_front() {
+            let unconfirmed = self
+                .entries
+                .get(&client)
+                .is_some_and(|entry| entry.id == id && !entry.confirmed.load(Ordering::Relaxed));
+            if unconfirmed && self.remove(&client, id) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Drops eviction candidates that were removed or confirmed since being queued.
+    fn compact_order(&mut self) {
+        let entries = &self.entries;
+        self.order.retain(|(client, id)| {
+            entries
+                .get(client)
+                .is_some_and(|entry| entry.id == *id && !entry.confirmed.load(Ordering::Relaxed))
+        });
     }
 }

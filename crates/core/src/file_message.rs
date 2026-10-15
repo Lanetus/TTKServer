@@ -16,7 +16,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Error encoding or decoding a file service message.
-pub type FileMessageError = Box<dyn std::error::Error + Send + Sync>;
+type FileMessageError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Length of a SHA-256 digest, the `body` of a download and the reply to an upload.
 pub const SHA256_LEN: usize = 32;

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 const ROOT_SIGNER_ALLOWLIST: &str = include_str!("certs/root_signer_allowlist.txt");
 
 /// Lengths, in bytes, of the measurement digests an allowlist may hold (SHA-256 and SHA-384).
-pub const MEASUREMENT_LENGTHS: [usize; 2] = [32, 48];
+const MEASUREMENT_LENGTHS: [usize; 2] = [32, 48];
 
 /// Which measurement of the Evidence identifies an accepted image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

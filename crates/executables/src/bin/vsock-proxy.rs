@@ -7,13 +7,17 @@
 //!
 //! - **Inbound**: listens on a UDP socket (default `0.0.0.0:443`) and, for each client address,
 //!   opens one vsock connection to the enclave (CID `--cid`, port `--vsock-port`, default
-//!   `5000`).
+//!   `5000`). Clients are limited per IP address, and a client is dropped after
+//!   `ttk_core::vsock_proxy::UNCONFIRMED_CLIENT_TIMEOUT` unless its QUIC handshake completes
+//!   (the enclave sends it a 1-RTT packet); when the table is full, a new client evicts the
+//!   oldest unconfirmed one, so spoofed source addresses can't lock out real clients.
 //! - **Outbound**: listens on vsock port `--outbound-port` (default `5001`) for connections from
 //!   the enclave (only from CID `--cid`). Each starts with a destination header, and its
 //!   datagrams are sent to that UDP address from a socket of its own, with replies framed back.
 //!   Destinations that are link-local (including the instance metadata and DNS endpoints),
 //!   multicast, broadcast or unspecified are refused, and loopback or private ones are refused
-//!   unless `--allow-private` is given (see `ttk_core::egress::classify_hop_address`).
+//!   unless `--allow-private` is given (see `ttk_core::egress::classify_hop_address`), and so are
+//!   well-known ports other than 443 (`ttk_core::egress::is_permitted_hop_port`).
 //!   A connection may instead start with a resolve request: the enclave has no DNS, so the host
 //!   name is looked up here and the addresses the egress policy permits are answered, after
 //!   which the connection closes (`ttk_core::vsock::answer_resolve`).
@@ -69,16 +73,18 @@ mod imp {
     use super::{RelayConfig, SocketAddr};
     use bytes::Bytes;
     use log::{debug, info, warn};
-    use std::collections::HashMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::net::UdpSocket;
     use tokio::sync::mpsc::{self, error::TrySendError};
+    use tokio::time::Instant;
     use tokio_vsock::{SockAddr, VsockListener, VsockStream};
-    use ttk_core::egress::{classify_hop_address, HopAddressClass};
+    use ttk_core::egress::{classify_hop_address, is_permitted_hop_port, HopAddressClass};
     use ttk_core::vsock::OutboundRequest;
     use ttk_core::vsock::{answer_resolve, read_frame, read_outbound_request, write_frame};
+    use ttk_core::vsock_proxy::{confirms_client, ClientTable};
+    use ttk_core::vsock_proxy::{MAX_CLIENTS_PER_IP, UNCONFIRMED_CLIENT_TIMEOUT};
 
     /// `VMADDR_CID_ANY`: accept vsock connections addressed to any CID of this instance.
     const VMADDR_CID_ANY: u32 = u32::MAX;
@@ -101,7 +107,7 @@ mod imp {
 
     /// Queues of datagrams toward the enclave, one per client address, tagged with the id of
     /// the relay task draining them.
-    type Clients = Arc<Mutex<HashMap<SocketAddr, (u64, mpsc::Sender<Bytes>)>>>;
+    type Clients = Arc<Mutex<ClientTable<mpsc::Sender<Bytes>>>>;
 
     /// Relays both directions until the inbound UDP socket or the outbound listener fails.
     pub async fn run(config: RelayConfig) -> std::io::Result<()> {
@@ -134,29 +140,32 @@ mod imp {
             config.vsock_port
         );
 
-        let clients = Clients::default();
-        let mut next_id: u64 = 0;
+        let clients: Clients = Arc::new(Mutex::new(ClientTable::new(
+            MAX_CLIENTS,
+            MAX_CLIENTS_PER_IP,
+        )));
         let mut buf = vec![0u8; usize::from(u16::MAX)];
         loop {
             let (len, client) = udp.recv_from(&mut buf).await?;
             let datagram = Bytes::copy_from_slice(&buf[..len]);
 
-            let mut map = clients.lock().unwrap();
-            let tx = match map.get(&client) {
-                Some((_, tx)) if !tx.is_closed() => tx.clone(),
+            let mut table = clients.lock().unwrap();
+            let tx = match table.get(&client) {
+                Some(entry) if !entry.value.is_closed() => entry.value.clone(),
                 _ => {
-                    map.remove(&client);
-                    if map.len() >= MAX_CLIENTS {
-                        debug!("Dropping datagram from {client}: {MAX_CLIENTS} clients relayed");
-                        continue;
-                    }
                     let (tx, rx) = mpsc::channel(CLIENT_QUEUE);
-                    next_id += 1;
-                    map.insert(client, (next_id, tx.clone()));
+                    let (id, confirmed) = match table.insert(client, tx.clone()) {
+                        Ok(admitted) => admitted,
+                        Err(refused) => {
+                            debug!("Dropping datagram from {client}: {refused:?}");
+                            continue;
+                        }
+                    };
                     tokio::spawn(relay_client(
-                        next_id,
+                        id,
                         client,
                         rx,
+                        confirmed,
                         udp.clone(),
                         clients.clone(),
                         config.clone(),
@@ -164,7 +173,7 @@ mod imp {
                     tx
                 }
             };
-            drop(map);
+            drop(table);
 
             if let Err(TrySendError::Full(_)) = tx.try_send(datagram) {
                 debug!("Dropping datagram from {client}: queue full");
@@ -173,11 +182,13 @@ mod imp {
     }
 
     /// Relays one inbound client: connects to the enclave, then pumps datagrams both ways until
-    /// the client goes idle or either side closes.
+    /// the client goes idle, stays unconfirmed for [`UNCONFIRMED_CLIENT_TIMEOUT`], is evicted
+    /// (its queue closes) or either side closes.
     async fn relay_client(
         id: u64,
         client: SocketAddr,
         mut rx: mpsc::Receiver<Bytes>,
+        confirmed: Arc<AtomicBool>,
         udp: Arc<UdpSocket>,
         clients: Clients,
         config: RelayConfig,
@@ -186,19 +197,34 @@ mod imp {
             Ok(stream) => {
                 info!("Client {client} connected");
                 let (mut rd, mut wr) = stream.split();
+                let unconfirmed_deadline = Instant::now() + UNCONFIRMED_CLIENT_TIMEOUT;
                 let to_client = async {
                     while let Some(datagram) = read_frame(&mut rd).await {
+                        if !confirmed.load(Ordering::Relaxed) && confirms_client(&datagram) {
+                            confirmed.store(true, Ordering::Relaxed);
+                        }
                         if let Err(e) = udp.send_to(&datagram, client).await {
                             debug!("Client {client}: UDP send failed: {e}");
                         }
                     }
                 };
                 let to_enclave = async {
-                    while let Ok(Some(datagram)) =
-                        tokio::time::timeout(IDLE_TIMEOUT, rx.recv()).await
-                    {
-                        if write_frame(&mut wr, &datagram).await.is_err() {
-                            break;
+                    loop {
+                        let was_confirmed = confirmed.load(Ordering::Relaxed);
+                        let idle = if was_confirmed {
+                            IDLE_TIMEOUT
+                        } else {
+                            unconfirmed_deadline.saturating_duration_since(Instant::now())
+                        };
+                        match tokio::time::timeout(idle, rx.recv()).await {
+                            Ok(Some(datagram)) => {
+                                if write_frame(&mut wr, &datagram).await.is_err() {
+                                    break;
+                                }
+                            }
+                            // Confirmed while waiting: the regular idle timeout applies now.
+                            Err(_) if !was_confirmed && confirmed.load(Ordering::Relaxed) => {}
+                            Ok(None) | Err(_) => break,
                         }
                     }
                 };
@@ -215,10 +241,7 @@ mod imp {
         }
 
         // Forget this client, unless a newer relay has already replaced the entry.
-        let mut map = clients.lock().unwrap();
-        if map.get(&client).is_some_and(|(entry, _)| *entry == id) {
-            map.remove(&client);
-        }
+        clients.lock().unwrap().remove(&client, id);
     }
 
     /// Outbound: accepts vsock connections from the enclave (CID `enclave_cid` only) and relays
@@ -259,8 +282,11 @@ mod imp {
         }
     }
 
-    /// Whether the egress policy lets the enclave reach `destination`.
+    /// Whether the egress policy lets the enclave reach `destination` (address and port).
     fn permitted(destination: &SocketAddr, allow_private: bool) -> bool {
+        if !is_permitted_hop_port(destination.port()) {
+            return false;
+        }
         match classify_hop_address(destination.ip()) {
             HopAddressClass::Public => true,
             HopAddressClass::Private => allow_private,

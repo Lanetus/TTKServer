@@ -25,20 +25,22 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Router;
 use bytes::{Buf, Bytes, BytesMut};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use quinn::{Endpoint, ServerConfig, TransportConfig, VarInt};
 use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
 use sha2::{Digest, Sha256};
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use time::{Duration, OffsetDateTime};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower_service::Service;
 use zeroize::Zeroizing;
 
-pub use super::router::Evidence;
+use super::router::Evidence;
 
 pub use ttk_core::ATTESTATION_OID;
 
@@ -117,11 +119,11 @@ const LISTEN_ADDR: &str = "0.0.0.0:4433";
 
 /// Environment variable that overrides the default UDP listen address `0.0.0.0:4433`
 /// (a socket address such as `127.0.0.1:4444`). Only used with [`USE_UDP_ENV`].
-pub const LISTEN_ADDR_ENV: &str = "TTK_LISTEN_ADDR";
+const LISTEN_ADDR_ENV: &str = "TTK_LISTEN_ADDR";
 
 /// Environment variable that, set to `1`, makes [`Listener::from_env`] pick a regular UDP
 /// socket instead of vsock (for running outside an enclave).
-pub const USE_UDP_ENV: &str = "TTK_USE_UDP";
+const USE_UDP_ENV: &str = "TTK_USE_UDP";
 
 /// Default vsock port the QUIC endpoint listens on, unless [`VSOCK_PORT_ENV`] overrides it.
 const VSOCK_PORT: u32 = 5000;
@@ -139,17 +141,46 @@ pub const MAX_REQUEST_BODY: usize = 1024 * 1024;
 pub const MAX_REQUEST_HEADERS: u64 = 16 * 1024;
 
 /// Time allowed for a request's body to arrive; slower requests get `408 Request Timeout`.
-pub const REQUEST_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const REQUEST_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Validity of the RA-TLS certificate, in days. A CA-issued replacement copies it, and the
+/// certificate can't be renewed in place: the node must be restarted (new key and Evidence) and
+/// authorized again before it expires, or clients stop connecting. The server logs a warning
+/// [`CERT_EXPIRY_WARNING`] before, and an error once it has expired.
+const CERT_VALIDITY_DAYS: i64 = 30;
+
+/// How long before the RA-TLS certificate expires the server starts warning about it.
+const CERT_EXPIRY_WARNING: std::time::Duration = std::time::Duration::from_secs(3 * 24 * 3600);
 
 /// Most QUIC connections served at once; further connection attempts are refused.
 pub const MAX_CONNECTIONS: usize = 1024;
 
+/// Most QUIC connections served at once from one IP address. Over vsock every connection
+/// has a synthetic address of its own, so the parent's `vsock-proxy` applies its own per-IP
+/// limit instead.
+const MAX_CONNECTIONS_PER_SOURCE: usize = 64;
+
+/// Time allowed for the QUIC handshake and HTTP/3 setup of a new connection; slower ones are
+/// dropped so that they don't hold one of the [`MAX_CONNECTIONS`].
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A connection with no request in progress for this long is closed, whether or not the peer
+/// keeps it alive at the QUIC level (PINGs). Also applies before the first request.
+const CONNECTION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Longest a connection is served: after this it gets an HTTP/3 GOAWAY, its requests in
+/// progress get up to [`CONNECTION_DRAIN_TIMEOUT`] to finish, and it is closed.
+const CONNECTION_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Time the requests in progress on a connection get to finish once it is closed for its age.
+const CONNECTION_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Most concurrent requests (bidirectional streams) per connection.
-pub const MAX_STREAMS_PER_CONNECTION: u32 = 16;
+const MAX_STREAMS_PER_CONNECTION: u32 = 16;
 
 /// Flow-control window for all streams of one connection together, in bytes: bounds the request
 /// data a connection can have buffered at once.
-pub const CONNECTION_RECEIVE_WINDOW: u32 = 4 * 1024 * 1024;
+const CONNECTION_RECEIVE_WINDOW: u32 = 4 * 1024 * 1024;
 
 /// Most request body bytes held in memory across all requests of a server at once (a
 /// [`BodyBudget`]); a request whose body does not fit gets `503 Service Unavailable`.
@@ -157,7 +188,7 @@ pub const CONNECTION_RECEIVE_WINDOW: u32 = 4 * 1024 * 1024;
 /// Without it, [`MAX_CONNECTIONS`] x [`MAX_STREAMS_PER_CONNECTION`] x [`MAX_REQUEST_BODY`] is
 /// 16 GiB. With it, the worst case is about 1 GiB of bodies, plus up to 2 MiB per relay forward
 /// and the per-connection QUIC state: enclaves are given 4 GiB (`TTK_ENCLAVE_MEMORY`).
-pub const MAX_IN_FLIGHT_BODY_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_IN_FLIGHT_BODY_BYTES: usize = 1024 * 1024 * 1024;
 
 /// A budget of request body bytes shared by all requests of a server, so that concurrent
 /// requests cannot hold more than a fixed amount of memory in bodies.
@@ -277,6 +308,7 @@ pub struct Server {
     provider: Arc<dyn AttestationProvider>,
     private_key: Zeroizing<Vec<u8>>,
     certificates: Arc<CertificateStore>,
+    expires_at: std::time::SystemTime,
 }
 
 /// Setup and serving.
@@ -294,11 +326,25 @@ impl Server {
     /// Attests, builds the RA-TLS identity and listens on `listener`, logging where.
     ///
     /// Must be called within a Tokio runtime.
+    ///
+    /// Refuses to serve mock Evidence unless it was asked for explicitly
+    /// (`TTK_ATTESTATION=mock`, see [`attestation::PROVIDER_ENV`]): a node binary that finds no
+    /// TEE hardware fails rather than silently falling back to mock attestation.
     pub fn listen(listener: Listener) -> Result<Self, BoxError> {
         let server = match listener {
             Listener::Udp(addr) => Self::bind(addr)?,
             Listener::Vsock(port) => bind_vsock(port)?,
         };
+        let mock_requested =
+            std::env::var(attestation::PROVIDER_ENV).is_ok_and(|name| name == "mock");
+        if server.provider_name() == "mock" && !mock_requested {
+            return Err(format!(
+                "no TEE hardware detected: refusing to serve mock attestation \
+                 (set {}=mock for local development)",
+                attestation::PROVIDER_ENV
+            )
+            .into());
+        }
         match listener {
             Listener::Udp(_) => info!(
                 "Server listening on UDP {} (QUIC/HTTP/3)",
@@ -314,7 +360,7 @@ impl Server {
     ///
     /// Must be called within a Tokio runtime.
     #[cfg(target_os = "linux")]
-    pub fn bind_vsock(port: u32) -> Result<Self, BoxError> {
+    fn bind_vsock(port: u32) -> Result<Self, BoxError> {
         let (quic_config, identity) = attest()?;
         let socket = super::vsock::VsockUdpSocket::bind(port)?;
         let runtime = quinn::default_runtime().ok_or("no async runtime found")?;
@@ -335,17 +381,18 @@ impl Server {
             provider: identity.provider,
             private_key: identity.private_key,
             certificates: identity.certificates,
+            expires_at: identity.expires_at,
         }
+    }
+
+    /// Name of the attestation provider in use (e.g. `"aws-nitro"`, `"mock"`).
+    fn provider_name(&self) -> &'static str {
+        self.provider.name()
     }
 
     /// Returns the address the endpoint is bound to.
     pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.endpoint.local_addr()
-    }
-
-    /// Returns the Evidence this server presents.
-    pub fn evidence(&self) -> &Evidence {
-        &self.evidence
     }
 
     /// Returns the RA-TLS private key (PKCS#8 DER, ECDSA P-256), e.g. to open values sealed to
@@ -384,8 +431,10 @@ impl Server {
     }
 
     /// Accepts QUIC connections and serves the base routes merged with `routes` over HTTP/3
-    /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections, new ones are
-    /// refused.
+    /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections (or
+    /// `MAX_CONNECTIONS_PER_SOURCE` from one IP address), new ones are refused; see
+    /// `HANDSHAKE_TIMEOUT`, `CONNECTION_IDLE_TIMEOUT` and `CONNECTION_MAX_AGE` for how long
+    /// a connection holds its place.
     pub async fn serve_with(self, routes: Router) {
         let app = build_router(
             &self.evidence,
@@ -399,9 +448,16 @@ impl Server {
                  replaced, so only POST /evidence and POST /certificate will be served"
             );
         }
+        tokio::spawn(watch_certificate_expiry(self.expires_at));
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+        let sources = SourceConnections::new(MAX_CONNECTIONS_PER_SOURCE);
         let budget = BodyBudget::new(MAX_IN_FLIGHT_BODY_BYTES);
         while let Some(incoming) = self.endpoint.accept().await {
+            let Some(source) = sources.try_acquire(incoming.remote_address().ip()) else {
+                warn!("Refusing connection: {MAX_CONNECTIONS_PER_SOURCE} already open from its address");
+                incoming.refuse();
+                continue;
+            };
             let Ok(permit) = connections.clone().try_acquire_owned() else {
                 warn!("Refusing connection: {MAX_CONNECTIONS} already open");
                 incoming.refuse();
@@ -416,7 +472,7 @@ impl Server {
             };
             tokio::spawn(async move {
                 handle_connection(incoming, app, phase, budget).await;
-                drop(permit);
+                drop((permit, source));
             });
         }
     }
@@ -432,6 +488,8 @@ struct Identity {
     private_key: Zeroizing<Vec<u8>>,
     /// The presented certificate chain, replaceable by `POST /certificate`.
     certificates: Arc<CertificateStore>,
+    /// When the certificate expires.
+    expires_at: std::time::SystemTime,
 }
 
 /// Attests and builds the RA-TLS identity: an ephemeral key pair and Evidence bound to it,
@@ -453,7 +511,11 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
         .to_cbor_bytes();
     info!("Wrapped Evidence as a CMW ({} bytes).", cmw_bytes.len());
 
+    let expires_at = std::time::SystemTime::now()
+        + std::time::Duration::from_secs(CERT_VALIDITY_DAYS as u64 * 24 * 3600);
     let certificates = Arc::new(build_certificate_store(&key_pair, &cmw_bytes)?);
+    // The key now lives only in the zeroized buffer above and the TLS config.
+    drop(key_pair);
     certificates.load_builtin_trusted_roots()?;
     let tls_config = build_tls_config(certificates.clone())?;
     let evidence = Arc::new(Evidence { cmw: cmw_bytes });
@@ -469,6 +531,7 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
             provider,
             private_key,
             certificates,
+            expires_at,
         },
     ))
 }
@@ -483,12 +546,16 @@ fn key_binding(public_key_der: &[u8]) -> AttestationParams {
 }
 
 /// QUIC limits for each connection: [`MAX_STREAMS_PER_CONNECTION`] concurrent requests sharing
-/// a [`CONNECTION_RECEIVE_WINDOW`], so one peer can't make the server buffer unbounded data.
+/// a [`CONNECTION_RECEIVE_WINDOW`], and no QUIC datagrams, so one peer can't make the server
+/// buffer unbounded data.
 fn transport_config() -> TransportConfig {
     let mut transport = TransportConfig::default();
     transport
         .max_concurrent_bidi_streams(VarInt::from_u32(MAX_STREAMS_PER_CONNECTION))
-        .receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW));
+        .receive_window(VarInt::from_u32(CONNECTION_RECEIVE_WINDOW))
+        // HTTP/3 doesn't use QUIC datagrams: don't buffer any (quinn's default would reserve
+        // about 1.25 MB per connection outside the BodyBudget).
+        .datagram_receive_buffer_size(None);
     transport
 }
 
@@ -498,7 +565,8 @@ fn build_certificate_store(
     key_pair: &KeyPair,
     cmw_bytes: &[u8],
 ) -> Result<CertificateStore, BoxError> {
-    let cert_pem = create_cert_with_attestation(key_pair, CERT_DNS_NAME, cmw_bytes, 30)?;
+    let cert_pem =
+        create_cert_with_attestation(key_pair, CERT_DNS_NAME, cmw_bytes, CERT_VALIDITY_DAYS)?;
     let cert = CertificateDer::from_pem_slice(cert_pem.as_bytes())?;
     // Borrowed from a buffer that is zeroized on drop, so no copy of the key outlives this call.
     let key_der = Zeroizing::new(key_pair.serialize_der());
@@ -513,35 +581,195 @@ fn build_tls_config(certificates: Arc<CertificateStore>) -> Result<rustls::Serve
         .with_cert_resolver(certificates);
     // Enable ALPN for HTTP/3 ("h3")
     config.alpn_protocols = vec![b"h3".to_vec()];
+    // No session resumption: every connection gets a full handshake, so it is served the
+    // certificate presented at that moment and its `CertificatePhase` matches what the client
+    // verified.
+    config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    config.send_tls13_tickets = 0;
     Ok(config)
 }
 
-/// Drives a single QUIC connection, dispatching each HTTP/3 request to `app` with the
-/// connection's certificate `phase` attached; request bodies are reserved against `budget`.
+/// Logs a warning [`CERT_EXPIRY_WARNING`] before `expires_at`, and an error once it has passed:
+/// from then on clients reject the node until it is restarted and authorized again.
+async fn watch_certificate_expiry(expires_at: std::time::SystemTime) {
+    let until = |at: std::time::SystemTime| {
+        at.duration_since(std::time::SystemTime::now())
+            .unwrap_or_default()
+    };
+    let warn_at = expires_at
+        .checked_sub(CERT_EXPIRY_WARNING)
+        .unwrap_or(expires_at);
+    tokio::time::sleep(until(warn_at)).await;
+    warn!(
+        "The RA-TLS certificate expires in {} hours: restart and re-authorize this node",
+        until(expires_at).as_secs() / 3600
+    );
+    tokio::time::sleep(until(expires_at)).await;
+    error!("The RA-TLS certificate has expired: clients will refuse this node until it is restarted and re-authorized");
+}
+
+/// Open connections per source IP address, each limited to a maximum.
+#[derive(Debug, Clone)]
+pub struct SourceConnections {
+    counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    max: usize,
+}
+
+/// Acquiring and releasing a source's connection slots.
+impl SourceConnections {
+    /// No connections yet, at most `max` per source.
+    pub fn new(max: usize) -> Self {
+        Self {
+            counts: Arc::default(),
+            max,
+        }
+    }
+
+    /// Takes a slot for a connection from `ip`, held until the guard is dropped, or `None` if
+    /// `ip` already has the maximum.
+    pub fn try_acquire(&self, ip: IpAddr) -> Option<SourceGuard> {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        let count = counts.entry(ip).or_default();
+        if *count >= self.max {
+            return None;
+        }
+        *count += 1;
+        Some(SourceGuard {
+            sources: self.clone(),
+            ip,
+        })
+    }
+
+    /// Open connections from `ip`.
+    pub fn count(&self, ip: IpAddr) -> usize {
+        let counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        counts.get(&ip).copied().unwrap_or(0)
+    }
+}
+
+/// One connection's slot in [`SourceConnections`], released when dropped.
+#[derive(Debug)]
+pub struct SourceGuard {
+    sources: SourceConnections,
+    ip: IpAddr,
+}
+
+/// Releases the slot.
+impl Drop for SourceGuard {
+    /// Decrements the source's count, forgetting sources with none left.
+    fn drop(&mut self) {
+        let mut counts = self
+            .sources
+            .counts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = counts.get_mut(&self.ip) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
+}
+
+/// Completes the handshake of `incoming` (within [`HANDSHAKE_TIMEOUT`]) and serves its HTTP/3
+/// requests, each tagged with the certificate `phase` read before the handshake. Closes the
+/// connection once it has had no request in progress for [`CONNECTION_IDLE_TIMEOUT`], or
+/// (after draining its requests) once it is [`CONNECTION_MAX_AGE`] old.
 async fn handle_connection(
     incoming: quinn::Incoming,
     app: Router,
     phase: CertificatePhase,
     budget: BodyBudget,
 ) {
-    let conn = match incoming.await {
-        Ok(conn) => conn,
-        Err(err) => return warn!("Handshake failed: {err}"),
+    let setup = async {
+        let conn = incoming
+            .await
+            .map_err(|e| format!("handshake failed: {e}"))?;
+        let h3_conn = h3::server::builder()
+            .max_field_section_size(MAX_REQUEST_HEADERS)
+            .build::<_, axum::body::Bytes>(h3_quinn::Connection::new(conn.clone()))
+            .await
+            .map_err(|e| format!("H3 setup failed: {e}"))?;
+        Ok::<_, String>((conn, h3_conn))
+    };
+    let (conn, mut h3_conn) = match tokio::time::timeout(HANDSHAKE_TIMEOUT, setup).await {
+        Ok(Ok(connection)) => connection,
+        Ok(Err(e)) => return warn!("{e}"),
+        Err(_) => return warn!("Handshake timed out"),
     };
 
-    let mut h3_conn = match h3::server::builder()
-        .max_field_section_size(MAX_REQUEST_HEADERS)
-        .build::<_, axum::body::Bytes>(h3_quinn::Connection::new(conn))
-        .await
-    {
-        Ok(h3) => h3,
-        Err(e) => return warn!("H3 setup failed: {e}"),
+    // Requests are counted rather than joined here, so that `accept` is only ever cancelled
+    // when the connection is being closed (cancelling it mid-headers would drop a request).
+    let started = AtomicU64::new(0);
+    let in_progress = Arc::new(AtomicUsize::new(0));
+    let idle = async {
+        loop {
+            let seen = started.load(Ordering::Relaxed);
+            tokio::time::sleep(CONNECTION_IDLE_TIMEOUT).await;
+            if in_progress.load(Ordering::Relaxed) == 0 && started.load(Ordering::Relaxed) == seen {
+                return;
+            }
+        }
     };
+    tokio::pin!(idle);
+    let max_age = tokio::time::sleep(CONNECTION_MAX_AGE);
+    tokio::pin!(max_age);
+    loop {
+        tokio::select! {
+            accepted = h3_conn.accept() => match accepted {
+                Ok(Some((mut req, stream))) => {
+                    req.extensions_mut().insert(phase);
+                    started.fetch_add(1, Ordering::Relaxed);
+                    let request = InProgress::start(&in_progress);
+                    let respond = respond(app.clone(), req, stream, budget.reservation());
+                    tokio::spawn(async move {
+                        respond.await;
+                        drop(request);
+                    });
+                }
+                // The peer closed the connection; requests in progress run to completion.
+                _ => return,
+            },
+            () = &mut idle => {
+                debug!("Closing connection: no request for {CONNECTION_IDLE_TIMEOUT:?}");
+                conn.close(VarInt::from_u32(0), b"idle");
+                return;
+            }
+            () = &mut max_age => {
+                debug!("Closing connection: open for {CONNECTION_MAX_AGE:?}");
+                // GOAWAY: the peer opens no new requests here, those in progress finish.
+                let _ = h3_conn.shutdown(0).await;
+                let drain = async {
+                    while in_progress.load(Ordering::Relaxed) > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                };
+                let _ = tokio::time::timeout(CONNECTION_DRAIN_TIMEOUT, drain).await;
+                conn.close(VarInt::from_u32(0), b"max age");
+                return;
+            }
+        }
+    }
+}
 
-    while let Ok(Some((mut req, stream))) = h3_conn.accept().await {
-        req.extensions_mut().insert(phase);
-        let app = app.clone();
-        tokio::spawn(respond(app, req, stream, budget.reservation()));
+/// One request counted as in progress on its connection until dropped.
+struct InProgress(Arc<AtomicUsize>);
+
+/// Counting.
+impl InProgress {
+    /// Counts a request as started on `count`.
+    fn start(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+        Self(count.clone())
+    }
+}
+
+/// Uncounts the request.
+impl Drop for InProgress {
+    /// Decrements the connection's count.
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

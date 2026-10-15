@@ -6,6 +6,7 @@ use std::process::Output;
 /// Every variable the node binaries read, removed so the tests see only what they set.
 const NODE_ENV: &[&str] = &[
     "TTK_USE_UDP",
+    "TTK_ATTESTATION",
     "TTK_LISTEN_ADDR",
     "TTK_VSOCK_PORT",
     "TTK_PARENT_CID",
@@ -54,6 +55,16 @@ fn relay_binary_rejects_an_invalid_vsock_port() {
         &[("TTK_VSOCK_PORT", "not-a-port")],
     );
     assert_fails_with(&output, "TTK_VSOCK_PORT");
+}
+
+#[test]
+fn relay_binary_refuses_mock_attestation_unless_asked_for() {
+    // No TEE hardware here: without TTK_ATTESTATION=mock the node must not fall back to mock.
+    let output = run_node(
+        env!("CARGO_BIN_EXE_relay"),
+        &[("TTK_USE_UDP", "1"), ("TTK_LISTEN_ADDR", "127.0.0.1:0")],
+    );
+    assert_fails_with(&output, "refusing to serve mock attestation");
 }
 
 #[test]

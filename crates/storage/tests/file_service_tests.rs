@@ -8,20 +8,43 @@ use test_ca::SignForTests;
 use ciborium::Value;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
+use std::sync::Arc;
+use ttk_core::file_message::{FileError, FileRequest, FileResponse};
 use ttk_ra_client::seal::{self, NodePublicKey};
 use ttk_ra_client::FafRequest;
 use ttk_ra_client::{EnclaveCertVerifier, TtkClient};
+use ttk_ra_server::server::Server;
 use ttk_ra_server::terminal::Terminal;
+use ttk_ra_server::Evaluator;
 use ttk_storage::adaptors::local_memory::MemoryStore;
 use ttk_storage::adaptors::BlobStore;
-use ttk_storage::Evaluator;
-use ttk_storage::{blob_name, FileError, FileRequest, FileResponse, FileService};
+use ttk_storage::{EvalError, FileService};
 
 /// Lowercase hex SHA-256 of `hello world`: the stored blob's name.
 const HELLO_NAME: &str = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
 
 fn hello_sha256() -> Vec<u8> {
     Sha256::digest(b"hello world").to_vec()
+}
+
+/// A [`MemoryStore`] the test keeps a handle to, to look at what the service stored.
+#[derive(Clone, Default)]
+struct SharedStore(Arc<MemoryStore>);
+
+impl BlobStore for SharedStore {
+    async fn put(&self, name: &str, data: Vec<u8>) -> Result<(), EvalError> {
+        self.0.put(name, data).await
+    }
+
+    async fn get(&self, name: &str) -> Result<Option<Vec<u8>>, EvalError> {
+        self.0.get(name).await
+    }
+}
+
+/// Answers `request` through the service's CBOR [`Evaluator`] interface.
+async fn handle<S: BlobStore>(service: &FileService<S>, request: FileRequest) -> FileResponse {
+    let reply = service.eval(request.to_cbor().unwrap()).await.unwrap();
+    FileResponse::from_cbor(&reply).unwrap()
 }
 
 fn cbor(value: &Value) -> Vec<u8> {
@@ -39,27 +62,24 @@ fn message(kind: &str, body: Value) -> Vec<u8> {
 
 #[tokio::test]
 async fn upload_stores_the_file_under_its_sha256() {
-    let service = FileService::new(MemoryStore::new());
-    let response = service
-        .handle(FileRequest::Upload(b"hello world".to_vec()))
-        .await
-        .unwrap();
+    let store = SharedStore::default();
+    let service = FileService::new(store.clone());
+    let response = handle(&service, FileRequest::Upload(b"hello world".to_vec())).await;
     assert_eq!(response, FileResponse::Response(hello_sha256()));
+    // Stored under the lowercase hex of its SHA-256.
+    assert_eq!(
+        store.get(HELLO_NAME).await.unwrap(),
+        Some(b"hello world".to_vec())
+    );
 
-    let downloaded = service
-        .handle(FileRequest::Download(hello_sha256()))
-        .await
-        .unwrap();
+    let downloaded = handle(&service, FileRequest::Download(hello_sha256())).await;
     assert_eq!(downloaded, FileResponse::Response(b"hello world".to_vec()));
 }
 
 #[tokio::test]
 async fn download_of_a_missing_file_is_not_found() {
     let service = FileService::new(MemoryStore::new());
-    let response = service
-        .handle(FileRequest::Download(hello_sha256()))
-        .await
-        .unwrap();
+    let response = handle(&service, FileRequest::Download(hello_sha256())).await;
     assert_eq!(response, FileResponse::Error(FileError::NotFound));
     assert_eq!(response.into_result(), Err(FileError::NotFound));
 
@@ -72,13 +92,6 @@ async fn download_of_a_missing_file_is_not_found() {
             Value::Text("not_found".into())
         )]))
     );
-}
-
-#[test]
-fn blobs_are_named_by_hex_sha256() {
-    assert_eq!(blob_name(&hello_sha256()).unwrap(), HELLO_NAME);
-    assert!(blob_name(&hello_sha256()[1..]).is_err());
-    assert!(blob_name(b"../other-object").is_err());
 }
 
 #[tokio::test]
@@ -115,7 +128,9 @@ async fn eval_rejects_bad_requests() {
         message("delete", Value::Bytes(vec![])),
         // A file as text, or as an array of integers, rather than a byte string.
         message("upload", Value::Text("hello".into())),
+        // Anything but a 32-byte SHA-256 could name another object.
         message("download", Value::Bytes(b"../other-object".to_vec())),
+        message("download", Value::Bytes(hello_sha256()[1..].to_vec())),
     ] {
         assert!(service.eval(message.clone()).await.is_err(), "{message:?}");
     }
@@ -144,13 +159,10 @@ async fn faf(client: &TtkClient, message: &[u8]) -> Vec<u8> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn terminal_with_the_file_service_uploads_and_downloads_over_faf() {
-    let terminal = Terminal::bind(
-        "127.0.0.1:0".parse().unwrap(),
-        FileService::new(MemoryStore::new()),
-    )
-    .unwrap();
-    terminal.server().sign_for_tests().unwrap();
-    let addr: SocketAddr = terminal.local_addr().unwrap();
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    server.sign_for_tests().unwrap();
+    let addr: SocketAddr = server.local_addr().unwrap();
+    let terminal = Terminal::new(server, FileService::new(MemoryStore::new()));
     tokio::spawn(async move { terminal.serve().await.unwrap() });
     let client = TtkClient::connect_with_verifier(
         addr,
@@ -181,7 +193,7 @@ async fn terminal_with_the_file_service_uploads_and_downloads_over_faf() {
     let node = NodePublicKey::from_certificate(client.peer_cert().unwrap()).unwrap();
     let request = FafRequest {
         relays: vec![],
-        body: seal::seal_body(&node, b"not cbor").unwrap(),
+        body: seal::seal_body_with_key(&node, b"not cbor").unwrap().0,
     };
     let response = client.post_json("/faf", &request).await.unwrap();
     assert_eq!(response.status, 500);

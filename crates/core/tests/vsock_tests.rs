@@ -93,7 +93,12 @@ async fn destination_header_is_a_relay_request() {
 
 #[test]
 fn host_names_are_checked() {
-    for host in ["a.root.ttk-servers.net", "localhost", "example.com."] {
+    for host in [
+        "a.root.ttk-servers.net",
+        "localhost",
+        "example.com.",
+        "1relay.example",
+    ] {
         assert!(check_host_name(host).is_ok(), "{host}");
     }
     let too_long = format!("{}.com", "a".repeat(250));
@@ -107,6 +112,11 @@ fn host_names_are_checked() {
         "a/b",
         "a\0b",
         "über.de",
+        "2130706433",
+        "0x7f000001",
+        "127.1",
+        "10.0.0.1",
+        "relay.1",
         &too_long,
         &long_label,
     ] {

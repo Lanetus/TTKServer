@@ -10,7 +10,11 @@
 //!   plaintext is `"<server> <salt>"`, e.g. `"https://server.com:443 0123456789"`, where the salt
 //!   is [`SALT_DIGITS`] random decimal digits.
 //! - **The body** is for the last node only: `body.message` is encrypted with a fresh
-//!   AES-256-GCM message key, and `body.key` is that key sealed to the last node.
+//!   AES-256-GCM message key, and `body.key` is that key sealed to the last node. The encrypted
+//!   plaintext is a 24-byte header (send time as big-endian Unix seconds, then a
+//!   random 16-byte message id) followed by the message, and the associated data
+//!   binds it to `body.key`; the last node rejects stale and repeated bodies (see
+//!   [`crate::replay`]), so a hop that saw a request can't have it evaluated again.
 //! - **The response** of the last node is encrypted with the same message key (see
 //!   [`seal_response`]), so only the client that sealed the body can read it.
 //!
@@ -39,6 +43,15 @@ type Aead = hpke::aead::AesGcm256;
 const ADDRESS_INFO: &[u8] = b"ttk-faf/v1 relay address";
 /// HPKE `info` for a sealed message key.
 const KEY_INFO: &[u8] = b"ttk-faf/v1 message key";
+
+/// Prefix of the AES-GCM associated data of a body's message, followed by `body.key`: the
+/// message only opens together with the key envelope it was sent with.
+const MESSAGE_AAD_PREFIX: &[u8] = b"ttk-faf/v2 message ";
+
+/// Length of the random id of each sealed body.
+pub(crate) const MESSAGE_ID_LEN: usize = 16;
+/// Length of the header in front of a body's message: 8-byte send time, then the message id.
+const BODY_HEADER_LEN: usize = 8 + MESSAGE_ID_LEN;
 
 /// AES-GCM associated data of a sealed response, separating it from the request message sealed
 /// under the same message key.
@@ -109,15 +122,10 @@ impl NodeSecretKey {
             .map(Self)
             .map_err(|_| SealError::new("invalid P-256 private key"))
     }
-
-    /// Returns the matching public key.
-    pub fn public_key(&self) -> NodePublicKey {
-        NodePublicKey(<Kem as hpke::Kem>::sk_to_pk(&self.0))
-    }
 }
 
 /// The AES-256-GCM message key of a `/faf` body: chosen by the client in [`seal_body_with_key`],
-/// recovered by the last node in [`open_body_with_key`], and used by both for the response.
+/// recovered by the last node in [`open_body_envelope`], and used by both for the response.
 #[derive(Clone)]
 pub struct MessageKey([u8; MESSAGE_KEY_LEN]);
 
@@ -158,46 +166,92 @@ pub fn open_address(node: &NodeSecretKey, sealed: &str) -> Result<String, SealEr
     String::from_utf8(address).map_err(|_| SealError::new("relay address is not UTF-8"))
 }
 
-/// Encrypts `message` for `last`, the last node of the route, under a fresh message key.
-pub fn seal_body(last: &NodePublicKey, message: &[u8]) -> Result<FafBody, SealError> {
-    seal_body_with_key(last, message).map(|(body, _)| body)
-}
-
-/// Like [`seal_body`], but also returns the message key, to open the last node's response
-/// with [`open_response`].
+/// Encrypts `message` for `last`, the last node of the route, under a fresh message key, which
+/// is also returned to open the last node's response with [`open_response`].
 pub fn seal_body_with_key(
     last: &NodePublicKey,
     message: &[u8],
 ) -> Result<(FafBody, MessageKey), SealError> {
+    seal_body_at(last, message, unix_now())
+}
+
+/// Like [`seal_body_with_key`], stamping the body as sent at `sent_at` (Unix seconds) instead of
+/// now, e.g. to test the last node's freshness check.
+pub fn seal_body_at(
+    last: &NodePublicKey,
+    message: &[u8],
+    sent_at: u64,
+) -> Result<(FafBody, MessageKey), SealError> {
+    let rng = SystemRandom::new();
+    let no_randomness = |_| SealError::new("no randomness available");
     let mut key = [0u8; MESSAGE_KEY_LEN];
-    SystemRandom::new()
-        .fill(&mut key)
-        .map_err(|_| SealError::new("no randomness available"))?;
+    rng.fill(&mut key).map_err(no_randomness)?;
     let key = MessageKey(key);
-    let body = FafBody {
-        key: hpke_seal(last, KEY_INFO, &key.0)?,
-        message: aead_seal(&key, &[], message)?,
-    };
-    Ok((body, key))
+    let mut message_id = [0u8; MESSAGE_ID_LEN];
+    rng.fill(&mut message_id).map_err(no_randomness)?;
+
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(BODY_HEADER_LEN + message.len()));
+    plaintext.extend_from_slice(&sent_at.to_be_bytes());
+    plaintext.extend_from_slice(&message_id);
+    plaintext.extend_from_slice(message);
+    let sealed_key = hpke_seal(last, KEY_INFO, &key.0)?;
+    let message = aead_seal(&key, &message_aad(&sealed_key), &plaintext)?;
+    Ok((
+        FafBody {
+            key: sealed_key,
+            message,
+        },
+        key,
+    ))
 }
 
-/// Decrypts a body sealed to this node with [`seal_body`], returning the message.
-pub fn open_body(node: &NodeSecretKey, body: &FafBody) -> Result<Vec<u8>, SealError> {
-    open_body_with_key(node, body).map(|(_, message)| message)
+/// A body opened by its last node with [`open_body_envelope`].
+#[derive(Debug)]
+pub struct OpenedBody {
+    /// The message key, to answer with [`seal_response`].
+    pub key: MessageKey,
+    /// The message.
+    pub message: Vec<u8>,
+    /// The random id the sender gave this body.
+    pub message_id: [u8; MESSAGE_ID_LEN],
+    /// When the sender sealed it, in Unix seconds (the sender's clock).
+    pub sent_at: u64,
 }
 
-/// Like [`open_body`], but also returns the message key, to answer with [`seal_response`].
-pub fn open_body_with_key(
-    node: &NodeSecretKey,
-    body: &FafBody,
-) -> Result<(MessageKey, Vec<u8>), SealError> {
+/// Decrypts a body sealed to this node with [`seal_body_with_key`], returning its message key, message, id and send time.
+/// Freshness and uniqueness are left to the caller (see [`crate::replay::ReplayGuard`]).
+pub fn open_body_envelope(node: &NodeSecretKey, body: &FafBody) -> Result<OpenedBody, SealError> {
     let undecryptable = || SealError::new("body can't be decrypted");
     let key: [u8; MESSAGE_KEY_LEN] = hpke_open(node, KEY_INFO, &body.key)?
         .try_into()
         .map_err(|_| undecryptable())?;
     let key = MessageKey(key);
-    let message = aead_open(&key, &[], &body.message).map_err(|_| undecryptable())?;
-    Ok((key, message))
+    let mut plaintext =
+        aead_open(&key, &message_aad(&body.key), &body.message).map_err(|_| undecryptable())?;
+    if plaintext.len() < BODY_HEADER_LEN {
+        return Err(undecryptable());
+    }
+    let message = plaintext.split_off(BODY_HEADER_LEN);
+    let sent_at = u64::from_be_bytes(plaintext[..8].try_into().map_err(|_| undecryptable())?);
+    let message_id = plaintext[8..].try_into().map_err(|_| undecryptable())?;
+    Ok(OpenedBody {
+        key,
+        message,
+        message_id,
+        sent_at,
+    })
+}
+
+/// The associated data of a body's message: [`MESSAGE_AAD_PREFIX`] followed by `sealed_key`.
+fn message_aad(sealed_key: &str) -> Vec<u8> {
+    [MESSAGE_AAD_PREFIX, sealed_key.as_bytes()].concat()
+}
+
+/// The current time in Unix seconds (0 if the clock is before 1970).
+pub fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// Encrypts the last node's `response` under the request's message key, as base64(nonce ||

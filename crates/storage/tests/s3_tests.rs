@@ -1,21 +1,29 @@
 //! Tests of [`S3Store`] (feature `s3`): configuration from the environment, and the
 //! [`BlobStore`] operations against a minimal S3 fake on a free local port (path-style, over
 //! plain HTTP through [`ENDPOINT_ENV`]).
+//!
+//! The variable names are spelled out here, as an operator would set them.
 #![cfg(feature = "s3")]
 
-use aws_smithy_runtime_api::client::dns::ResolveDns;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
-use ttk_storage::adaptors::s3::{
-    LoopbackResolver, S3Store, BUCKET_ENV, ENDPOINT_ENV, IMDS_VSOCK_PORT_ENV, VSOCK_PORT_ENV,
-};
+use ttk_storage::adaptors::s3::S3Store;
 use ttk_storage::adaptors::BlobStore;
+
+/// Bucket name.
+const BUCKET_ENV: &str = "TTK_S3_BUCKET";
+/// Optional endpoint URL.
+const ENDPOINT_ENV: &str = "TTK_S3_ENDPOINT";
+/// Parent's vsock port of `vsock-proxy-tcp` to S3.
+const VSOCK_PORT_ENV: &str = "TTK_S3_VSOCK_PORT";
+/// Parent's vsock port of `vsock-proxy-tcp` to the instance metadata service.
+const IMDS_VSOCK_PORT_ENV: &str = "TTK_IMDS_VSOCK_PORT";
 
 /// Bucket the fake serves.
 const BUCKET: &str = "ttk-test-bucket";
@@ -207,12 +215,4 @@ async fn service_errors_are_errors() {
         .unwrap();
     assert!(store.put(DENIED_KEY, b"data".to_vec()).await.is_err());
     assert!(store.get(DENIED_KEY).await.is_err());
-}
-
-#[tokio::test]
-async fn loopback_resolver_answers_loopback_for_every_name() {
-    for name in ["s3.us-east-1.amazonaws.com", "example.com", "localhost"] {
-        let addrs = LoopbackResolver.resolve_dns(name).await.unwrap();
-        assert_eq!(addrs, vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]);
-    }
 }

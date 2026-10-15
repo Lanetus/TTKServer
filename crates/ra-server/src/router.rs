@@ -29,7 +29,7 @@
 //! [`ttk_core::fresh_evidence::report_data`]). The
 //! response is a [`FreshEvidence`] CMW collection: that Evidence and the certificate currently
 //! presented (self-signed or CA-issued), which the Verifier compares with the one from its TLS
-//! handshake. At most [`MAX_CONCURRENT_ATTESTATIONS`] requests are attested at
+//! handshake. At most `MAX_CONCURRENT_ATTESTATIONS` requests are attested at
 //! once; further ones get `503`.
 //!
 //! `POST /certificate` takes a certificate chain (PEM, leaf first, or one DER certificate) issued
@@ -63,7 +63,7 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 pub const MAX_NONCE_LEN: usize = 512;
 
 /// Most `POST /evidence` requests attested at once; further ones get `503 Service Unavailable`.
-pub const MAX_CONCURRENT_ATTESTATIONS: usize = 4;
+const MAX_CONCURRENT_ATTESTATIONS: usize = 4;
 
 /// Evidence for this instance, in the formats served over HTTP.
 #[derive(Clone, Debug)]

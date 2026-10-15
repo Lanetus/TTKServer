@@ -2,11 +2,16 @@
 //!
 //! Checks performed:
 //! 1. the PCK certificate chain embedded in the quote (certification data type 5, PEM or
-//!    DER) chains to the pinned Intel SGX Root CA and is valid now;
+//!    DER) chains to the pinned Intel SGX Root CA and is valid now, and its leaf carries the
+//!    Intel SGX extensions (`1.2.840.113741.1.13.1`) every PCK certificate has;
 //! 2. the Quoting Enclave (QE) report is signed by the PCK key, and is not a debug enclave;
 //! 3. the QE report's `REPORT_DATA` binds the attestation key: `SHA-256(attestation_key ||
 //!    qe_auth_data)` followed by 32 zero bytes;
 //! 4. the quote header and body are signed by the attestation key.
+//!
+//! TDX `TDATTRIBUTES` are reported as the `tdattributes` measurement (8 bytes, little endian);
+//! the verifier's policy requires `SEPT_VE_DISABLE` for non-debug TDs (see
+//! `TD_ATTRIBUTE_SEPT_VE_DISABLE`).
 //!
 //! Not evaluated: TCB status and QE identity against Intel PCS collateral (TCB Info, QE
 //! Identity, PCK CRLs). A genuine but out-of-date or revoked platform is therefore accepted.
@@ -58,6 +63,8 @@ const TD_RTMR0: usize = 328;
 const TD_REPORT_DATA: usize = 520;
 /// `TDATTRIBUTES` debug bit.
 const TD_ATTRIBUTE_DEBUG: u64 = 1;
+/// OID of the Intel SGX extensions of a PCK certificate.
+const OID_SGX_EXTENSIONS: &str = "1.2.840.113741.1.13.1";
 
 /// Verifies the DCAP `quote` produced by `tee` (TDX or SGX) at time `now`.
 pub fn verify(
@@ -112,6 +119,7 @@ pub fn verify(
 fn td_evidence(body: &[u8]) -> VerifiedEvidence {
     let mut measurements = BTreeMap::from([
         ("mrseam".to_string(), field(body, TD_MRSEAM, 48)),
+        ("tdattributes".to_string(), field(body, TD_ATTRIBUTES, 8)),
         ("mrtd".to_string(), field(body, TD_MRTD, 48)),
         ("mrconfigid".to_string(), field(body, TD_MRCONFIGID, 48)),
         ("mrowner".to_string(), field(body, TD_MROWNER, 48)),
@@ -164,6 +172,15 @@ fn verify_pck_chain(data: &[u8], now: UnixTime, trust: &TrustStore) -> Result<Ve
         })
         .ok_or("quote PCK certificate chain has no leaf certificate")?;
     let leaf_der = &chain[leaf_index];
+    let (_, leaf_cert) = X509Certificate::from_der(leaf_der)
+        .map_err(|e| format!("malformed PCK certificate: {e}"))?;
+    if !leaf_cert
+        .extensions()
+        .iter()
+        .any(|ext| ext.oid.to_id_string() == OID_SGX_EXTENSIONS)
+    {
+        return Err("PCK certificate has no Intel SGX extensions".into());
+    }
     let intermediates: Vec<CertificateDer<'_>> = chain
         .iter()
         .enumerate()

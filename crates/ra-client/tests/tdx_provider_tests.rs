@@ -165,7 +165,7 @@ fn report_data_rejects_oversized_or_unsupported_inputs() {
 }
 
 #[test]
-fn provider_cmw_is_accepted_by_the_client_verifier() {
+fn provider_cmw_is_appraised_by_the_client_verifier() {
     let cmw = wrap_quote_as_cmw(TDX_QUOTE.to_vec()).to_cbor_bytes();
     let trust = TrustStore {
         intel_sgx_root: TDX_QUOTE_ROOT.to_vec(),
@@ -179,7 +179,9 @@ fn provider_cmw_is_accepted_by_the_client_verifier() {
         image_allowlist: vec![image_measurement(&fixture, ImageMeasurement::Image).unwrap()],
     };
 
-    let evidence = verify_evidence(
+    // The CMW is unwrapped and the quote verified up to the TD attributes policy: Intel's
+    // sample TD predates SEPT_VE_DISABLE, which production TDs must set.
+    let err = verify_evidence(
         &cmw,
         &quote_report_data(),
         now,
@@ -187,8 +189,8 @@ fn provider_cmw_is_accepted_by_the_client_verifier() {
         &images,
         Policy::default(),
     )
-    .expect("the verifier should accept the provider's CMW");
-    assert_eq!(evidence.tee, TeeKind::Tdx);
+    .unwrap_err();
+    assert!(err.contains("SEPT_VE_DISABLE"), "{err}");
 }
 
 #[test]

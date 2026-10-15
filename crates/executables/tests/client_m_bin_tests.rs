@@ -14,6 +14,7 @@ use std::process::Output;
 use std::time::Duration;
 use ttk_executables::faf_client::attest_node;
 use ttk_ra_client::EnclaveCertVerifier;
+use ttk_ra_server::server::Server;
 use ttk_ra_server::terminal::Terminal;
 use ttk_ra_server::{EvalError, Evaluator};
 use ttk_relay::Relay;
@@ -31,12 +32,10 @@ impl Evaluator for Echo {
 /// its address. It serves (unlocked with a test CA certificate) until the test's runtime shuts
 /// down.
 fn start_relay() -> SocketAddr {
-    let relay = Relay::bind("127.0.0.1:0".parse().unwrap())
-        .expect("relay should start")
-        .allow_mock()
-        .allow_private_next_hops();
-    relay.server().sign_for_tests().unwrap();
-    let addr = relay.local_addr().unwrap();
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).expect("relay should start");
+    server.sign_for_tests().unwrap();
+    let addr = server.local_addr().unwrap();
+    let relay = Relay::new(server).allow_mock().allow_private_next_hops();
     tokio::spawn(async move { relay.serve().await.unwrap() });
     addr
 }
@@ -44,10 +43,10 @@ fn start_relay() -> SocketAddr {
 /// Starts an echo terminal node (unlocked with a test CA certificate) on a free local port and
 /// returns its address.
 fn start_echo_terminal() -> SocketAddr {
-    let terminal =
-        Terminal::bind("127.0.0.1:0".parse().unwrap(), Echo).expect("terminal should start");
-    terminal.server().sign_for_tests().unwrap();
-    let addr = terminal.local_addr().unwrap();
+    let server = Server::bind("127.0.0.1:0".parse().unwrap()).expect("terminal should start");
+    server.sign_for_tests().unwrap();
+    let addr = server.local_addr().unwrap();
+    let terminal = Terminal::new(server, Echo);
     tokio::spawn(async move { terminal.serve().await.unwrap() });
     addr
 }
@@ -148,6 +147,7 @@ async fn echo_binary_attests_and_keeps_faf_locked_until_certified() {
     let echo_addr = free_udp_addr();
     let _echo = tokio::process::Command::new(env!("CARGO_BIN_EXE_echo"))
         .env("TTK_USE_UDP", "1")
+        .env("TTK_ATTESTATION", "mock")
         .env("TTK_LISTEN_ADDR", echo_addr.to_string())
         .env_remove("RUST_LOG")
         .kill_on_drop(true)

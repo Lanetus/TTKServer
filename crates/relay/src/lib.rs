@@ -14,14 +14,14 @@
 //!
 //! When forwarding a [`FafRequest`], the relay is itself a RATS (RFC 9334) Relying Party: it
 //! only sends the request to a next hop whose RA-TLS attestation verifies. Verified connections
-//! are kept open and reused (see [`MAX_POOLED_RELAYS`]), so the RA-TLS handshake and attestation
+//! are kept open and reused (up to `MAX_POOLED_RELAYS`, 64), so the RA-TLS handshake and attestation
 //! check happen once per next hop rather than once per request.
 //!
 //! Because the next hop comes from the request, a relay also limits where it may send traffic:
 //! never to link-local, multicast, broadcast or unspecified addresses, and to loopback or private
 //! addresses only with [`Relay::allow_private_next_hops`] (see
 //! [`classify_hop_address`]). It caps the hops left in a
-//! request at [`MAX_RELAYS`] and the requests it forwards at once at [`MAX_CONCURRENT_FORWARDS`],
+//! request at [`MAX_RELAYS`] and the requests it forwards at once at `MAX_CONCURRENT_FORWARDS` (256),
 //! and answers every forwarding failure with the same `502 relay failed`, so a client can't use
 //! it to probe the network.
 
@@ -33,8 +33,12 @@ use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::Semaphore;
-use ttk_ra_client::images::set_root_transport;
+use ttk_ra_client::images::{
+    prefetch_root_images, set_root_transport, ROOT_IMAGES_REFRESH_INTERVAL,
+};
+use ttk_ra_client::is_permitted_hop_port;
 use ttk_ra_client::seal::{self, NodeSecretKey};
 use ttk_ra_client::{classify_hop_address, connect_to_node_filtered, HopAddressClass};
 use ttk_ra_client::{parse_relay_address, parse_relay_server};
@@ -46,10 +50,10 @@ use ttk_ra_server::server::{env_u32, BoxError, Listener, Server, PARENT_CID};
 type SendError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Time allowed for forwarding a `/faf` request to its next hop, RA-TLS handshake included.
-pub const RELAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const RELAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Environment variable that makes [`run`] accept mock attestation from next hops.
-pub const ALLOW_MOCK_RELAY_ENV: &str = "TTK_ALLOW_MOCK_ATTESTATION";
+const ALLOW_MOCK_RELAY_ENV: &str = "TTK_ALLOW_MOCK_ATTESTATION";
 
 /// Default vsock port of the parent's `vsock-proxy` for outbound connections, unless
 /// [`OUTBOUND_VSOCK_PORT_ENV`] overrides it.
@@ -57,33 +61,49 @@ const OUTBOUND_VSOCK_PORT: u32 = 5001;
 
 /// Environment variable that makes [`run`] accept loopback and private next-hop addresses (see
 /// [`Relay::allow_private_next_hops`]).
-pub const ALLOW_PRIVATE_NEXT_HOPS_ENV: &str = "TTK_ALLOW_PRIVATE_NEXT_HOPS";
+const ALLOW_PRIVATE_NEXT_HOPS_ENV: &str = "TTK_ALLOW_PRIVATE_NEXT_HOPS";
 
 /// Most relay entries a `/faf` request may carry; longer routes are answered `400`.
 pub const MAX_RELAYS: usize = 8;
 
 /// Most `/faf` requests a relay forwards at once; beyond it, requests are answered
 /// `503 Service Unavailable`.
-pub const MAX_CONCURRENT_FORWARDS: usize = 256;
+const MAX_CONCURRENT_FORWARDS: usize = 256;
 
 /// Body of every `502` answer: forwarding failures are not told apart, so that a client can't
 /// learn from them whether an address resolves, listens or attests.
 const RELAY_FAILED: &str = "relay failed";
 
+/// Body of every `400` answer for a relay entry that can't be opened or parsed: the reason is
+/// only logged (at debug level), so the answer is no decryption oracle.
+const INVALID_RELAY: &str = "invalid relay";
+
+/// Earliest a `502` is answered after the request arrived (plus up to [`FAILURE_JITTER`]), so
+/// that a refused address can't be told from an unreachable one by timing.
+const FAILURE_MIN_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Upper bound of the random delay added to [`FAILURE_MIN_DELAY`].
+const FAILURE_JITTER: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Environment variable that overrides the default outbound vsock port `5001`.
-pub const OUTBOUND_VSOCK_PORT_ENV: &str = "TTK_OUTBOUND_VSOCK_PORT";
+const OUTBOUND_VSOCK_PORT_ENV: &str = "TTK_OUTBOUND_VSOCK_PORT";
 
 /// Environment variable that overrides the parent's CID (default [`PARENT_CID`], `3`) for
 /// outbound connections.
-pub const PARENT_CID_ENV: &str = "TTK_PARENT_CID";
+const PARENT_CID_ENV: &str = "TTK_PARENT_CID";
 
 /// Builds the verifier used to attest a next hop. Called once per new connection, so each
 /// connection gets its own verifier state.
-pub type RelayVerifierFactory = Arc<dyn Fn() -> EnclaveCertVerifier + Send + Sync>;
+type RelayVerifierFactory = Arc<dyn Fn() -> EnclaveCertVerifier + Send + Sync>;
 
 /// Most next-hop connections kept open for reuse at once. Next hops beyond this limit are still
 /// served, over a one-off connection closed after the request.
-pub const MAX_POOLED_RELAYS: usize = 64;
+const MAX_POOLED_RELAYS: usize = 64;
+
+/// Longest a pooled next-hop connection is reused. A new connection re-attests the hop against
+/// the current accepted images, so a hop whose image was removed from the root servers'
+/// allowlist stops being used within this time.
+const POOLED_CONNECTION_MAX_AGE: std::time::Duration = ROOT_IMAGES_REFRESH_INTERVAL;
 
 /// Runs the relay node: attests, builds the RA-TLS identity, then serves HTTP/3 until the
 /// endpoint closes.
@@ -110,6 +130,9 @@ pub async fn run() -> Result<(), BoxError> {
     if std::env::var(ALLOW_MOCK_RELAY_ENV).is_ok_and(|v| v == "1") {
         warn!("Accepting MOCK attestation from next hops ({ALLOW_MOCK_RELAY_ENV}=1)");
         relay = relay.allow_mock();
+    } else {
+        // Fetched in the background now, so the first next-hop handshake doesn't wait for it.
+        prefetch_root_images();
     }
     if std::env::var(ALLOW_PRIVATE_NEXT_HOPS_ENV).is_ok_and(|v| v == "1") {
         warn!("Accepting loopback and private next hops ({ALLOW_PRIVATE_NEXT_HOPS_ENV}=1)");
@@ -138,18 +161,10 @@ impl Relay {
         }
     }
 
-    /// Attests, builds the RA-TLS identity and binds a relay node to UDP `addr`.
-    ///
-    /// Must be called within a Tokio runtime. Binding port 0 picks a free port; see
-    /// [`local_addr`](Self::local_addr).
-    pub fn bind(addr: SocketAddr) -> Result<Self, BoxError> {
-        Ok(Self::new(Server::bind(addr)?))
-    }
-
     /// Sets the policy for attesting next hops.
     ///
     /// Defaults to [`EnclaveCertVerifier::new`], which accepts only genuine TEE evidence.
-    pub fn with_verifier(
+    fn with_verifier(
         mut self,
         verifier: impl Fn() -> EnclaveCertVerifier + Send + Sync + 'static,
     ) -> Self {
@@ -173,19 +188,9 @@ impl Relay {
 
     /// Sets how next hops are reached. Defaults to [`ClientTransport::Udp`]; from inside an
     /// enclave, use [`ClientTransport::Vsock`] to go through the parent's `vsock-proxy`.
-    pub fn with_transport(mut self, transport: ClientTransport) -> Self {
+    fn with_transport(mut self, transport: ClientTransport) -> Self {
         self.transport = transport;
         self
-    }
-
-    /// Returns the address the endpoint is bound to.
-    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        self.server.local_addr()
-    }
-
-    /// Returns the wrapped attested server (e.g. its presented certificate chain).
-    pub fn server(&self) -> &Server {
-        &self.server
     }
 
     /// Serves the base routes and `POST /faf` over HTTP/3 until the endpoint closes.
@@ -208,23 +213,39 @@ impl Relay {
 
 /// Verified next-hop connections, keyed by `(host, port)` as given in the relay address.
 ///
-/// Entries are not kept alive: a connection closed by the QUIC idle timeout (or the peer) is
-/// dropped the next time the pool is consulted.
+/// Entries are not kept alive: a connection closed by the QUIC idle timeout (or the peer), or
+/// older than [`POOLED_CONNECTION_MAX_AGE`], is dropped the next time the pool is consulted.
 #[derive(Default)]
 struct RelayPool {
-    clients: Mutex<HashMap<(String, u16), Arc<TtkClient>>>,
+    clients: Mutex<HashMap<(String, u16), PooledClient>>,
+}
+
+/// A pooled next-hop connection and when it was attested.
+struct PooledClient {
+    client: Arc<TtkClient>,
+    attested_at: Instant,
+}
+
+/// Whether a pooled connection may still be reused.
+impl PooledClient {
+    /// Open and younger than [`POOLED_CONNECTION_MAX_AGE`].
+    fn is_usable(&self) -> bool {
+        !self.client.is_closed() && self.attested_at.elapsed() < POOLED_CONNECTION_MAX_AGE
+    }
 }
 
 /// Lookup, insertion and eviction of pooled next-hop connections.
 impl RelayPool {
-    /// Returns the open connection to `host:port`, evicting it if it has closed.
+    /// Returns the open connection to `host:port`, evicting it if it has closed or is too old.
     fn get(&self, host: &str, port: u16) -> Option<Arc<TtkClient>> {
         let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
         let key = (host.to_string(), port);
         match clients.get(&key) {
-            Some(client) if !client.is_closed() => Some(client.clone()),
+            Some(pooled) if pooled.is_usable() => Some(pooled.client.clone()),
             Some(_) => {
-                clients.remove(&key);
+                if let Some(pooled) = clients.remove(&key) {
+                    close_in_background(pooled.client);
+                }
                 None
             }
             None => None,
@@ -235,12 +256,19 @@ impl RelayPool {
     /// `false` (and pools nothing) if the pool is full of open connections to other hops.
     fn insert(&self, host: &str, port: u16, client: Arc<TtkClient>) -> bool {
         let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
-        clients.retain(|_, c| !c.is_closed());
+        clients.retain(|_, pooled| pooled.is_usable());
         let key = (host.to_string(), port);
         if clients.len() >= MAX_POOLED_RELAYS && !clients.contains_key(&key) {
             return false;
         }
-        clients.insert(key, client);
+        let attested_at = Instant::now();
+        clients.insert(
+            key,
+            PooledClient {
+                client,
+                attested_at,
+            },
+        );
         true
     }
 
@@ -248,7 +276,10 @@ impl RelayPool {
     fn remove(&self, host: &str, port: u16, client: &Arc<TtkClient>) {
         let mut clients = self.clients.lock().unwrap_or_else(|e| e.into_inner());
         let key = (host.to_string(), port);
-        if clients.get(&key).is_some_and(|c| Arc::ptr_eq(c, client)) {
+        if clients
+            .get(&key)
+            .is_some_and(|pooled| Arc::ptr_eq(&pooled.client, client))
+        {
             clients.remove(&key);
         }
     }
@@ -272,19 +303,28 @@ struct FafState {
 /// Egress policy for next hops.
 impl FafState {
     /// Returns whether a next hop may be contacted at `addr`, logging why not.
+    ///
+    /// The address itself is only logged at debug level: next hops are private to the route.
     fn may_contact(&self, addr: &SocketAddr) -> bool {
+        if !is_permitted_hop_port(addr.port()) {
+            warn!("/faf: refusing a next hop on a well-known port other than 443");
+            debug!("/faf: refused next hop {addr}");
+            return false;
+        }
         match classify_hop_address(addr.ip()) {
             HopAddressClass::Public => true,
             HopAddressClass::Private if self.allow_private_next_hops => true,
             HopAddressClass::Private => {
                 warn!(
-                    "/faf: refusing next hop {addr}: loopback/private address \
+                    "/faf: refusing a loopback/private next hop \
                      (set {ALLOW_PRIVATE_NEXT_HOPS_ENV}=1 to allow)"
                 );
+                debug!("/faf: refused next hop {addr}");
                 false
             }
             HopAddressClass::Forbidden => {
-                warn!("/faf: refusing next hop {addr}: link-local, multicast or unspecified");
+                warn!("/faf: refusing a link-local, multicast or unspecified next hop");
+                debug!("/faf: refused next hop {addr}");
                 false
             }
         }
@@ -296,11 +336,12 @@ impl FafState {
 /// sealed response (see [`seal::seal_response`]) travels back along the route unchanged.
 ///
 /// Answers `400` for a request without relays (only a terminal node is a last hop), with more
-/// than [`MAX_RELAYS`], or with a relay entry that can't be opened or parsed; `503` while
-/// [`MAX_CONCURRENT_FORWARDS`] requests are already being forwarded; and `502 relay failed` if
-/// the next hop has a refused address, can't be reached, fails attestation, answers anything
-/// but `200` (or a non-UTF-8 body) or doesn't answer within [`RELAY_TIMEOUT`]. The reason is
-/// only logged.
+/// than [`MAX_RELAYS`], or `400 invalid relay` for a relay entry that can't be opened or parsed;
+/// `503` while [`MAX_CONCURRENT_FORWARDS`] requests are already being forwarded; and
+/// `502 relay failed` if the next hop has a refused address or port, can't be reached, fails
+/// attestation, answers anything but `200` (or a non-UTF-8 body) or doesn't answer within
+/// [`RELAY_TIMEOUT`], no sooner than [`FAILURE_MIN_DELAY`] (plus jitter) after the request
+/// arrived. The reason is only logged, and the next hop's address only at debug level.
 async fn faf(
     State(state): State<FafState>,
     Json(request): Json<FafRequest>,
@@ -327,38 +368,44 @@ async fn faf(
 
     let (host, port) = match next_hop(&state.node_key, &relays.remove(0)) {
         Ok(target) => target,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("invalid relay: {e}")),
+        Err(e) => {
+            debug!("/faf: invalid relay entry: {e}");
+            return (StatusCode::BAD_REQUEST, INVALID_RELAY.to_string());
+        }
     };
     let forward = FafRequest { relays, body };
 
+    let started = tokio::time::Instant::now();
     let relayed =
         tokio::time::timeout(RELAY_TIMEOUT, forward_to_hop(&state, &host, port, &forward)).await;
-    match relayed {
+    let failure = match relayed {
         Ok(Ok(response)) if response.status == StatusCode::OK => {
             match String::from_utf8(response.body) {
                 Ok(body) => {
-                    info!("/faf: relayed to {host}:{port}");
-                    (StatusCode::OK, body)
+                    info!("/faf: relayed a request");
+                    debug!("/faf: relayed to {host}:{port}");
+                    return (StatusCode::OK, body);
                 }
-                Err(_) => {
-                    warn!("/faf: relay {host}:{port} answered a non-UTF-8 body");
-                    (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
-                }
+                Err(_) => "the next hop answered a non-UTF-8 body".to_string(),
             }
         }
-        Ok(Ok(response)) => {
-            warn!("/faf: relay {host}:{port} answered {}", response.status);
-            (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
-        }
-        Ok(Err(e)) => {
-            warn!("/faf: relaying to {host}:{port} failed: {e}");
-            (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
-        }
-        Err(_) => {
-            warn!("/faf: relay {host}:{port} timed out");
-            (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
-        }
-    }
+        Ok(Ok(response)) => format!("the next hop answered {}", response.status),
+        Ok(Err(e)) => format!("relaying failed: {e}"),
+        Err(_) => "the next hop timed out".to_string(),
+    };
+    warn!("/faf: {failure}");
+    debug!("/faf: failed next hop {host}:{port}");
+    tokio::time::sleep_until(started + FAILURE_MIN_DELAY + failure_jitter()).await;
+    (StatusCode::BAD_GATEWAY, RELAY_FAILED.to_string())
+}
+
+/// A random delay up to [`FAILURE_JITTER`].
+fn failure_jitter() -> std::time::Duration {
+    let mut bytes = [0u8; 4];
+    // Without randomness the floor alone still hides most of the timing difference.
+    let _ = ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes);
+    let millis = u64::from(u32::from_le_bytes(bytes)) % (FAILURE_JITTER.as_millis() as u64 + 1);
+    std::time::Duration::from_millis(millis)
 }
 
 /// Reads the next hop's host and port from `relay`, opening it with `node_key` if encrypted.
