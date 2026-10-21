@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.8.1] - 2026-10-21
+
+### Security
+- The server (`ttk-ra-server`) answers every connection from an unvalidated source address with a QUIC Retry before allocating a slot or sending the certificate flight, so spoofed sources can no longer exhaust connection slots or be used for amplification.
+- At most `MAX_HANDSHAKES` (256) connections can be in their handshake at once; the slot is released once the connection is set up.
+
 ## [6.8.0] - 2026-10-21
 
 ### Changed
@@ -579,7 +585,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.8.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.8.1...HEAD
+[6.8.1]: https://github.com/Lanetus/TTKServer/compare/v6.8.0...v6.8.1
 [6.8.0]: https://github.com/Lanetus/TTKServer/compare/v6.7.0...v6.8.0
 [6.7.0]: https://github.com/Lanetus/TTKServer/compare/v6.6.0...v6.7.0
 [6.6.0]: https://github.com/Lanetus/TTKServer/compare/v6.5.7...v6.6.0
