@@ -213,10 +213,14 @@ async fn request_headers_larger_than_max_request_headers_are_refused() {
         .header("x-padding", "x".repeat(MAX_REQUEST_HEADERS as usize + 1))
         .body(())
         .unwrap();
-    // The server advertises the limit (SETTINGS_MAX_FIELD_SECTION_SIZE, RFC 9114 §4.2.2) and
-    // the client refuses to send an oversized header section; the connection stays usable.
-    let err = client.send(request, None).await.unwrap_err();
-    assert!(err.to_string().contains("too big"), "{err}");
+    // The server advertises the limit (SETTINGS_MAX_FIELD_SECTION_SIZE, RFC 9114 §4.2.2): once
+    // the client has its SETTINGS it refuses to send an oversized header section, and if the
+    // request goes out before they arrive the server refuses it with 431. Either way the
+    // connection stays usable.
+    match client.send(request, None).await {
+        Ok(response) => assert_eq!(response.status, 431),
+        Err(err) => assert!(err.to_string().contains("too big"), "{err}"),
+    }
     assert_eq!(client.get("/").await.unwrap().status, 200);
     client.close().await.unwrap();
 
