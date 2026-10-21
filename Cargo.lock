@@ -3070,6 +3070,7 @@ dependencies = [
  "h3-quinn",
  "log",
  "quinn",
+ "quinn-proto",
  "rcgen",
  "ring",
  "rustls",

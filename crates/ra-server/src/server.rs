@@ -160,8 +160,13 @@ pub const MAX_CONNECTIONS: usize = 1024;
 /// limit instead.
 const MAX_CONNECTIONS_PER_SOURCE: usize = 64;
 
+/// Most connections in their handshake (QUIC handshake and HTTP/3 setup) at once, out of the
+/// [`MAX_CONNECTIONS`]; further connection attempts are refused. Peers that never finish their
+/// handshake can only hold these, not the slots of established connections.
+pub const MAX_HANDSHAKES: usize = 256;
+
 /// Time allowed for the QUIC handshake and HTTP/3 setup of a new connection; slower ones are
-/// dropped so that they don't hold one of the [`MAX_CONNECTIONS`].
+/// dropped so that they don't hold one of the [`MAX_CONNECTIONS`] or [`MAX_HANDSHAKES`].
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A connection with no request in progress for this long is closed, whether or not the peer
@@ -431,8 +436,13 @@ impl Server {
     }
 
     /// Accepts QUIC connections and serves the base routes merged with `routes` over HTTP/3
-    /// until the endpoint closes. Beyond [`MAX_CONNECTIONS`] open connections (or
-    /// `MAX_CONNECTIONS_PER_SOURCE` from one IP address), new ones are refused; see
+    /// until the endpoint closes.
+    ///
+    /// A connection attempt whose source address QUIC has not validated yet is answered with a
+    /// Retry (RFC 9000 §8.1.2) and takes no slot, so spoofed or one-packet attempts cost no
+    /// handshake and get no certificate flight to amplify. Beyond [`MAX_CONNECTIONS`] open
+    /// connections, [`MAX_HANDSHAKES`] of them in their handshake, or
+    /// `MAX_CONNECTIONS_PER_SOURCE` from one IP address, new ones are refused; see
     /// `HANDSHAKE_TIMEOUT`, `CONNECTION_IDLE_TIMEOUT` and `CONNECTION_MAX_AGE` for how long
     /// a connection holds its place.
     pub async fn serve_with(self, routes: Router) {
@@ -450,9 +460,19 @@ impl Server {
         }
         tokio::spawn(watch_certificate_expiry(self.expires_at));
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+        let handshakes = Arc::new(Semaphore::new(MAX_HANDSHAKES));
         let sources = SourceConnections::new(MAX_CONNECTIONS_PER_SOURCE);
         let budget = BodyBudget::new(MAX_IN_FLIGHT_BODY_BYTES);
         while let Some(incoming) = self.endpoint.accept().await {
+            if !incoming.remote_address_validated() {
+                // The client repeats its Initial with the Retry token, proving its address.
+                // Retry fails only if this Initial already carried a (stale or foreign) token.
+                if let Err(e) = incoming.retry() {
+                    debug!("Refusing connection: its address validation token was not accepted");
+                    e.into_incoming().refuse();
+                }
+                continue;
+            }
             let Some(source) = sources.try_acquire(incoming.remote_address().ip()) else {
                 warn!("Refusing connection: {MAX_CONNECTIONS_PER_SOURCE} already open from its address");
                 incoming.refuse();
@@ -460,6 +480,11 @@ impl Server {
             };
             let Ok(permit) = connections.clone().try_acquire_owned() else {
                 warn!("Refusing connection: {MAX_CONNECTIONS} already open");
+                incoming.refuse();
+                continue;
+            };
+            let Ok(handshake) = handshakes.clone().try_acquire_owned() else {
+                warn!("Refusing connection: {MAX_HANDSHAKES} handshakes already in progress");
                 incoming.refuse();
                 continue;
             };
@@ -471,7 +496,7 @@ impl Server {
                 CertificatePhase::SelfSigned
             };
             tokio::spawn(async move {
-                handle_connection(incoming, app, phase, budget).await;
+                handle_connection(incoming, handshake, app, phase, budget).await;
                 drop((permit, source));
             });
         }
@@ -672,12 +697,14 @@ impl Drop for SourceGuard {
     }
 }
 
-/// Completes the handshake of `incoming` (within [`HANDSHAKE_TIMEOUT`]) and serves its HTTP/3
-/// requests, each tagged with the certificate `phase` read before the handshake. Closes the
-/// connection once it has had no request in progress for [`CONNECTION_IDLE_TIMEOUT`], or
-/// (after draining its requests) once it is [`CONNECTION_MAX_AGE`] old.
+/// Completes the handshake of `incoming` (within [`HANDSHAKE_TIMEOUT`]), then releases its
+/// `handshake` slot and serves its HTTP/3 requests, each tagged with the certificate `phase`
+/// read before the handshake. Closes the connection once it has had no request in progress for
+/// [`CONNECTION_IDLE_TIMEOUT`], or (after draining its requests) once it is
+/// [`CONNECTION_MAX_AGE`] old.
 async fn handle_connection(
     incoming: quinn::Incoming,
+    handshake: OwnedSemaphorePermit,
     app: Router,
     phase: CertificatePhase,
     budget: BodyBudget,
@@ -698,6 +725,7 @@ async fn handle_connection(
         Ok(Err(e)) => return warn!("{e}"),
         Err(_) => return warn!("Handshake timed out"),
     };
+    drop(handshake);
 
     // Requests are counted rather than joined here, so that `accept` is only ever cancelled
     // when the connection is being closed. Each request's headers are read in its own task, so
