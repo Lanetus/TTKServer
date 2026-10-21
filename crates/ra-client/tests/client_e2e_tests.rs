@@ -205,7 +205,7 @@ async fn client_rejects_responses_larger_than_max_response_body() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn server_refuses_request_headers_larger_than_max_request_headers() {
+async fn request_headers_larger_than_max_request_headers_are_refused() {
     let addr = start_server();
     let client = connect_mock(addr).await;
 
@@ -213,9 +213,12 @@ async fn server_refuses_request_headers_larger_than_max_request_headers() {
         .header("x-padding", "x".repeat(MAX_REQUEST_HEADERS as usize + 1))
         .body(())
         .unwrap();
-    // The oversized header section closes the connection instead of being served.
-    assert!(client.send(request, None).await.is_err());
-    assert!(client.get("/").await.is_err());
+    // The server advertises the limit (SETTINGS_MAX_FIELD_SECTION_SIZE, RFC 9114 §4.2.2) and
+    // the client refuses to send an oversized header section; the connection stays usable.
+    let err = client.send(request, None).await.unwrap_err();
+    assert!(err.to_string().contains("too big"), "{err}");
+    assert_eq!(client.get("/").await.unwrap().status, 200);
+    client.close().await.unwrap();
 
     // The server itself keeps serving new connections.
     let fresh = connect_mock(addr).await;

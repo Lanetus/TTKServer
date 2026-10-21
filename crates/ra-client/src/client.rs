@@ -283,7 +283,7 @@ pub struct TtkClient {
     endpoint: Endpoint,
     connection: quinn::Connection,
     send_request: h3::client::SendRequest<h3_quinn::OpenStreams, axum::body::Bytes>,
-    driver_handle: tokio::task::JoinHandle<Result<(), h3::Error>>,
+    driver_handle: tokio::task::JoinHandle<h3::error::ConnectionError>,
     server_addr: SocketAddr,
     server_name: String,
     peer_cert: Option<CertificateDer<'static>>,
