@@ -94,7 +94,7 @@ deploy/nitro/systemd/ttk-{relay,terminal,root}-enclave.service  # systemd units 
 - Tests live in each crate's `tests/` (no inline `#[cfg(test)]` modules); items they need must be `pub`.
 - Rust 2021; run `cargo fmt` and clippy before finishing. Keep `//!`/`///` doc comments on public items, in the existing RATS/RFC-referencing style.
 - Logging via `log` + `env_logger` in code; do not use `eprintln!` , `println!` or `dbg!`.
-- Crypto: rustls 0.23 with the `ring` provider (installed explicitly when attesting / connecting); quinn 0.11 + h3 0.0.7 / h3-quinn 0.0.9 — versions are tightly coupled, upgrade together.
+- Crypto: rustls 0.23 with the `ring` provider (installed explicitly when attesting / connecting); quinn 0.11 + h3 0.0.8 / h3-quinn 0.0.10 — versions are tightly coupled, upgrade together.
 - Releases use conventional commits (`feat:`, `fix:`, `chore(release):`) and version bumps of `[workspace.package]` in the root `Cargo.toml`.
 - **Branches:** `develop` is the integration branch; all PRs target `develop` (`gh pr create --base develop`), never `main`. Branch names MUST start with `bugfix/`, `feature/` or `docs/`. `main` is the release branch: it only receives merges from `develop`, and every push to it runs CD (`main.yml`: version bump + tag). CI (`CI.yml`) runs on every PR.
 - **STRICT commit message rule:** every commit message MUST start with one of these prefixes, no exceptions:

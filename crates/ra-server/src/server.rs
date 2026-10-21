@@ -700,7 +700,8 @@ async fn handle_connection(
     };
 
     // Requests are counted rather than joined here, so that `accept` is only ever cancelled
-    // when the connection is being closed (cancelling it mid-headers would drop a request).
+    // when the connection is being closed. Each request's headers are read in its own task, so
+    // a peer slow to send them doesn't hold up the others.
     let started = AtomicU64::new(0);
     let in_progress = Arc::new(AtomicUsize::new(0));
     let idle = async {
@@ -718,13 +719,23 @@ async fn handle_connection(
     loop {
         tokio::select! {
             accepted = h3_conn.accept() => match accepted {
-                Ok(Some((mut req, stream))) => {
-                    req.extensions_mut().insert(phase);
+                Ok(Some(resolver)) => {
                     started.fetch_add(1, Ordering::Relaxed);
                     let request = InProgress::start(&in_progress);
-                    let respond = respond(app.clone(), req, stream, budget.reservation());
+                    let (app, reservation) = (app.clone(), budget.reservation());
                     tokio::spawn(async move {
-                        respond.await;
+                        // The headers arrive within the body's deadline, or the stream is dropped.
+                        let resolved =
+                            tokio::time::timeout(REQUEST_BODY_TIMEOUT, resolver.resolve_request())
+                                .await;
+                        match resolved {
+                            Ok(Ok((mut req, stream))) => {
+                                req.extensions_mut().insert(phase);
+                                respond(app, req, stream, reservation).await;
+                            }
+                            Ok(Err(e)) => debug!("Bad request headers: {e}"),
+                            Err(_) => debug!("Request headers timed out"),
+                        }
                         drop(request);
                     });
                 }
