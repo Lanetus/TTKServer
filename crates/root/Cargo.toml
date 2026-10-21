@@ -18,6 +18,7 @@ ttk-ra-client.workspace = true
 ttk-core.workspace = true
 axum.workspace = true
 base64 = { workspace = true, optional = false }
+getrandom = { workspace = true, optional = false }
 log = { workspace = true, optional = false }
 rand_core = { workspace = true, optional = false }
 rcgen = { workspace = true, optional = false }

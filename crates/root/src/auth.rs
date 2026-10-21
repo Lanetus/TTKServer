@@ -16,11 +16,12 @@
 
 use crate::FileImageTrustStore;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use getrandom::SysRng;
 use log::info;
-use rand_core::{OsRng, RngCore};
+use rand_core::{Rng, UnwrapErr};
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, CustomExtension, DistinguishedName, DnType,
-    DnValue, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, PublicKeyData, SanType,
+    BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, DnValue,
+    ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose, PublicKeyData, SanType,
     SignatureAlgorithm,
 };
 use rustls_pki_types::{pem::PemObject, CertificateDer, UnixTime};
@@ -51,10 +52,8 @@ const ISSUED_CERT_VALIDITY_DAYS: i64 = 365;
 pub struct CertificateAuthority {
     /// The CA certificate as given (PEM, DER).
     cert_der: CertificateDer<'static>,
-    /// In-memory issuer with the CA's subject name, used only to sign.
-    issuer: Certificate,
-    /// The CA's signing key.
-    key: KeyPair,
+    /// In-memory issuer with the CA's subject name and signing key.
+    issuer: Issuer<'static, KeyPair>,
     /// Whether the CA certificate is self-signed (a root, not sent in issued chains).
     self_signed: bool,
 }
@@ -68,21 +67,19 @@ impl CertificateAuthority {
         let key = KeyPair::from_pem(key_pem).map_err(|e| format!("CA key: {e}"))?;
         let (_, cert) =
             X509Certificate::from_der(&cert_der).map_err(|e| format!("CA certificate: {e}"))?;
-        if cert.public_key().raw != key.public_key_der() {
+        if cert.public_key().raw != key.subject_public_key_info() {
             return Err("CA key does not match the CA certificate".into());
         }
         let self_signed = cert.subject().as_raw() == cert.issuer().as_raw();
 
-        // rcgen signs with an issuer certificate; rebuild one with the CA's subject name and key
-        // so issued certificates name the CA as issuer.
+        // rcgen signs with an issuer built from certificate parameters; rebuild them with the
+        // CA's subject name so issued certificates name the CA as issuer.
         let mut params = CertificateParams::default();
         params.distinguished_name = distinguished_name(cert.subject())?;
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let issuer = params.self_signed(&key)?;
         Ok(Self {
             cert_der: cert_der.clone(),
-            issuer,
-            key,
+            issuer: Issuer::new(params, key),
             self_signed,
         })
     }
@@ -130,7 +127,7 @@ impl CertificateAuthority {
                 ATTESTATION_OID,
                 extension.value.to_vec(),
             ));
-        let leaf = params.signed_by(&public_key, &self.issuer, &self.key)?;
+        let leaf = params.signed_by(&public_key, &self.issuer)?;
 
         let (_, issued) = X509Certificate::from_der(leaf.der())
             .map_err(|e| format!("issued certificate: {e}"))?;
@@ -208,7 +205,7 @@ async fn authorize_over(
     );
 
     let mut nonce = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce);
+    UnwrapErr(SysRng).fill_bytes(&mut nonce);
     let response = client
         .post(EVIDENCE_PATH, &nonce)
         .await
@@ -355,7 +352,7 @@ impl PublicKeyData for NodePublicKey {
         &self.key
     }
 
-    fn algorithm(&self) -> &SignatureAlgorithm {
+    fn algorithm(&self) -> &'static SignatureAlgorithm {
         self.algorithm
     }
 }

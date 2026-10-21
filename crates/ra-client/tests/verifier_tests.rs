@@ -8,8 +8,8 @@
 use aws_nitro_enclaves_nsm_api::api::AttestationDoc;
 use ciborium::Value;
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, CustomExtension, DnType, IsCa, KeyPair,
-    PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384,
+    BasicConstraints, CertificateParams, CertifiedIssuer, CustomExtension, DnType, IsCa, KeyPair,
+    PublicKeyData, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{
@@ -211,13 +211,13 @@ fn tdx_quote_is_rejected_as_sgx_evidence() {
 // ---------------------------------------------------------------------------
 
 /// Creates a certificate named `cn` for `key`, self-signed or signed by `issuer`.
-fn cert(
+fn cert<'k>(
     cn: &str,
-    key: &KeyPair,
+    key: &'k KeyPair,
     ca: bool,
-    issuer: Option<(&Certificate, &KeyPair)>,
+    issuer: Option<&CertifiedIssuer<'_, &KeyPair>>,
     extensions: Vec<CustomExtension>,
-) -> Certificate {
+) -> CertifiedIssuer<'static, &'k KeyPair> {
     let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
     params.distinguished_name.push(DnType::CommonName, cn);
     if ca {
@@ -225,8 +225,8 @@ fn cert(
     }
     params.custom_extensions = extensions;
     match issuer {
-        Some((issuer, issuer_key)) => params.signed_by(key, issuer, issuer_key).unwrap(),
-        None => params.self_signed(key).unwrap(),
+        Some(issuer) => CertifiedIssuer::signed_by(params, key, issuer).unwrap(),
+        None => CertifiedIssuer::self_signed(params, key).unwrap(),
     }
 }
 
@@ -252,24 +252,12 @@ fn intel_pki() -> IntelPki {
     let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
     let root = cert("Test SGX Root CA", &root_key, true, None, vec![]);
     let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-    let ca = cert(
-        "Test PCK CA",
-        &ca_key,
-        true,
-        Some((&root, &root_key)),
-        vec![],
-    );
+    let ca = cert("Test PCK CA", &ca_key, true, Some(&root), vec![]);
     let pck_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
     // Every genuine PCK certificate carries the Intel SGX extensions.
     let sgx_extensions =
         CustomExtension::from_oid_content(&[1, 2, 840, 113741, 1, 13, 1], vec![0x30, 0x00]);
-    let pck = cert(
-        "Test PCK",
-        &pck_key,
-        false,
-        Some((&ca, &ca_key)),
-        vec![sgx_extensions],
-    );
+    let pck = cert("Test PCK", &pck_key, false, Some(&ca), vec![sgx_extensions]);
     IntelPki {
         root: root.der().to_vec(),
         chain_pem: format!("{}{}{}", pck.pem(), ca.pem(), root.pem()),
@@ -360,15 +348,9 @@ fn amd_pki() -> AmdPki {
     let ark_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
     let ark = cert("ARK-Test", &ark_key, true, None, vec![]);
     let ask_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
-    let ask = cert("SEV-Test", &ask_key, true, Some((&ark, &ark_key)), vec![]);
+    let ask = cert("SEV-Test", &ask_key, true, Some(&ark), vec![]);
     let asvk_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
-    let asvk = cert(
-        "SEV-VLEK-Test",
-        &asvk_key,
-        true,
-        Some((&ark, &ark_key)),
-        vec![],
-    );
+    let asvk = cert("SEV-VLEK-Test", &asvk_key, true, Some(&ark), vec![]);
 
     let chip_id = [0xC5; 64];
     // Milan layout: bl, tee, reserved x4, snp, ucode
@@ -381,7 +363,7 @@ fn amd_pki() -> AmdPki {
         "SEV-VCEK",
         &vcek_key,
         false,
-        Some((&ask, &ask_key)),
+        Some(&ask),
         vec![
             spl(1, tcb[0]),
             spl(2, tcb[1]),
@@ -396,7 +378,7 @@ fn amd_pki() -> AmdPki {
         "SEV-VLEK",
         &vlek_key,
         false,
-        Some((&asvk, &asvk_key)),
+        Some(&asvk),
         vec![
             spl(1, tcb[0]),
             spl(2, tcb[1]),
@@ -809,13 +791,7 @@ fn nitro_pki() -> NitroPki {
     let root_key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
     let root = cert("Test Nitro Root CA", &root_key, true, None, vec![]);
     let key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384).unwrap();
-    let leaf = cert(
-        "Test Nitro Signer",
-        &key,
-        false,
-        Some((&root, &root_key)),
-        vec![],
-    );
+    let leaf = cert("Test Nitro Signer", &key, false, Some(&root), vec![]);
     NitroPki {
         root: root.der().to_vec(),
         signing_cert: leaf.der().to_vec(),
@@ -984,7 +960,7 @@ fn tdx_ra_tls_cert(
     bound_key: &KeyPair,
     intel: &IntelPki,
 ) -> CertificateDer<'static> {
-    let binding = Sha256::digest(bound_key.public_key_der());
+    let binding = Sha256::digest(bound_key.subject_public_key_info());
     let quote = build_quote(TeeKind::Tdx, &td_body(&binding, 7, false), intel);
     let cmw = record(media_type::TDX, quote);
     let pem = create_cert_with_attestation(key, "enclave.internal", &cmw, 1).unwrap();
@@ -1043,13 +1019,7 @@ fn pck_certificate_without_sgx_extensions_is_rejected() {
     let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
     let root = cert("Test SGX Root CA", &root_key, true, None, vec![]);
     let pck_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-    let pck = cert(
-        "Test PCK",
-        &pck_key,
-        false,
-        Some((&root, &root_key)),
-        vec![],
-    );
+    let pck = cert("Test PCK", &pck_key, false, Some(&root), vec![]);
     intel.root = root.der().to_vec();
     intel.chain_pem = format!("{}{}", pck.pem(), root.pem());
     intel.pck = signer(&pck_key, &ECDSA_P256_SHA256_FIXED_SIGNING);

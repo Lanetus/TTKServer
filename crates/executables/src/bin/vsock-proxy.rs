@@ -79,7 +79,7 @@ mod imp {
     use tokio::net::UdpSocket;
     use tokio::sync::mpsc::{self, error::TrySendError};
     use tokio::time::Instant;
-    use tokio_vsock::{SockAddr, VsockListener, VsockStream};
+    use tokio_vsock::{VsockAddr, VsockListener, VsockStream};
     use ttk_core::egress::{classify_hop_address, is_permitted_hop_port, HopAddressClass};
     use ttk_core::vsock::OutboundRequest;
     use ttk_core::vsock::{answer_resolve, read_frame, read_outbound_request, write_frame};
@@ -115,7 +115,8 @@ mod imp {
             info!("Outbound relaying disabled");
             None
         } else {
-            let listener = VsockListener::bind(VMADDR_CID_ANY, config.outbound_port)?;
+            let listener =
+                VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, config.outbound_port))?;
             info!(
                 "Relaying vsock port {} (from CID {}) -> UDP",
                 config.outbound_port, config.cid
@@ -193,8 +194,8 @@ mod imp {
         clients: Clients,
         config: RelayConfig,
     ) {
-        match VsockStream::connect(config.cid, config.vsock_port).await {
-            Ok(stream) => {
+        match VsockStream::connect(VsockAddr::new(config.cid, config.vsock_port)).await {
+            Ok(mut stream) => {
                 info!("Client {client} connected");
                 let (mut rd, mut wr) = stream.split();
                 let unconfirmed_deadline = Instant::now() + UNCONFIRMED_CLIENT_TIMEOUT;
@@ -247,7 +248,7 @@ mod imp {
     /// Outbound: accepts vsock connections from the enclave (CID `enclave_cid` only) and relays
     /// each to the UDP destination named in its header.
     async fn serve_outbound(
-        mut listener: VsockListener,
+        listener: VsockListener,
         enclave_cid: u32,
         allow_private: bool,
     ) -> std::io::Result<()> {
@@ -261,10 +262,7 @@ mod imp {
                     continue;
                 }
             };
-            let cid = match addr {
-                SockAddr::Vsock(addr) => addr.cid(),
-                _ => u32::MAX,
-            };
+            let cid = addr.cid();
             if cid != enclave_cid {
                 warn!("Outbound: rejecting connection from CID {cid} (expected {enclave_cid})");
                 continue;
@@ -321,7 +319,11 @@ mod imp {
     /// Pumps datagrams between the vsock and a UDP socket connected to `destination` until the
     /// destination goes idle or either side closes. Destinations the egress policy refuses are
     /// dropped unanswered.
-    async fn relay_datagrams(stream: VsockStream, destination: SocketAddr, allow_private: bool) {
+    async fn relay_datagrams(
+        mut stream: VsockStream,
+        destination: SocketAddr,
+        allow_private: bool,
+    ) {
         if !permitted(&destination, allow_private) {
             return warn!("Outbound to {destination}: refused by the egress policy");
         }

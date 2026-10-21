@@ -8,7 +8,8 @@ use axum::routing::get;
 use axum::Router;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, CustomExtension, IsCa, KeyPair, SanType,
+    BasicConstraints, Certificate, CertificateParams, CustomExtension, IsCa, Issuer, KeyPair,
+    SanType,
 };
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use rustls::RootCertStore;
@@ -23,9 +24,10 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 /// Evidence embedded in the test RA-TLS certificate.
 const EVIDENCE: &[u8] = b"mock evidence";
 
-/// A certificate authority: its certificate and key.
+/// A certificate authority: its certificate, the parameters it was built from and its key.
 struct Ca {
     cert: Certificate,
+    params: CertificateParams,
     key: KeyPair,
 }
 
@@ -33,15 +35,17 @@ impl Ca {
     /// A self-signed root CA.
     fn root() -> Self {
         let key = KeyPair::generate().unwrap();
-        let cert = ca_params().self_signed(&key).unwrap();
-        Self { cert, key }
+        let params = ca_params();
+        let cert = params.self_signed(&key).unwrap();
+        Self { cert, params, key }
     }
 
     /// An intermediate CA issued by `self`.
     fn intermediate(&self) -> Self {
         let key = KeyPair::generate().unwrap();
-        let cert = ca_params().signed_by(&key, &self.cert, &self.key).unwrap();
-        Self { cert, key }
+        let params = ca_params();
+        let cert = params.signed_by(&key, &self.issuer()).unwrap();
+        Self { cert, params, key }
     }
 
     /// Issues a leaf for `key` naming `dns_name` and carrying `evidence` as the attestation
@@ -55,11 +59,12 @@ impl Ca {
                 ATTESTATION_OID,
                 octet_string(evidence),
             ));
-        params
-            .signed_by(key, &self.cert, &self.key)
-            .unwrap()
-            .der()
-            .clone()
+        params.signed_by(key, &self.issuer()).unwrap().der().clone()
+    }
+
+    /// The issuer signing as this CA.
+    fn issuer(&self) -> Issuer<'_, &KeyPair> {
+        Issuer::from_params(&self.params, &self.key)
     }
 
     /// A trust store holding only this CA.

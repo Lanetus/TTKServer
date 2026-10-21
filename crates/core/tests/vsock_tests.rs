@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
-use tokio_vsock::{VsockListener, VsockStream};
+use tokio_vsock::{VsockAddr, VsockListener, VsockStream};
 use ttk_core::vsock::{
     answer_resolve, check_host_name, forward_tcp_to_vsock, read_destination, read_frame,
     read_outbound_request, read_resolved, resolve_over, resolve_via_parent, write_destination,
@@ -420,15 +420,14 @@ async fn recv(socket: &dyn AsyncUdpSocket) -> Received {
 /// Whether this host can carry vsock connections to itself (`vsock_loopback`). The socket
 /// tests below need it and are skipped without it.
 async fn vsock_loopback(port: u32) -> Option<VsockListener> {
-    let listener = VsockListener::bind(LOCAL_CID, port).ok()?;
+    let listener = VsockListener::bind(VsockAddr::new(LOCAL_CID, port)).ok()?;
     match timeout(
         Duration::from_secs(2),
-        VsockStream::connect(LOCAL_CID, port),
+        VsockStream::connect(VsockAddr::new(LOCAL_CID, port)),
     )
     .await
     {
         Ok(Ok(_)) => {
-            let mut listener = listener;
             listener.accept().await.ok()?;
             Some(listener)
         }
@@ -514,8 +513,12 @@ async fn inbound_socket_relays_datagrams() {
     assert!(poll_once(&*socket).is_pending());
 
     // Two parent connections are two distinct peers.
-    let mut first = VsockStream::connect(LOCAL_CID, PORT).await.unwrap();
-    let mut second = VsockStream::connect(LOCAL_CID, PORT).await.unwrap();
+    let mut first = VsockStream::connect(VsockAddr::new(LOCAL_CID, PORT))
+        .await
+        .unwrap();
+    let mut second = VsockStream::connect(VsockAddr::new(LOCAL_CID, PORT))
+        .await
+        .unwrap();
     write_frame(&mut first, b"one").await.unwrap();
     let received = recv(&*socket).await;
     assert_eq!(received.len(), 1);
@@ -574,7 +577,7 @@ async fn outbound_socket_relays_through_the_parent() {
     let Some(_) = vsock_loopback(PORT + 100).await else {
         return;
     };
-    let mut proxy = VsockListener::bind(LOCAL_CID, PORT).unwrap();
+    let proxy = VsockListener::bind(VsockAddr::new(LOCAL_CID, PORT)).unwrap();
     let socket = VsockOutboundSocket::new(LOCAL_CID, PORT);
     let destination: SocketAddr = "203.0.113.7:443".parse().unwrap();
     socket
@@ -621,7 +624,7 @@ async fn enclave_resolves_through_a_vsock_parent() {
     let Some(_) = vsock_loopback(PORT + 100).await else {
         return;
     };
-    let mut parent = VsockListener::bind(LOCAL_CID, PORT).unwrap();
+    let parent = VsockListener::bind(VsockAddr::new(LOCAL_CID, PORT)).unwrap();
     let parent_side = tokio::spawn(async move {
         let (mut stream, _) = parent.accept().await.unwrap();
         match read_outbound_request(&mut stream).await.unwrap() {
@@ -649,7 +652,7 @@ async fn tcp_is_forwarded_over_vsock() {
         return;
     };
     // The parent's `vsock-proxy-tcp`, echoing instead of forwarding.
-    let mut parent = VsockListener::bind(LOCAL_CID, PORT).unwrap();
+    let parent = VsockListener::bind(VsockAddr::new(LOCAL_CID, PORT)).unwrap();
     let echo = tokio::spawn(async move {
         let (mut stream, _) = parent.accept().await.unwrap();
         let mut buf = [0; 64];

@@ -27,7 +27,7 @@ use axum::Router;
 use bytes::{Buf, Bytes, BytesMut};
 use log::{debug, error, info, warn};
 use quinn::{Endpoint, ServerConfig, TransportConfig, VarInt};
-use rcgen::{CertificateParams, CustomExtension, KeyPair, SanType};
+use rcgen::{CertificateParams, CustomExtension, KeyPair, PublicKeyData, SanType};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::RootCertStore;
 use sha2::{Digest, Sha256};
@@ -507,7 +507,7 @@ fn attest() -> Result<(ServerConfig, Identity), BoxError> {
     let provider: Arc<dyn AttestationProvider> = attestation::detect()?.into();
     info!("Using attestation provider: {}", provider.name());
     let cmw_bytes = provider
-        .generate_document(&key_binding(&key_pair.public_key_der()))?
+        .generate_document(&key_binding(&key_pair.subject_public_key_info()))?
         .to_cbor_bytes();
     info!("Wrapped Evidence as a CMW ({} bytes).", cmw_bytes.len());
 

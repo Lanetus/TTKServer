@@ -36,7 +36,7 @@ pub fn generate_identity() -> (
     let cert_der = certified_key.cert.der().to_vec();
     let rustls_cert = certified_key.cert.der().clone();
     let rustls_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
-        certified_key.key_pair.serialize_der(),
+        certified_key.signing_key.serialize_der(),
     ));
 
     (vec![rustls_cert], rustls_key, cert_der)

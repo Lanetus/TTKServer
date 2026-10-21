@@ -52,7 +52,8 @@ fn test_extract_attestation_doc() {
 mod attestation_verification {
     use crate::nitro_doc::parse_attestation_document;
     use rcgen::{
-        BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, IsCa, KeyPair,
+        BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, IsCa, Issuer,
+        KeyPair, PublicKeyData,
     };
     use rustls::client::danger::ServerCertVerifier;
     use rustls_pki_types::pem::PemObject;
@@ -68,7 +69,7 @@ mod attestation_verification {
     /// Builds an RA-TLS certificate for `cert_key` carrying mock evidence bound to `bound_key`.
     fn ra_tls_cert(cert_key: &KeyPair, bound_key: &KeyPair) -> CertificateDer<'static> {
         let params = AttestationParams {
-            user_data: Some(Sha256::digest(bound_key.public_key_der()).to_vec()),
+            user_data: Some(Sha256::digest(bound_key.subject_public_key_info()).to_vec()),
             ..Default::default()
         };
         let cmw = by_name("mock")
@@ -94,7 +95,7 @@ mod attestation_verification {
         let ca_key = KeyPair::generate().unwrap();
         let mut ca_params = CertificateParams::default();
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let ca = ca_params.self_signed(&ca_key).unwrap();
+        let ca = Issuer::new(ca_params, ca_key);
 
         let mut params = CertificateParams::new(vec!["enclave.internal".into()]).unwrap();
         // Unlike the CA's, so the leaf is not self-issued.
@@ -105,11 +106,7 @@ mod attestation_verification {
                 ATTESTATION_OID,
                 extension.value.to_vec(),
             ));
-        params
-            .signed_by(cert_key, &ca, &ca_key)
-            .unwrap()
-            .der()
-            .clone()
+        params.signed_by(cert_key, &ca).unwrap().der().clone()
     }
 
     fn verify(
@@ -167,7 +164,7 @@ mod attestation_verification {
     fn tampered_mock_evidence_is_rejected_even_when_allowed() {
         let key = KeyPair::generate().unwrap();
         let params = AttestationParams {
-            user_data: Some(Sha256::digest(key.public_key_der()).to_vec()),
+            user_data: Some(Sha256::digest(key.subject_public_key_info()).to_vec()),
             ..Default::default()
         };
         let mut doc = create_mock_attestation_document(&params).unwrap();
@@ -301,7 +298,7 @@ mod certificate_checks {
 /// evidence) and a client using `EnclaveCertVerifier`. QUIC always negotiates TLS 1.3, so this
 /// is how the TLS 1.2 signature check is exercised.
 mod tls_handshake {
-    use rcgen::KeyPair;
+    use rcgen::{KeyPair, PublicKeyData};
     use rustls::pki_types::pem::PemObject;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
     use rustls::version::{TLS12, TLS13};
@@ -318,7 +315,7 @@ mod tls_handshake {
     fn server_config(version: &'static SupportedProtocolVersion) -> ServerConfig {
         let key = KeyPair::generate().unwrap();
         let params = AttestationParams {
-            user_data: Some(Sha256::digest(key.public_key_der()).to_vec()),
+            user_data: Some(Sha256::digest(key.subject_public_key_info()).to_vec()),
             ..Default::default()
         };
         let cmw = by_name("mock")

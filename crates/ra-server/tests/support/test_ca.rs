@@ -5,7 +5,8 @@
 //! for the route gating).
 
 use rcgen::{
-    BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, IsCa, KeyPair, SanType,
+    BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, IsCa, Issuer, KeyPair,
+    SanType,
 };
 use rustls::pki_types::CertificateDer;
 use rustls::RootCertStore;
@@ -54,7 +55,7 @@ impl SignForTests for Server {
                 extension.value.to_vec(),
             ));
         let node_key = KeyPair::try_from(self.private_key_der())?;
-        let leaf = params.signed_by(&node_key, &ca_cert, &ca_key)?;
+        let leaf = params.signed_by(&node_key, &Issuer::new(ca_params, ca_key))?;
 
         let mut roots = RootCertStore::empty();
         roots.add(ca_cert.der().clone())?;

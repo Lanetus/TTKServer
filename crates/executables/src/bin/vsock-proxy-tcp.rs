@@ -67,7 +67,7 @@ mod imp {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
-    use tokio_vsock::{SockAddr, VsockListener, VsockStream};
+    use tokio_vsock::{VsockAddr, VsockListener, VsockStream};
     use ttk_core::egress::{classify_hop_address, is_instance_metadata_address, HopAddressClass};
     use ttk_core::vsock_proxy_tcp::check_imds_request;
 
@@ -83,7 +83,7 @@ mod imp {
     /// Accepts vsock connections from the enclave and forwards each to the remote, until the
     /// listener fails.
     pub async fn run(config: TcpProxyConfig) -> std::io::Result<()> {
-        let mut listener = VsockListener::bind(VMADDR_CID_ANY, config.vsock_port)?;
+        let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, config.vsock_port))?;
         info!(
             "Forwarding vsock port {} (from CID {}) -> TCP {}",
             config.vsock_port, config.cid, config.remote
@@ -99,10 +99,7 @@ mod imp {
                     continue;
                 }
             };
-            let cid = match addr {
-                SockAddr::Vsock(addr) => addr.cid(),
-                _ => u32::MAX,
-            };
+            let cid = addr.cid();
             if cid != config.cid {
                 warn!(
                     "Rejecting connection from CID {cid} (expected {})",
@@ -150,7 +147,7 @@ mod imp {
     /// Forwards the enclave's requests to the instance metadata service one at a time, after
     /// [`check_imds_request`]; responses pass back unchanged. A refused or malformed request
     /// closes the connection.
-    async fn forward_imds(vsock: VsockStream, mut tcp: TcpStream, remote: &str) {
+    async fn forward_imds(mut vsock: VsockStream, mut tcp: TcpStream, remote: &str) {
         let (mut from_enclave, mut to_enclave) = vsock.split();
         let (mut from_imds, mut to_imds) = tcp.split();
         let responses = tokio::io::copy(&mut from_imds, &mut to_enclave);

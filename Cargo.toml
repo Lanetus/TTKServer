@@ -26,20 +26,22 @@ aws-sdk-s3 = { version = "1.152", default-features = false, features = ["rt-toki
 aws-smithy-http-client = { version = "1", features = ["rustls-ring"] }
 aws-smithy-runtime-api = { version = "1", features = ["client"] }
 axum = "0.8.9"
-base64 = "0.21"
+base64 = "0.23"
 bytes = "1"
 ciborium = "0.2"
 der-parser = "10.0.0"
 env_logger = "0.11"
+# OS randomness as a `rand_core` RNG (`SysRng`), for HPKE sealing and authorization nonces.
+getrandom = { version = "0.4", features = ["sys_rng"] }
 h3 = "0.0.7"  # The core HTTP/3 state machine
 h3-quinn = "0.0.9"  # The adapter bridging Quinn's QUIC API to h3's Transport trait
 # RFC 9180 HPKE (DHKEM(P-256)) sealing `/faf` relay addresses and message keys to a node's RA-TLS key.
-hpke = { version = "0.12", default-features = false, features = ["alloc", "p256"] }
+hpke = { version = "0.14", default-features = false, features = ["alloc", "aes", "nistp"] }
 log = "0.4"
 p256 = { version = "0.14", default-features = false, features = ["arithmetic", "pkcs8", "std"] }
 quinn = "0.11"
-rand_core = { version = "0.6", features = ["getrandom"] }
-rcgen = "0.13"
+rand_core = "0.10"
+rcgen = "0.14"
 ring = "0.17"
 rustls = { version = "0.23.46", features = ["ring"] }
 rustls-pki-types = "1"
@@ -50,7 +52,7 @@ serde_json = "1"
 sha2 = "0.11"
 time = "0.3.36"
 tokio = { version = "1", features = ["full"] }
-tokio-vsock = "0.3"
+tokio-vsock = "0.7"
 tower-service = "0.3"
 x509-parser = { version = "0.18.1", features = ["verify"] }
 zeroize = "1.8"
