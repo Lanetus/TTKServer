@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.7.0] - 2026-10-21
+
+### Changed
+- Updated dependencies `base64`, `rcgen` (0.14), `tokio-vsock` (0.7), `hpke` (0.14) and `rand_core` (0.10); affects `ttk-core` sealing and vsock sockets, the `vsock-proxy` and `vsock-proxy-tcp` binaries, and the `ttk_root::auth` certificate authority.
+
 ## [6.6.0] - 2026-10-21
 
 ### Changed
@@ -567,7 +572,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.6.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.7.0...HEAD
+[6.7.0]: https://github.com/Lanetus/TTKServer/compare/v6.6.0...v6.7.0
 [6.6.0]: https://github.com/Lanetus/TTKServer/compare/v6.5.7...v6.6.0
 [6.5.7]: https://github.com/Lanetus/TTKServer/compare/v6.5.6...v6.5.7
 [6.5.6]: https://github.com/Lanetus/TTKServer/compare/v6.5.5...v6.5.6
