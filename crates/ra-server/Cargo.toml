@@ -41,3 +41,6 @@ nitro = ["dep:aws-nitro-enclaves-nsm-api"]
 mock = ["dep:aws-nitro-enclaves-nsm-api"]
 sev-snp = []
 tdx = []
+
+[dev-dependencies]
+quinn-proto.workspace = true

@@ -40,6 +40,7 @@ hpke = { version = "0.14", default-features = false, features = ["alloc", "aes",
 log = "0.4"
 p256 = { version = "0.14", default-features = false, features = ["arithmetic", "pkcs8", "std"] }
 quinn = "0.11"
+quinn-proto = { version = "0.11", default-features = false, features = ["rustls-ring"] }  # Tests only: drives raw QUIC packets (quinn does not re-export its Endpoint)
 rand_core = "0.10"
 rcgen = "0.14"
 ring = "0.17"
