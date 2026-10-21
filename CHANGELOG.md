@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.8.0] - 2026-10-21
+
+### Changed
+- Updated `h3` to 0.0.8 and `h3-quinn` to 0.0.10 (`ttk-ra-server`, `ttk-ra-client`).
+- The server reads each request's headers in its own task within `REQUEST_BODY_TIMEOUT`, so a peer slow to send headers no longer stalls other requests or keeps the connection from going idle.
+- The client now enforces the server's advertised maximum header section size locally, keeping the connection usable; the server answers an oversized header section with `431` instead of closing the connection.
+
 ## [6.7.0] - 2026-10-21
 
 ### Changed
@@ -572,7 +579,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.7.0...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.8.0...HEAD
+[6.8.0]: https://github.com/Lanetus/TTKServer/compare/v6.7.0...v6.8.0
 [6.7.0]: https://github.com/Lanetus/TTKServer/compare/v6.6.0...v6.7.0
 [6.6.0]: https://github.com/Lanetus/TTKServer/compare/v6.5.7...v6.6.0
 [6.5.7]: https://github.com/Lanetus/TTKServer/compare/v6.5.6...v6.5.7
