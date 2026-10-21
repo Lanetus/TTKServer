@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.6.0] - 2026-10-21
+
+### Changed
+- Updated `aws-nitro-enclaves-nsm-api` to 0.5 (Nitro attestation provider, `nitro` feature).
+
+### Security
+- Updated `webpki-root-certs` to 1.0.10 (RUSTSEC-2026-0383) and `rustls-webpki` to 0.103.16.
+
 ## [6.5.7] - 2026-10-15
 
 ### Changed
@@ -559,7 +567,8 @@ No user-facing changes.
 - `/hello` route.
 - Dockerfile for building the server image.
 
-[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.5.7...HEAD
+[Unreleased]: https://github.com/Lanetus/TTKServer/compare/v6.6.0...HEAD
+[6.6.0]: https://github.com/Lanetus/TTKServer/compare/v6.5.7...v6.6.0
 [6.5.7]: https://github.com/Lanetus/TTKServer/compare/v6.5.6...v6.5.7
 [6.5.6]: https://github.com/Lanetus/TTKServer/compare/v6.5.5...v6.5.6
 [6.5.5]: https://github.com/Lanetus/TTKServer/compare/v6.5.4...v6.5.5

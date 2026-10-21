@@ -3179,7 +3179,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "ttk-core"
-version = "6.5.7"
+version = "6.6.0"
 dependencies = [
  "base64 0.21.7",
  "bytes 1.12.1",
@@ -3202,7 +3202,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-executables"
-version = "6.5.7"
+version = "6.6.0"
 dependencies = [
  "axum",
  "bytes 1.12.1",
@@ -3224,7 +3224,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-ra-client"
-version = "6.5.7"
+version = "6.6.0"
 dependencies = [
  "aws-nitro-enclaves-nsm-api",
  "axum",
@@ -3255,7 +3255,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-ra-server"
-version = "6.5.7"
+version = "6.6.0"
 dependencies = [
  "aws-nitro-enclaves-nsm-api",
  "axum",
@@ -3281,7 +3281,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-relay"
-version = "6.5.7"
+version = "6.6.0"
 dependencies = [
  "axum",
  "log",
@@ -3300,7 +3300,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-root"
-version = "6.5.7"
+version = "6.6.0"
 dependencies = [
  "axum",
  "base64 0.21.7",
@@ -3325,7 +3325,7 @@ dependencies = [
 
 [[package]]
 name = "ttk-storage"
-version = "6.5.7"
+version = "6.6.0"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
