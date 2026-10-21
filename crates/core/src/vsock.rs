@@ -35,7 +35,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
-use tokio_vsock::{VsockListener, VsockStream};
+use tokio_vsock::{VsockAddr, VsockListener, VsockStream};
 
 /// `VMADDR_CID_ANY`: accept vsock connections addressed to any CID of this VM.
 const VMADDR_CID_ANY: u32 = u32::MAX;
@@ -72,7 +72,7 @@ impl VsockUdpSocket {
     ///
     /// Must be called within a Tokio runtime.
     pub fn bind(port: u32) -> io::Result<Self> {
-        let listener = VsockListener::bind(VMADDR_CID_ANY, port)?;
+        let listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, port))?;
         let peers = Peers::default();
         let (tx, rx) = mpsc::channel(RECV_QUEUE);
         let accept_task = tokio::spawn(accept_loop(listener, peers.clone(), tx));
@@ -94,7 +94,7 @@ impl Drop for VsockUdpSocket {
 
 /// Accepts vsock connections, giving each a unique synthetic peer address. At most
 /// [`MAX_VSOCK_PEERS`] are served at once, so the parent cannot exhaust enclave memory.
-async fn accept_loop(mut listener: VsockListener, peers: Peers, incoming: Incoming) {
+async fn accept_loop(listener: VsockListener, peers: Peers, incoming: Incoming) {
     let slots = Arc::new(Semaphore::new(MAX_VSOCK_PEERS));
     let mut next_id: u64 = 0;
     loop {
@@ -174,7 +174,7 @@ impl VsockOutboundSocket {
         let (peers, incoming) = (self.peers.clone(), self.incoming_tx.clone());
         let own = tx.downgrade();
         tokio::spawn(async move {
-            match VsockStream::connect(cid, port).await {
+            match VsockStream::connect(VsockAddr::new(cid, port)).await {
                 Ok(mut stream) => match write_destination(&mut stream, destination).await {
                     Ok(()) => {
                         debug!("vsock relay to {destination} via {cid}:{port} open");
@@ -441,7 +441,7 @@ pub async fn resolve_via_parent(
     host: &str,
     port: u16,
 ) -> io::Result<Vec<SocketAddr>> {
-    let mut stream = VsockStream::connect(cid, vsock_port).await?;
+    let mut stream = VsockStream::connect(VsockAddr::new(cid, vsock_port)).await?;
     resolve_over(&mut stream, host, port).await
 }
 
@@ -467,7 +467,7 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, datagram: &[u8])
 /// Pumps one vsock connection until either direction ends: frames in to `incoming` (tagged
 /// `peer`), queued datagrams out. The stream is closed on return.
 async fn pump(
-    stream: VsockStream,
+    mut stream: VsockStream,
     peer: SocketAddr,
     mut outgoing: mpsc::Receiver<Bytes>,
     incoming: &Incoming,
@@ -653,7 +653,7 @@ pub async fn forward_tcp_to_vsock(
     loop {
         let (mut tcp, peer) = listener.accept().await?;
         tokio::spawn(async move {
-            let mut vsock = match VsockStream::connect(cid, port).await {
+            let mut vsock = match VsockStream::connect(VsockAddr::new(cid, port)).await {
                 Ok(vsock) => vsock,
                 Err(e) => {
                     return warn!("TCP from {peer}: vsock connect to {cid}:{port} failed: {e}")

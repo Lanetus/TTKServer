@@ -24,9 +24,10 @@
 
 use crate::faf::FafBody;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use getrandom::SysRng;
 use hpke::{Deserializable, OpModeR, OpModeS, Serializable};
 use p256::pkcs8::DecodePrivateKey;
-use rand_core::OsRng;
+use rand_core::UnwrapErr;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 use ring::rand::{SecureRandom, SystemRandom};
 use x509_parser::prelude::*;
@@ -316,13 +317,13 @@ fn hpke_seal(
     info: &[u8],
     plaintext: &[u8],
 ) -> Result<String, SealError> {
-    let (encapped, ciphertext) = hpke::single_shot_seal::<Aead, Kdf, Kem, _>(
+    let (encapped, ciphertext) = hpke::single_shot_seal_with_rng::<Aead, Kdf, Kem>(
         &OpModeS::Base,
         &recipient.0,
         info,
         plaintext,
         &[],
-        &mut OsRng,
+        &mut UnwrapErr(SysRng),
     )
     .map_err(|e| SealError::new(format!("HPKE seal failed: {e}")))?;
     let mut sealed = encapped.to_bytes().to_vec();

@@ -15,7 +15,7 @@ mod mock_doc {
     use aws_nitro_enclaves_nsm_api::api::{AttestationDoc, Digest};
     use ciborium::value::Value;
     use rcgen::{
-        BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair,
+        BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
         PKCS_ECDSA_P384_SHA384,
     };
     use ring::rand::SystemRandom;
@@ -130,9 +130,7 @@ mod mock_doc {
             .distinguished_name
             .push(DnType::OrganizationName, "TTKServer");
         root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let root = root_params
-            .self_signed(&root_key)
-            .map_err(|e| mock_err("build the mock root", e))?;
+        let root = Issuer::from_params(&root_params, &root_key);
 
         let key = KeyPair::generate_for(&PKCS_ECDSA_P384_SHA384)
             .map_err(|e| mock_err("generate a signing key", e))?;
@@ -142,7 +140,7 @@ mod mock_doc {
             .distinguished_name
             .push(DnType::CommonName, "TTKServer Mock Nitro Enclave");
         let cert = params
-            .signed_by(&key, &root, &root_key)
+            .signed_by(&key, &root)
             .map_err(|e| mock_err("issue the signing certificate", e))?;
 
         let signing_key = EcdsaKeyPair::from_pkcs8(

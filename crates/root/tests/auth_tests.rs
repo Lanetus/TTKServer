@@ -3,7 +3,8 @@
 //! `POST /evidence` + `POST /certificate` flow against a root node with mock attestation.
 
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, DnValue, IsCa, KeyPair,
+    BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType, DnValue, IsCa,
+    KeyPair, PublicKeyData,
 };
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, UnixTime};
 use rustls::RootCertStore;
@@ -139,7 +140,7 @@ fn mock_evidence(params: &AttestationParams) -> Cmw {
 
 /// SHA-256 of `key`'s SubjectPublicKeyInfo, the RA-TLS key binding.
 fn binding(key: &KeyPair) -> Vec<u8> {
-    Sha256::digest(key.public_key_der()).to_vec()
+    Sha256::digest(key.subject_public_key_info()).to_vec()
 }
 
 /// A node's RA-TLS certificate with mock Evidence bound to its key, and that Evidence
@@ -274,7 +275,7 @@ fn intermediate_ca_with_its_own_subject_sends_its_certificate() {
     let root_key = KeyPair::generate().unwrap();
     let mut root_params = CertificateParams::default();
     root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let root = root_params.self_signed(&root_key).unwrap();
+    let root = CertifiedIssuer::self_signed(root_params, root_key).unwrap();
 
     let key = KeyPair::generate().unwrap();
     let mut params = CertificateParams::default();
@@ -290,7 +291,7 @@ fn intermediate_ca_with_its_own_subject_sends_its_certificate() {
     params
         .distinguished_name
         .push(DnType::CommonName, "TTK Intermediate");
-    let intermediate = params.signed_by(&key, &root, &root_key).unwrap();
+    let intermediate = params.signed_by(&key, &root).unwrap();
 
     let ca = CertificateAuthority::from_pem(&intermediate.pem(), &key.serialize_pem()).unwrap();
     let store = ra_tls_store(b"evidence");

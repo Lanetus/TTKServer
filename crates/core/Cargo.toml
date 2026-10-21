@@ -15,6 +15,7 @@ name = "ttk_core"
 [dependencies]
 base64.workspace = true
 ciborium.workspace = true
+getrandom.workspace = true
 hpke.workspace = true
 log.workspace = true
 p256.workspace = true

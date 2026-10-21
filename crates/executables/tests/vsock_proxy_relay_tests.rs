@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::time::timeout;
-use tokio_vsock::{VsockListener, VsockStream};
+use tokio_vsock::{VsockAddr, VsockListener, VsockStream};
 use ttk_core::vsock::{
     read_frame, read_resolved, write_destination, write_frame, write_resolve_request,
 };
@@ -105,12 +105,12 @@ impl Drop for Proxy {
 /// Whether this host can carry vsock connections to itself (`vsock_loopback`), probed on vsock
 /// `port`.
 async fn vsock_loopback(port: u32) -> bool {
-    let Ok(mut listener) = VsockListener::bind(LOCAL_CID, port) else {
+    let Ok(listener) = VsockListener::bind(VsockAddr::new(LOCAL_CID, port)) else {
         return false;
     };
     matches!(
         timeout(Duration::from_secs(2), async {
-            let _client = VsockStream::connect(LOCAL_CID, port).await?;
+            let _client = VsockStream::connect(VsockAddr::new(LOCAL_CID, port)).await?;
             listener.accept().await
         })
         .await,
@@ -128,7 +128,7 @@ fn free_udp_addr() -> SocketAddr {
 
 /// Connects to the proxy's vsock `port` as the enclave would.
 async fn connect(port: u32) -> VsockStream {
-    timeout(WAIT, VsockStream::connect(LOCAL_CID, port))
+    timeout(WAIT, VsockStream::connect(VsockAddr::new(LOCAL_CID, port)))
         .await
         .unwrap()
         .unwrap()
@@ -159,7 +159,7 @@ async fn relay_carries_client_datagrams_to_the_enclave_and_back() {
     if !vsock_loopback(ENCLAVE_PORT + 50).await {
         return;
     }
-    let mut enclave = VsockListener::bind(LOCAL_CID, ENCLAVE_PORT).unwrap();
+    let enclave = VsockListener::bind(VsockAddr::new(LOCAL_CID, ENCLAVE_PORT)).unwrap();
     let listen = free_udp_addr();
     let proxy = start_relay(
         &[
@@ -229,7 +229,7 @@ async fn relay_survives_an_unreachable_enclave() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // The enclave comes up: the client's next datagram reaches it.
-    let mut enclave = VsockListener::bind(LOCAL_CID, ENCLAVE_PORT).unwrap();
+    let enclave = VsockListener::bind(VsockAddr::new(LOCAL_CID, ENCLAVE_PORT)).unwrap();
     client.send_to(b"later", listen).await.unwrap();
     let (mut conn, _) = timeout(WAIT, enclave.accept()).await.unwrap().unwrap();
     assert_eq!(read_frame(&mut conn).await.unwrap(), b"later");
@@ -580,7 +580,7 @@ async fn tcp_proxy_exits_when_it_cannot_listen() {
     if !vsock_loopback(PORT + 50).await {
         return;
     }
-    let _taken = VsockListener::bind(u32::MAX, PORT).unwrap();
+    let _taken = VsockListener::bind(VsockAddr::new(u32::MAX, PORT)).unwrap();
     let mut proxy = Proxy {
         child: Command::new(env!("CARGO_BIN_EXE_vsock-proxy-tcp"))
             .args([
